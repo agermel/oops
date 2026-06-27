@@ -267,6 +267,11 @@ h1 {
   line-height: 1.12;
 }
 
+h2 {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
 .workspace-head p {
   margin-top: 10px;
   color: var(--muted);
@@ -542,6 +547,127 @@ td:nth-child(8) {
   background: transparent;
 }
 
+.fleet-section {
+  margin-top: 28px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  color: #343741;
+}
+
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.agent-card {
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  color: var(--text);
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.agent-card.selected {
+  border-color: var(--primary);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.agent-card strong,
+.agent-card small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card small,
+.agent-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.agent-dot.alive {
+  background: var(--alive);
+}
+
+.agent-dot.dead {
+  background: var(--dead);
+}
+
+.table-wrap.compact table {
+  min-width: 920px;
+}
+
+.table-wrap.compact th,
+.table-wrap.compact td {
+  width: auto;
+}
+
+.selected-row {
+  background: #eef6fc;
+}
+
+.logs-panel {
+  min-height: 180px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  color: #d8dee9;
+  background: #1f2430;
+  border: 1px solid #343741;
+  border-radius: 4px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: 230px 70px minmax(0, 1fr);
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.log-line span,
+.log-line b {
+  color: #98a2b3;
+}
+
+.log-line code {
+  color: #f5f7fa;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty-card {
+  min-height: 86px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: #fbfcfd;
+}
+
 .empty {
   height: 92px;
   color: var(--muted);
@@ -582,16 +708,6 @@ td:nth-child(8) {
 
   .elastic-brand {
     font-size: 22px;
-  }
-
-  .elastic-flower {
-    width: 28px;
-    height: 28px;
-  }
-
-  .elastic-flower i {
-    width: 13px;
-    height: 13px;
   }
 
   .global-actions button:not(.avatar) {

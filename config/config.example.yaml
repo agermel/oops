@@ -1,5 +1,11 @@
 env: "prod"
 
+agents:
+  - id: "local"
+    name: "本机"
+    address: "http://127.0.0.1:8686"
+    token: "change-me"
+
 connections:
   - id: "elasticsearch"
     name: "Elasticsearch"

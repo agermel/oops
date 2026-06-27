@@ -8,6 +8,7 @@ import {
   CircleHelp,
   Database,
   Edit3,
+  FileText,
   Gauge,
   Menu,
   RefreshCw,
@@ -44,8 +45,55 @@ type StatusItem = {
   error?: string;
 };
 
+// AgentConfig 对应中心端配置的一台 agent。
+type AgentConfig = {
+  id: string;
+  name: string;
+  address: string;
+};
+
+// Host 对应 agent 返回的机器信息。
+type Host = {
+  id: string;
+  name: string;
+  address: string;
+  available: boolean;
+  dockerVersion: string;
+  runtime: string;
+  nCPU: number;
+  memTotal: number;
+};
+
+// AgentItem 是中心端机器列表接口的一行数据。
+type AgentItem = {
+  agent: AgentConfig;
+  host: Host;
+  available: boolean;
+  error?: string;
+};
+
+// Container 对应某台机器上的一个容器。
+type Container = {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  health?: string;
+  hostId: string;
+  created: string;
+  startedAt: string;
+};
+
+// LogEntry 对应一条容器日志。
+type LogEntry = {
+  timestamp: string;
+  containerId: string;
+  stream: string;
+  message: string;
+};
+
 const navigation = [
-  { label: "Connections", icon: Server, active: true },
+  { label: "Ops Plane", icon: Server, active: true },
   { label: "Incidents", icon: AlertTriangle, active: false },
   { label: "Sources", icon: Database, active: false },
   { label: "Settings", icon: Settings, active: false }
@@ -59,8 +107,17 @@ const statusIcon = {
 
 function App() {
   const [items, setItems] = React.useState<StatusItem[]>([]);
+  const [agents, setAgents] = React.useState<AgentItem[]>([]);
+  const [containers, setContainers] = React.useState<Container[]>([]);
+  const [logs, setLogs] = React.useState<LogEntry[]>([]);
+  const [selectedAgent, setSelectedAgent] = React.useState("");
+  const [selectedContainer, setSelectedContainer] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [agentsLoading, setAgentsLoading] = React.useState(true);
+  const [containersLoading, setContainersLoading] = React.useState(false);
+  const [logsLoading, setLogsLoading] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [agentError, setAgentError] = React.useState("");
 
   const counters = React.useMemo(() => {
     return items.reduce(
@@ -73,7 +130,7 @@ function App() {
     );
   }, [items]);
 
-  async function refresh() {
+  async function refreshConnections() {
     setLoading(true);
     setError("");
     try {
@@ -87,6 +144,73 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshAgents() {
+    setAgentsLoading(true);
+    setAgentError("");
+    try {
+      const response = await fetch("/api/agents");
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const nextAgents: AgentItem[] = await response.json();
+      setAgents(nextAgents);
+
+      const nextSelected = selectedAgent || nextAgents[0]?.agent.id || "";
+      setSelectedAgent(nextSelected);
+      if (nextSelected) {
+        await loadContainers(nextSelected);
+      }
+    } catch (err) {
+      setAgentError(err instanceof Error ? err.message : "机器列表读取失败");
+    } finally {
+      setAgentsLoading(false);
+    }
+  }
+
+  async function loadContainers(agentId: string) {
+    setSelectedAgent(agentId);
+    setSelectedContainer("");
+    setLogs([]);
+    setContainersLoading(true);
+    setAgentError("");
+    try {
+      const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/containers`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      setContainers(await response.json());
+    } catch (err) {
+      setContainers([]);
+      setAgentError(err instanceof Error ? err.message : "容器列表读取失败");
+    } finally {
+      setContainersLoading(false);
+    }
+  }
+
+  async function loadLogs(agentId: string, containerId: string) {
+    setSelectedContainer(containerId);
+    setLogsLoading(true);
+    setAgentError("");
+    try {
+      const response = await fetch(
+        `/api/agents/${encodeURIComponent(agentId)}/containers/${encodeURIComponent(containerId)}/logs?tail=100`
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      setLogs(await response.json());
+    } catch (err) {
+      setLogs([]);
+      setAgentError(err instanceof Error ? err.message : "日志读取失败");
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
+  async function refresh() {
+    await Promise.all([refreshConnections(), refreshAgents()]);
   }
 
   React.useEffect(() => {
@@ -148,7 +272,7 @@ function App() {
           <div className="workspace-head">
             <div>
               <h1>连接面板</h1>
-              <p>集中查看 ES、Jaeger、Nacos、MySQL、Redis、Etcd、Kafka、OTel 的可达性。</p>
+              <p>集中查看组件可达性、机器列表、容器列表和容器日志。</p>
             </div>
             <button className="primary-button" onClick={refresh} disabled={loading}>
               <RefreshCw size={17} className={loading ? "spin" : ""} />
@@ -213,6 +337,116 @@ function App() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </section>
+
+          <section className="fleet-section">
+            <div className="section-title">
+              <Server size={18} />
+              <h2>机器列表</h2>
+            </div>
+            {agentError && <div className="error-line">{agentError}</div>}
+            <div className="agent-grid">
+              {agentsLoading && agents.length === 0 ? (
+                <div className="empty-card">正在读取机器列表</div>
+              ) : (
+                agents.map((item) => (
+                  <button
+                    key={item.agent.id}
+                    className={`agent-card ${selectedAgent === item.agent.id ? "selected" : ""}`}
+                    onClick={() => loadContainers(item.agent.id)}
+                  >
+                    <span className={`agent-dot ${item.available ? "alive" : "dead"}`} />
+                    <span>
+                      <strong>{item.host.name || item.agent.name || item.agent.id}</strong>
+                      <small>{item.agent.address}</small>
+                    </span>
+                    <span className="agent-meta">
+                      {item.available ? `${item.host.runtime || "docker"} ${item.host.dockerVersion || ""}` : "unavailable"}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="fleet-section">
+            <div className="section-title">
+              <TerminalSquare size={18} />
+              <h2>容器列表</h2>
+            </div>
+            <div className="table-wrap compact">
+              <table>
+                <thead>
+                  <tr>
+                    <th>容器</th>
+                    <th>镜像</th>
+                    <th>状态</th>
+                    <th>健康</th>
+                    <th>主机</th>
+                    <th>日志</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {containersLoading ? (
+                    <tr>
+                      <td colSpan={6} className="empty">
+                        正在读取容器列表
+                      </td>
+                    </tr>
+                  ) : containers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="empty">
+                        暂无容器
+                      </td>
+                    </tr>
+                  ) : (
+                    containers.map((container) => (
+                      <tr key={container.id} className={selectedContainer === container.id ? "selected-row" : ""}>
+                        <td>
+                          <div className="service-name">{container.name || container.id.slice(0, 12)}</div>
+                          <div className="service-id">{container.id.slice(0, 12)}</div>
+                        </td>
+                        <td className="address">{container.image}</td>
+                        <td>
+                          <span className={`status ${container.state === "running" ? "alive" : "unknown"}`}>
+                            {container.state}
+                          </span>
+                        </td>
+                        <td>{container.health || "-"}</td>
+                        <td className="message">{container.hostId}</td>
+                        <td className="action-cell">
+                          <button title="查看日志" onClick={() => loadLogs(selectedAgent, container.id)}>
+                            <FileText size={18} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="fleet-section">
+            <div className="section-title">
+              <FileText size={18} />
+              <h2>日志列表</h2>
+            </div>
+            <div className="logs-panel">
+              {logsLoading ? (
+                <div className="empty-card">正在读取日志</div>
+              ) : logs.length === 0 ? (
+                <div className="empty-card">选择一个容器查看最近 100 行日志</div>
+              ) : (
+                logs.map((entry, index) => (
+                  <div key={`${entry.timestamp}-${index}`} className="log-line">
+                    <span>{entry.timestamp || "-"}</span>
+                    <b>{entry.stream}</b>
+                    <code>{entry.message}</code>
+                  </div>
+                ))
+              )}
             </div>
           </section>
         </section>

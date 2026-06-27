@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // TestLoadExample 验证 Viper 能读取 config 目录下的示例配置。
 func TestLoadExample(t *testing.T) {
@@ -13,6 +16,22 @@ func TestLoadExample(t *testing.T) {
 	}
 	if len(cfg.ExtraConnections) != 3 {
 		t.Fatalf("ExtraConnections length = %d, want 3", len(cfg.ExtraConnections))
+	}
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("Agents length = %d, want 1", len(cfg.Agents))
+	}
+	if cfg.Agents[0].Address != "http://127.0.0.1:8686" {
+		t.Fatalf("Agents[0].Address = %q, want %q", cfg.Agents[0].Address, "http://127.0.0.1:8686")
+	}
+	if cfg.Agents[0].Token != "change-me" {
+		t.Fatalf("Agents[0].Token = %q, want %q", cfg.Agents[0].Token, "change-me")
+	}
+	data, err := json.Marshal(cfg.Agents[0])
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if string(data) != `{"id":"local","name":"本机","address":"http://127.0.0.1:8686"}` {
+		t.Fatalf("agent JSON = %s", data)
 	}
 	if cfg.ExtraConnections[0].ID != "elasticsearch" {
 		t.Fatalf("ExtraConnections[0].ID = %q, want %q", cfg.ExtraConnections[0].ID, "elasticsearch")
