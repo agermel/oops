@@ -41,3 +41,9 @@ kafka:
 
 otel:
   endpoint: "127.0.0.1:4318"
+
+llm:
+  enabled: true
+  model: "gpt-4o-mini"
+  base_url: "https://api.openai.com/v1"
+  api_key: "${OOPS_LLM_API_KEY}"
