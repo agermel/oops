@@ -87,6 +87,7 @@ export type StepEvent = {
   content: string;
   toolName?: string;
   toolArgs?: string;
+  toolCallId?: string;
 };
 
 // ChatExchange 是一轮完整的对话记录（用户问题 + Agent 步骤 + 最终答案）。

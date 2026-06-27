@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"oops/internal/config"
@@ -30,10 +29,10 @@ const systemPrompt = `你是一个基础设施运维助手，负责回答当前�
 // StepEvent 表示 Agent 执行过程中的一个步骤，通过 SSE 推送给前端。
 type StepEvent struct {
 	Type       string `json:"type"`                 // thinking | tool_call | tool_result | answer | error
-	Content    string `json:"content"`               // 文本内容
-	ToolName   string `json:"toolName,omitempty"`    // 工具名称（tool_call / tool_result）
-	ToolArgs   string `json:"toolArgs,omitempty"`    // 工具参数 JSON（tool_call）
-	ToolCallID string `json:"toolCallId,omitempty"`  // 工具调用 ID（tool_result）
+	Content    string `json:"content"`              // 文本内容
+	ToolName   string `json:"toolName,omitempty"`   // 工具名称（tool_call / tool_result）
+	ToolArgs   string `json:"toolArgs,omitempty"`   // 工具参数 JSON（tool_call）
+	ToolCallID string `json:"toolCallId,omitempty"` // 工具调用 ID（tool_result）
 }
 
 // newModel 创建 OpenAI 兼容的 ChatModel。
@@ -158,19 +157,19 @@ func messageToStepEvents(msg *schema.Message) []StepEvent {
 	// AI 消息。
 	var events []StepEvent
 
-	// 如果有文本内容，先发 thinking。
-	if msg.Content != "" {
+	// 带工具调用的 AI 内容作为中间思考展示；纯文本 AI 消息由最终 answer 事件展示。
+	if msg.Content != "" && len(msg.ToolCalls) > 0 {
 		events = append(events, StepEvent{Type: "thinking", Content: msg.Content})
 	}
 
 	// 如果有工具调用，逐个发 tool_call。
 	for _, tc := range msg.ToolCalls {
-		args, _ := json.Marshal(tc.Function.Arguments)
 		events = append(events, StepEvent{
-			Type:     "tool_call",
-			Content:  tc.Function.Name,
-			ToolName: tc.Function.Name,
-			ToolArgs: string(args),
+			Type:       "tool_call",
+			Content:    tc.Function.Name,
+			ToolName:   tc.Function.Name,
+			ToolArgs:   tc.Function.Arguments,
+			ToolCallID: tc.ID,
 		})
 	}
 

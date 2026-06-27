@@ -71,15 +71,15 @@
   overflow-x: auto;
 }
 
-table {
+.table-wrap table {
   width: 100%;
   min-width: 1160px;
   border-collapse: collapse;
   table-layout: fixed;
 }
 
-th,
-td {
+.table-wrap th,
+.table-wrap td {
   padding: 12px 10px;
   border-bottom: 1px solid var(--border);
   text-align: left;
@@ -88,49 +88,49 @@ td {
   overflow-wrap: anywhere;
 }
 
-th {
+.table-wrap th {
   color: var(--text);
   font-size: 13px;
   font-weight: 700;
 }
 
-th:nth-child(1),
-td:nth-child(1) {
+.table-wrap th:nth-child(1),
+.table-wrap td:nth-child(1) {
   width: 48px;
 }
 
-th:nth-child(2),
-td:nth-child(2) {
+.table-wrap th:nth-child(2),
+.table-wrap td:nth-child(2) {
   width: 20%;
 }
 
-th:nth-child(3),
-td:nth-child(3) {
+.table-wrap th:nth-child(3),
+.table-wrap td:nth-child(3) {
   width: 12%;
 }
 
-th:nth-child(4),
-td:nth-child(4) {
+.table-wrap th:nth-child(4),
+.table-wrap td:nth-child(4) {
   width: 23%;
 }
 
-th:nth-child(5),
-td:nth-child(5) {
+.table-wrap th:nth-child(5),
+.table-wrap td:nth-child(5) {
   width: 11%;
 }
 
-th:nth-child(6),
-td:nth-child(6) {
+.table-wrap th:nth-child(6),
+.table-wrap td:nth-child(6) {
   width: 9%;
 }
 
-th:nth-child(7),
-td:nth-child(7) {
+.table-wrap th:nth-child(7),
+.table-wrap td:nth-child(7) {
   width: 20%;
 }
 
-th:nth-child(8),
-td:nth-child(8) {
+.table-wrap th:nth-child(8),
+.table-wrap td:nth-child(8) {
   width: 5%;
 }
 

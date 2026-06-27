@@ -9,10 +9,22 @@ function StreamingText({ text, animate }: { text: string; animate: boolean }) {
   const done = !animate || displayed.length >= text.length;
   return (
     <>
-      <Streamdown mode={animate ? "streaming" : "static"} controls={false}>{displayed}</Streamdown>
+      <Streamdown className="stream-markdown" mode={animate ? "streaming" : "static"} controls={false}>{displayed}</Streamdown>
       {!done && <span className="cursor-blink">|</span>}
     </>
   );
+}
+
+function summarizeToolArgs(toolArgs: string): string {
+  try {
+    const parsed: unknown = JSON.parse(toolArgs);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.entries(parsed).map(([k, v]) => `${k}=${String(v)}`).join(", ");
+    }
+    return String(parsed ?? "");
+  } catch {
+    return toolArgs;
+  }
 }
 
 export function StepBlock({ step, animate, hasResult }: { step: StepEvent; animate?: boolean; hasResult?: boolean }) {
@@ -33,12 +45,7 @@ export function StepBlock({ step, animate, hasResult }: { step: StepEvent; anima
     const running = animate && !hasResult;
     let argsSummary = "";
     if (step.toolArgs) {
-      try {
-        const parsed = JSON.parse(step.toolArgs);
-        argsSummary = Object.entries(parsed).map(([k, v]) => `${k}=${v}`).join(", ");
-      } catch {
-        argsSummary = step.toolArgs;
-      }
+      argsSummary = summarizeToolArgs(step.toolArgs);
     }
     return (
       <div className={`step-block step-tool-call ${running ? "step-running" : ""}`}>
@@ -59,6 +66,7 @@ export function StepBlock({ step, animate, hasResult }: { step: StepEvent; anima
 
   if (step.type === "tool_result") {
     let formatted = step.content;
+    const resultName = step.toolName || step.toolCallId || "工具";
     try {
       formatted = JSON.stringify(JSON.parse(step.content), null, "  ");
     } catch {
@@ -69,7 +77,7 @@ export function StepBlock({ step, animate, hasResult }: { step: StepEvent; anima
         <div className="step-icon">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</div>
         <div className="step-content">
           <button className="step-toggle" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? "收起" : "展开"}工具返回
+            {expanded ? "收起" : "展开"} {resultName} 返回
           </button>
           {expanded && <pre className="step-result">{formatted}</pre>}
         </div>

@@ -82,8 +82,81 @@
 
 .chat-content {
   padding-top: 5px;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.chat-msg.user .chat-content {
+  white-space: pre-wrap;
+}
+
+.stream-markdown {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.stream-markdown > :first-child {
+  margin-top: 0;
+}
+
+.stream-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.stream-markdown p {
+  margin: 0 0 8px;
+}
+
+.stream-markdown ul,
+.stream-markdown ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.stream-markdown table {
+  width: 100%;
+  min-width: 0;
+  margin: 8px 0;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.stream-markdown th,
+.stream-markdown td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  font-size: 14px;
+}
+
+.stream-markdown th {
+  font-weight: 700;
+}
+
+.stream-markdown code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #eef1f6;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.stream-markdown pre {
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 10px;
+  overflow: auto;
+  color: #d8dee9;
+  background: #1f2430;
+  border-radius: 4px;
+  white-space: pre;
+}
+
+.stream-markdown pre code {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 12px;
 }
 
 /* Thinking Shimmer */

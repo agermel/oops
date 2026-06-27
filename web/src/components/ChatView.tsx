@@ -3,6 +3,23 @@ import type { ChatExchange, StepEvent } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
 
+function withToolNames(steps: StepEvent[]): StepEvent[] {
+  const names = new Map<string, string>();
+  return steps.map((step) => {
+    if (step.type === "tool_call" && step.toolCallId && step.toolName) {
+      names.set(step.toolCallId, step.toolName);
+      return step;
+    }
+    if (step.type === "tool_result" && !step.toolName && step.toolCallId) {
+      const toolName = names.get(step.toolCallId);
+      if (toolName) {
+        return { ...step, toolName };
+      }
+    }
+    return step;
+  });
+}
+
 export function ChatView({
   chatExchanges,
   currentSteps,
@@ -22,6 +39,8 @@ export function ChatView({
   onInputChange: (value: string) => void;
   onSend: () => void;
 }) {
+  const visibleCurrentSteps = withToolNames(currentSteps.filter((s) => s.type !== "answer" && s.type !== "error"));
+
   return (
     <section className="chat-panel" id="chat-section">
       <div className="chat-header">
@@ -37,7 +56,7 @@ export function ChatView({
               <div className="chat-avatar"><User size={16} /></div>
               <div className="chat-content">{ex.question}</div>
             </div>
-            {ex.steps.filter((s) => s.type !== "answer" && s.type !== "error").map((step, j) => (
+            {withToolNames(ex.steps.filter((s) => s.type !== "answer" && s.type !== "error")).map((step, j) => (
               <StepBlock key={j} step={step} />
             ))}
             {ex.answer && <AnswerBlock content={ex.answer} animate={false} />}
@@ -50,8 +69,8 @@ export function ChatView({
               <div className="chat-avatar"><User size={16} /></div>
               <div className="chat-content">{currentQuestion}</div>
             </div>
-            {currentSteps.filter((s) => s.type !== "answer" && s.type !== "error").map((step, j) => {
-              const hasResult = currentSteps.slice(j + 1).some(s => s.type === "tool_result");
+            {visibleCurrentSteps.map((step, j) => {
+              const hasResult = visibleCurrentSteps.slice(j + 1).some(s => s.type === "tool_result" && (!step.toolCallId || s.toolCallId === step.toolCallId));
               return <StepBlock key={j} step={step} animate hasResult={hasResult} />;
             })}
             {currentSteps.find((s) => s.type === "answer") && (

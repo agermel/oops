@@ -7,7 +7,7 @@ function StreamingText({ text, animate }: { text: string; animate: boolean }) {
   const done = !animate || displayed.length >= text.length;
   return (
     <>
-      <Streamdown mode={animate ? "streaming" : "static"} controls={false}>{displayed}</Streamdown>
+      <Streamdown className="stream-markdown" mode={animate ? "streaming" : "static"} controls={false}>{displayed}</Streamdown>
       {!done && <span className="cursor-blink">|</span>}
     </>
   );
