@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"oops/internal/agent"
+	"oops/internal/nodelet"
 
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
@@ -41,7 +41,7 @@ type Client struct {
 
 // NewClient 创建连接本机 Docker daemon 的客户端。
 func NewClient(address string) (*Client, error) {
-	api, err := client.New(client.FromEnv, client.WithUserAgent("Oops-Agent"))
+	api, err := client.New(client.FromEnv, client.WithUserAgent("Oops-Nodelet"))
 	if err != nil {
 		return nil, err
 	}
@@ -54,19 +54,19 @@ func NewClientWithAPI(api API, address string) *Client {
 }
 
 // Host 返回当前机器和 Docker daemon 的基础信息。
-func (c *Client) Host(r *http.Request) (agent.Host, error) {
+func (c *Client) Host(r *http.Request) (nodelet.Host, error) {
 	if _, err := c.api.Ping(r.Context(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
-		return agent.Host{}, err
+		return nodelet.Host{}, err
 	}
 
 	infoResult, err := c.api.Info(r.Context(), client.InfoOptions{})
 	if err != nil {
-		return agent.Host{}, err
+		return nodelet.Host{}, err
 	}
 
 	info := infoResult.Info
 
-	return agent.Host{
+	return nodelet.Host{
 		ID:            hostID(info),
 		Name:          info.Name,
 		Address:       c.address,
@@ -79,7 +79,7 @@ func (c *Client) Host(r *http.Request) (agent.Host, error) {
 }
 
 // Containers 返回当前机器上的容器列表。
-func (c *Client) Containers(r *http.Request) ([]agent.Container, error) {
+func (c *Client) Containers(r *http.Request) ([]nodelet.Container, error) {
 	if _, err := c.api.Ping(r.Context(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
 		return nil, err
 	}
@@ -95,9 +95,9 @@ func (c *Client) Containers(r *http.Request) ([]agent.Container, error) {
 		return nil, err
 	}
 
-	containers := make([]agent.Container, 0, len(result.Items))
+	containers := make([]nodelet.Container, 0, len(result.Items))
 	for _, item := range result.Items {
-		containers = append(containers, agent.Container{
+		containers = append(containers, nodelet.Container{
 			ID:      item.ID,
 			Name:    containerName(item.Names),
 			Image:   item.Image,
@@ -111,7 +111,7 @@ func (c *Client) Containers(r *http.Request) ([]agent.Container, error) {
 }
 
 // ContainerLogs 返回指定容器的历史日志。
-func (c *Client) ContainerLogs(r *http.Request, containerID string) ([]agent.LogEntry, error) {
+func (c *Client) ContainerLogs(r *http.Request, containerID string) ([]nodelet.LogEntry, error) {
 	if _, err := c.api.Ping(r.Context(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
 		return nil, err
 	}

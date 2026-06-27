@@ -1,4 +1,4 @@
-package agent
+package nodelet
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestClientContainers 验证中心端能调用远端 Agent 容器列表接口。
+// TestClientContainers 验证中心端能调用远端 Nodelet 容器列表接口。
 func TestClientContainers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != ContainersPath {
@@ -33,7 +33,7 @@ func TestClientContainers(t *testing.T) {
 	}
 }
 
-// TestClientContainerLogs 验证中心端能调用远端 Agent 容器日志接口。
+// TestClientContainerLogs 验证中心端能调用远端 Nodelet 容器日志接口。
 func TestClientContainerLogs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != ContainerLogsPath("container-1") {

@@ -1,4 +1,4 @@
-package agent
+package nodelet
 
 import (
 	"encoding/json"

@@ -47,7 +47,7 @@ func (f fakeAPI) ServerVersion(context.Context, client.ServerVersionOptions) (cl
 	return f.version, f.err
 }
 
-// TestHost 验证 Docker 信息能转换成 Agent Host。
+// TestHost 验证 Docker 信息能转换成 Nodelet Host。
 func TestHost(t *testing.T) {
 	api := fakeAPI{info: system.Info{
 		ID:            "docker-host-id",
@@ -73,7 +73,7 @@ func TestHost(t *testing.T) {
 	}
 }
 
-// TestContainers 验证 Docker 容器列表能转换成 Agent Container。
+// TestContainers 验证 Docker 容器列表能转换成 Nodelet Container。
 func TestContainers(t *testing.T) {
 	api := fakeAPI{
 		info: system.Info{
@@ -114,7 +114,7 @@ func TestContainers(t *testing.T) {
 	}
 }
 
-// TestContainerLogs 验证 Docker 容器日志能转换成 Agent LogEntry。
+// TestContainerLogs 验证 Docker 容器日志能转换成 Nodelet LogEntry。
 func TestContainerLogs(t *testing.T) {
 	api := fakeAPI{
 		info: system.Info{ID: "docker-host-id"},

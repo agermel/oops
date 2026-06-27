@@ -1,4 +1,4 @@
-package agent
+package nodelet
 
 import (
 	"errors"
@@ -29,7 +29,7 @@ func (f fakeHostProvider) ContainerLogs(_ *http.Request, _ string) ([]LogEntry, 
 	return f.logs, f.err
 }
 
-// TestServerHealth 验证 Agent 存活接口。
+// TestServerHealth 验证 Nodelet 存活接口。
 func TestServerHealth(t *testing.T) {
 	server := NewServer(fakeHostProvider{})
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
@@ -45,7 +45,7 @@ func TestServerHealth(t *testing.T) {
 	}
 }
 
-// TestServerHost 验证 Agent 机器信息接口。
+// TestServerHost 验证 Nodelet 机器信息接口。
 func TestServerHost(t *testing.T) {
 	server := NewServer(fakeHostProvider{host: Host{
 		ID:        "host-1",
@@ -62,7 +62,7 @@ func TestServerHost(t *testing.T) {
 	}
 }
 
-// TestServerHostWithToken 验证 Agent 数据接口接受正确 Token。
+// TestServerHostWithToken 验证 Nodelet 数据接口接受正确 Token。
 func TestServerHostWithToken(t *testing.T) {
 	server := NewServerWithToken(fakeHostProvider{host: Host{
 		ID:        "host-1",
@@ -80,7 +80,7 @@ func TestServerHostWithToken(t *testing.T) {
 	}
 }
 
-// TestServerHostUnauthorized 验证 Agent 数据接口拒绝错误 Token。
+// TestServerHostUnauthorized 验证 Nodelet 数据接口拒绝错误 Token。
 func TestServerHostUnauthorized(t *testing.T) {
 	server := NewServerWithToken(fakeHostProvider{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
@@ -94,7 +94,7 @@ func TestServerHostUnauthorized(t *testing.T) {
 	}
 }
 
-// TestServerHealthWithoutToken 验证 Agent 存活接口无需 Token。
+// TestServerHealthWithoutToken 验证 Nodelet 存活接口无需 Token。
 func TestServerHealthWithoutToken(t *testing.T) {
 	server := NewServerWithToken(fakeHostProvider{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
@@ -107,7 +107,7 @@ func TestServerHealthWithoutToken(t *testing.T) {
 	}
 }
 
-// TestServerContainers 验证 Agent 容器列表接口。
+// TestServerContainers 验证 Nodelet 容器列表接口。
 func TestServerContainers(t *testing.T) {
 	server := NewServer(fakeHostProvider{containers: []Container{
 		{ID: "container-1", Name: "api"},
@@ -135,7 +135,7 @@ func TestServerContainersUnavailable(t *testing.T) {
 	}
 }
 
-// TestServerContainerLogs 验证 Agent 容器日志接口。
+// TestServerContainerLogs 验证 Nodelet 容器日志接口。
 func TestServerContainerLogs(t *testing.T) {
 	server := NewServer(fakeHostProvider{logs: []LogEntry{
 		{ContainerID: "container-1", Stream: "stdout", Message: "started"},

@@ -14,7 +14,7 @@ const DefaultPath = "config/config.yaml"
 // Config 是应用启动或刷新时读取到的完整配置。
 type Config struct {
 	Env              string                  `mapstructure:"env"`
-	Agents           []AgentConfig           `mapstructure:"agents"`
+	Nodelets         []NodeletConfig         `mapstructure:"nodelets"`
 	ExtraConnections []connection.Connection `mapstructure:"connections"`
 	MySQL            MySQLConfig             `mapstructure:"mysql"`
 	Redis            RedisConfig             `mapstructure:"redis"`
@@ -23,8 +23,8 @@ type Config struct {
 	OTel             OTelConfig              `mapstructure:"otel"`
 }
 
-// AgentConfig 保存一台 oops-agent 的访问地址。
-type AgentConfig struct {
+// NodeletConfig 保存一台 oops-nodelet 的访问地址。
+type NodeletConfig struct {
 	ID      string `mapstructure:"id" json:"id"`
 	Name    string `mapstructure:"name" json:"name"`
 	Address string `mapstructure:"address" json:"address"`

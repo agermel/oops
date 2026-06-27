@@ -1,4 +1,4 @@
-package agent
+package nodelet
 
 import (
 	"crypto/subtle"
@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Provider 提供当前 Agent 管理的机器和容器信息。
+// Provider 提供当前 Nodelet 管理的机器和容器信息。
 type Provider interface {
 	// Host 返回当前机器和 Docker daemon 的基础信息。
 	Host(r *http.Request) (Host, error)
@@ -20,23 +20,23 @@ type Provider interface {
 	ContainerLogs(r *http.Request, containerID string) ([]LogEntry, error)
 }
 
-// Server 暴露 Agent 的 HTTP 协议。
+// Server 暴露 Nodelet 的 HTTP 协议。
 type Server struct {
 	provider Provider
 	token    string
 }
 
-// NewServer 创建 Agent HTTP 服务。
+// NewServer 创建 Nodelet HTTP 服务。
 func NewServer(provider Provider) *Server {
 	return NewServerWithToken(provider, "")
 }
 
-// NewServerWithToken 创建带鉴权的 Agent HTTP 服务。
+// NewServerWithToken 创建带鉴权的 Nodelet HTTP 服务。
 func NewServerWithToken(provider Provider, token string) *Server {
 	return &Server{provider: provider, token: token}
 }
 
-// Routes 返回 Agent 的 HTTP 路由。
+// Routes 返回 Nodelet 的 HTTP 路由。
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(HealthPath, s.handleHealth)
@@ -46,7 +46,7 @@ func (s *Server) Routes() *http.ServeMux {
 	return mux
 }
 
-// authorize 校验中心端调用 Agent 的 Bearer Token。
+// authorize 校验中心端调用 Nodelet 的 Bearer Token。
 func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.token == "" {
@@ -65,12 +65,12 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// handleHealth 返回 Agent 存活状态。
+// handleHealth 返回 Nodelet 存活状态。
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, Health{Status: "ok"})
 }
 
-// handleHost 返回 Agent 所在机器的信息。
+// handleHost 返回 Nodelet 所在机器的信息。
 func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 	host, err := s.provider.Host(r)
 	if err != nil {
@@ -80,7 +80,7 @@ func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, host)
 }
 
-// handleContainers 返回 Agent 所在机器上的容器列表。
+// handleContainers 返回 Nodelet 所在机器上的容器列表。
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	containers, err := s.provider.Containers(r)
 	if err != nil {

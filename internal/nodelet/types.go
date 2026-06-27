@@ -1,13 +1,13 @@
-package agent
+package nodelet
 
 import "time"
 
-// Health 表示 Agent 自身是否存活。
+// Health 表示 Nodelet 自身是否存活。
 type Health struct {
 	Status string `json:"status"`
 }
 
-// Host 表示一台运行 Agent 的服务器。
+// Host 表示一台运行 Nodelet 的服务器。
 type Host struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`

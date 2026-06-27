@@ -5,18 +5,18 @@ import (
 	"strings"
 	"time"
 
-	"oops/internal/agent"
+	"oops/internal/nodelet"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 )
 
-// parseLogs 把 Docker 原始日志转换成 Agent 日志结构。
-func parseLogs(containerID string, data []byte) []agent.LogEntry {
+// parseLogs 把 Docker 原始日志转换成 Nodelet 日志结构。
+func parseLogs(containerID string, data []byte) []nodelet.LogEntry {
 	if len(data) == 0 {
 		return nil
 	}
 
-	entries := make([]agent.LogEntry, 0)
+	entries := make([]nodelet.LogEntry, 0)
 	stdout := newLogCollector(containerID, "stdout", &entries)
 	stderr := newLogCollector(containerID, "stderr", &entries)
 	if _, err := stdcopy.StdCopy(stdout, stderr, bytes.NewReader(data)); err == nil {
@@ -25,7 +25,7 @@ func parseLogs(containerID string, data []byte) []agent.LogEntry {
 		return entries
 	}
 
-	rawEntries := make([]agent.LogEntry, 0)
+	rawEntries := make([]nodelet.LogEntry, 0)
 	collector := newLogCollector(containerID, "stdout", &rawEntries)
 	_, _ = collector.Write(data)
 	collector.flush()
@@ -37,11 +37,11 @@ type logCollector struct {
 	containerID string
 	stream      string
 	buffer      bytes.Buffer
-	entries     *[]agent.LogEntry
+	entries     *[]nodelet.LogEntry
 }
 
 // newLogCollector 创建日志收集器。
-func newLogCollector(containerID string, stream string, entries *[]agent.LogEntry) *logCollector {
+func newLogCollector(containerID string, stream string, entries *[]nodelet.LogEntry) *logCollector {
 	return &logCollector{containerID: containerID, stream: stream, entries: entries}
 }
 
@@ -82,9 +82,9 @@ func (c *logCollector) flush() {
 }
 
 // parseLogLine 解析 Docker 带时间戳的单行日志。
-func parseLogLine(containerID string, stream string, line string) agent.LogEntry {
+func parseLogLine(containerID string, stream string, line string) nodelet.LogEntry {
 	timestamp, message := splitTimestamp(line)
-	return agent.LogEntry{
+	return nodelet.LogEntry{
 		Timestamp:   timestamp,
 		ContainerID: containerID,
 		Stream:      stream,

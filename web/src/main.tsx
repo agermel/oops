@@ -45,14 +45,14 @@ type StatusItem = {
   error?: string;
 };
 
-// AgentConfig 对应中心端配置的一台 agent。
-type AgentConfig = {
+// NodeletConfig 对应中心端配置的一台 nodelet。
+type NodeletConfig = {
   id: string;
   name: string;
   address: string;
 };
 
-// Host 对应 agent 返回的机器信息。
+// Host 对应 nodelet 返回的机器信息。
 type Host = {
   id: string;
   name: string;
@@ -64,9 +64,9 @@ type Host = {
   memTotal: number;
 };
 
-// AgentItem 是中心端机器列表接口的一行数据。
-type AgentItem = {
-  agent: AgentConfig;
+// NodeletItem 是中心端机器列表接口的一行数据。
+type NodeletItem = {
+  nodelet: NodeletConfig;
   host: Host;
   available: boolean;
   error?: string;
@@ -107,17 +107,17 @@ const statusIcon = {
 
 function App() {
   const [items, setItems] = React.useState<StatusItem[]>([]);
-  const [agents, setAgents] = React.useState<AgentItem[]>([]);
+  const [nodelets, setNodelets] = React.useState<NodeletItem[]>([]);
   const [containers, setContainers] = React.useState<Container[]>([]);
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
-  const [selectedAgent, setSelectedAgent] = React.useState("");
+  const [selectedNodelet, setSelectedNodelet] = React.useState("");
   const [selectedContainer, setSelectedContainer] = React.useState("");
   const [loading, setLoading] = React.useState(true);
-  const [agentsLoading, setAgentsLoading] = React.useState(true);
+  const [nodeletsLoading, setNodeletsLoading] = React.useState(true);
   const [containersLoading, setContainersLoading] = React.useState(false);
   const [logsLoading, setLogsLoading] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [agentError, setAgentError] = React.useState("");
+  const [nodeletError, setNodeletError] = React.useState("");
 
   const counters = React.useMemo(() => {
     return items.reduce(
@@ -146,56 +146,56 @@ function App() {
     }
   }
 
-  async function refreshAgents() {
-    setAgentsLoading(true);
-    setAgentError("");
+  async function refreshNodelets() {
+    setNodeletsLoading(true);
+    setNodeletError("");
     try {
-      const response = await fetch("/api/agents");
+      const response = await fetch("/api/nodelets");
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      const nextAgents: AgentItem[] = await response.json();
-      setAgents(nextAgents);
+      const nextNodelets: NodeletItem[] = await response.json();
+      setNodelets(nextNodelets);
 
-      const nextSelected = selectedAgent || nextAgents[0]?.agent.id || "";
-      setSelectedAgent(nextSelected);
+      const nextSelected = selectedNodelet || nextNodelets[0]?.nodelet.id || "";
+      setSelectedNodelet(nextSelected);
       if (nextSelected) {
         await loadContainers(nextSelected);
       }
     } catch (err) {
-      setAgentError(err instanceof Error ? err.message : "机器列表读取失败");
+      setNodeletError(err instanceof Error ? err.message : "机器列表读取失败");
     } finally {
-      setAgentsLoading(false);
+      setNodeletsLoading(false);
     }
   }
 
-  async function loadContainers(agentId: string) {
-    setSelectedAgent(agentId);
+  async function loadContainers(nodeletId: string) {
+    setSelectedNodelet(nodeletId);
     setSelectedContainer("");
     setLogs([]);
     setContainersLoading(true);
-    setAgentError("");
+    setNodeletError("");
     try {
-      const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/containers`);
+      const response = await fetch(`/api/nodelets/${encodeURIComponent(nodeletId)}/containers`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       setContainers(await response.json());
     } catch (err) {
       setContainers([]);
-      setAgentError(err instanceof Error ? err.message : "容器列表读取失败");
+      setNodeletError(err instanceof Error ? err.message : "容器列表读取失败");
     } finally {
       setContainersLoading(false);
     }
   }
 
-  async function loadLogs(agentId: string, containerId: string) {
+  async function loadLogs(nodeletId: string, containerId: string) {
     setSelectedContainer(containerId);
     setLogsLoading(true);
-    setAgentError("");
+    setNodeletError("");
     try {
       const response = await fetch(
-        `/api/agents/${encodeURIComponent(agentId)}/containers/${encodeURIComponent(containerId)}/logs?tail=100`
+        `/api/nodelets/${encodeURIComponent(nodeletId)}/containers/${encodeURIComponent(containerId)}/logs?tail=100`
       );
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -203,14 +203,14 @@ function App() {
       setLogs(await response.json());
     } catch (err) {
       setLogs([]);
-      setAgentError(err instanceof Error ? err.message : "日志读取失败");
+      setNodeletError(err instanceof Error ? err.message : "日志读取失败");
     } finally {
       setLogsLoading(false);
     }
   }
 
   async function refresh() {
-    await Promise.all([refreshConnections(), refreshAgents()]);
+    await Promise.all([refreshConnections(), refreshNodelets()]);
   }
 
   React.useEffect(() => {
@@ -345,23 +345,23 @@ function App() {
               <Server size={18} />
               <h2>机器列表</h2>
             </div>
-            {agentError && <div className="error-line">{agentError}</div>}
-            <div className="agent-grid">
-              {agentsLoading && agents.length === 0 ? (
+            {nodeletError && <div className="error-line">{nodeletError}</div>}
+            <div className="nodelet-grid">
+              {nodeletsLoading && nodelets.length === 0 ? (
                 <div className="empty-card">正在读取机器列表</div>
               ) : (
-                agents.map((item) => (
+                nodelets.map((item) => (
                   <button
-                    key={item.agent.id}
-                    className={`agent-card ${selectedAgent === item.agent.id ? "selected" : ""}`}
-                    onClick={() => loadContainers(item.agent.id)}
+                    key={item.nodelet.id}
+                    className={`nodelet-card ${selectedNodelet === item.nodelet.id ? "selected" : ""}`}
+                    onClick={() => loadContainers(item.nodelet.id)}
                   >
-                    <span className={`agent-dot ${item.available ? "alive" : "dead"}`} />
+                    <span className={`nodelet-dot ${item.available ? "alive" : "dead"}`} />
                     <span>
-                      <strong>{item.host.name || item.agent.name || item.agent.id}</strong>
-                      <small>{item.agent.address}</small>
+                      <strong>{item.host.name || item.nodelet.name || item.nodelet.id}</strong>
+                      <small>{item.nodelet.address}</small>
                     </span>
-                    <span className="agent-meta">
+                    <span className="nodelet-meta">
                       {item.available ? `${item.host.runtime || "docker"} ${item.host.dockerVersion || ""}` : "unavailable"}
                     </span>
                   </button>
@@ -416,7 +416,7 @@ function App() {
                         <td>{container.health || "-"}</td>
                         <td className="message">{container.hostId}</td>
                         <td className="action-cell">
-                          <button title="查看日志" onClick={() => loadLogs(selectedAgent, container.id)}>
+                          <button title="查看日志" onClick={() => loadLogs(selectedNodelet, container.id)}>
                             <FileText size={18} />
                           </button>
                         </td>

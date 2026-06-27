@@ -10,40 +10,40 @@ import (
 	"sync"
 	"time"
 
-	"oops/internal/agent"
 	"oops/internal/config"
 	"oops/internal/connection"
 	"oops/internal/connection/checker"
+	"oops/internal/nodelet"
 )
 
-// AgentClient 是中心端访问 oops-agent 的最小接口。
-type AgentClient interface {
-	// Host 读取远端 Agent 所在机器信息。
-	Host(context.Context, string, string) (agent.Host, error)
+// NodeletClient 是中心端访问 oops-nodelet 的最小接口。
+type NodeletClient interface {
+	// Host 读取远端 Nodelet 所在机器信息。
+	Host(context.Context, string, string) (nodelet.Host, error)
 
-	// Containers 读取远端 Agent 上的容器列表。
-	Containers(context.Context, string, string) ([]agent.Container, error)
+	// Containers 读取远端 Nodelet 上的容器列表。
+	Containers(context.Context, string, string) ([]nodelet.Container, error)
 
-	// ContainerLogs 读取远端 Agent 上某个容器的历史日志。
-	ContainerLogs(context.Context, string, string, string, string) ([]agent.LogEntry, error)
+	// ContainerLogs 读取远端 Nodelet 上某个容器的历史日志。
+	ContainerLogs(context.Context, string, string, string, string) ([]nodelet.LogEntry, error)
 }
 
 // Options 保存中心端 API 服务依赖。
 type Options struct {
-	Connections []connection.Connection
-	Agents      []config.AgentConfig
-	AgentClient AgentClient
-	Registry    *connection.Registry
-	StaticDir   string
+	Connections   []connection.Connection
+	Nodelets      []config.NodeletConfig
+	NodeletClient NodeletClient
+	Registry      *connection.Registry
+	StaticDir     string
 }
 
 // Server 保存中心端 API 服务运行所需的配置和依赖。
 type Server struct {
-	connections []connection.Connection
-	agents      []config.AgentConfig
-	agentClient AgentClient
-	registry    *connection.Registry
-	staticDir   string
+	connections   []connection.Connection
+	nodelets      []config.NodeletConfig
+	nodeletClient NodeletClient
+	registry      *connection.Registry
+	staticDir     string
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -53,29 +53,29 @@ type statusItem struct {
 	Error      string                `json:"error,omitempty"`
 }
 
-// agentItem 是 GUI 机器列表接口返回的一台 Agent 状态。
-type agentItem struct {
-	Agent     config.AgentConfig `json:"agent"`
-	Host      agent.Host         `json:"host"`
-	Available bool               `json:"available"`
-	Error     string             `json:"error,omitempty"`
+// nodeletItem 是 GUI 机器列表接口返回的一台 Nodelet 状态。
+type nodeletItem struct {
+	Nodelet   config.NodeletConfig `json:"nodelet"`
+	Host      nodelet.Host         `json:"host"`
+	Available bool                 `json:"available"`
+	Error     string               `json:"error,omitempty"`
 }
 
 // NewFromConfig 使用配置创建中心端 API 服务。
 func NewFromConfig(cfg config.Config, staticDir string) *Server {
 	return New(Options{
-		Connections: cfg.Connections(),
-		Agents:      cfg.Agents,
-		AgentClient: agent.NewClient(nil),
-		Registry:    checker.NewDefaultRegistry(),
-		StaticDir:   staticDir,
+		Connections:   cfg.Connections(),
+		Nodelets:      cfg.Nodelets,
+		NodeletClient: nodelet.NewClient(nil),
+		Registry:      checker.NewDefaultRegistry(),
+		StaticDir:     staticDir,
 	})
 }
 
 // New 创建中心端 API 服务。
 func New(options Options) *Server {
-	if options.AgentClient == nil {
-		options.AgentClient = agent.NewClient(nil)
+	if options.NodeletClient == nil {
+		options.NodeletClient = nodelet.NewClient(nil)
 	}
 	if options.Registry == nil {
 		options.Registry = checker.NewDefaultRegistry()
@@ -85,11 +85,11 @@ func New(options Options) *Server {
 	}
 
 	return &Server{
-		connections: options.Connections,
-		agents:      options.Agents,
-		agentClient: options.AgentClient,
-		registry:    options.Registry,
-		staticDir:   options.StaticDir,
+		connections:   options.Connections,
+		nodelets:      options.Nodelets,
+		nodeletClient: options.NodeletClient,
+		registry:      options.Registry,
+		staticDir:     options.StaticDir,
 	}
 }
 
@@ -97,8 +97,8 @@ func New(options Options) *Server {
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/connections/status", s.handleConnectionStatus)
-	mux.HandleFunc("/api/agents", s.handleAgents)
-	mux.HandleFunc("/api/agents/", s.handleAgentResource)
+	mux.HandleFunc("/api/nodelets", s.handleNodelets)
+	mux.HandleFunc("/api/nodelets/", s.handleNodeletResource)
 	mux.HandleFunc("/", s.handleStatic)
 	return mux
 }
@@ -144,9 +144,9 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, items)
 }
 
-// handleAgents 返回中心端配置的 Agent 机器列表。
-func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/api/agents" {
+// handleNodelets 返回中心端配置的 Nodelet 机器列表。
+func (s *Server) handleNodelets(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/api/nodelets" {
 		http.NotFound(w, r)
 		return
 	}
@@ -154,25 +154,25 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	results := make([]agentItem, len(s.agents))
+	results := make([]nodeletItem, len(s.nodelets))
 	var wg sync.WaitGroup
-	for index, item := range s.agents {
+	for index, item := range s.nodelets {
 		wg.Add(1)
-		go func(index int, item config.AgentConfig) {
+		go func(index int, item config.NodeletConfig) {
 			defer wg.Done()
 
 			checkCtx, checkCancel := context.WithTimeout(ctx, 6*time.Second)
 			defer checkCancel()
 
-			host, err := s.agentClient.Host(checkCtx, item.Address, item.Token)
-			result := agentItem{
-				Agent:     item,
+			host, err := s.nodeletClient.Host(checkCtx, item.Address, item.Token)
+			result := nodeletItem{
+				Nodelet:   item,
 				Host:      host,
 				Available: err == nil,
 			}
 			if err != nil {
 				result.Error = err.Error()
-				result.Host = agent.Host{
+				result.Host = nodelet.Host{
 					ID:        item.ID,
 					Name:      item.Name,
 					Address:   item.Address,
@@ -187,15 +187,15 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, results)
 }
 
-// handleAgentResource 返回指定 Agent 的容器列表或容器日志。
-func (s *Server) handleAgentResource(w http.ResponseWriter, r *http.Request) {
-	agentID, containerID, action, ok := splitAgentResourcePath(r.URL.Path)
+// handleNodeletResource 返回指定 Nodelet 的容器列表或容器日志。
+func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
+	nodeletID, containerID, action, ok := splitNodeletResourcePath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	item, ok := s.findAgent(agentID)
+	item, ok := s.findNodelet(nodeletID)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -205,7 +205,7 @@ func (s *Server) handleAgentResource(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if action == "containers" {
-		containers, err := s.agentClient.Containers(ctx, item.Address, item.Token)
+		containers, err := s.nodeletClient.Containers(ctx, item.Address, item.Token)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
@@ -215,7 +215,7 @@ func (s *Server) handleAgentResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if action == "logs" {
-		logs, err := s.agentClient.ContainerLogs(ctx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
+		logs, err := s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
@@ -227,19 +227,19 @@ func (s *Server) handleAgentResource(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// findAgent 按配置 ID 查找 Agent。
-func (s *Server) findAgent(id string) (config.AgentConfig, bool) {
-	for _, item := range s.agents {
+// findNodelet 按配置 ID 查找 Nodelet。
+func (s *Server) findNodelet(id string) (config.NodeletConfig, bool) {
+	for _, item := range s.nodelets {
 		if item.ID == id {
 			return item, true
 		}
 	}
-	return config.AgentConfig{}, false
+	return config.NodeletConfig{}, false
 }
 
-// splitAgentResourcePath 拆分中心端 Agent 子资源路径。
-func splitAgentResourcePath(rawPath string) (string, string, string, bool) {
-	rest := strings.TrimPrefix(rawPath, "/api/agents/")
+// splitNodeletResourcePath 拆分中心端 Nodelet 子资源路径。
+func splitNodeletResourcePath(rawPath string) (string, string, string, bool) {
+	rest := strings.TrimPrefix(rawPath, "/api/nodelets/")
 	parts := strings.Split(rest, "/")
 	if len(parts) == 2 && parts[0] != "" && parts[1] == "containers" {
 		return parts[0], "", "containers", true

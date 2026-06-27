@@ -1,4 +1,4 @@
-package agent
+package nodelet
 
 import (
 	"context"
@@ -12,12 +12,12 @@ import (
 	"time"
 )
 
-// Client 调用远端 oops-agent HTTP 接口。
+// Client 调用远端 oops-nodelet HTTP 接口。
 type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient 创建 Agent HTTP 客户端。
+// NewClient 创建 Nodelet HTTP 客户端。
 func NewClient(httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 8 * time.Second}
@@ -25,7 +25,7 @@ func NewClient(httpClient *http.Client) *Client {
 	return &Client{httpClient: httpClient}
 }
 
-// Host 读取远端 Agent 所在机器信息。
+// Host 读取远端 Nodelet 所在机器信息。
 func (c *Client) Host(ctx context.Context, address string, token string) (Host, error) {
 	var host Host
 	if err := c.get(ctx, address, HostPath, token, &host); err != nil {
@@ -34,7 +34,7 @@ func (c *Client) Host(ctx context.Context, address string, token string) (Host, 
 	return host, nil
 }
 
-// Containers 读取远端 Agent 上的容器列表。
+// Containers 读取远端 Nodelet 上的容器列表。
 func (c *Client) Containers(ctx context.Context, address string, token string) ([]Container, error) {
 	var containers []Container
 	if err := c.get(ctx, address, ContainersPath, token, &containers); err != nil {
@@ -43,7 +43,7 @@ func (c *Client) Containers(ctx context.Context, address string, token string) (
 	return containers, nil
 }
 
-// ContainerLogs 读取远端 Agent 上某个容器的历史日志。
+// ContainerLogs 读取远端 Nodelet 上某个容器的历史日志。
 func (c *Client) ContainerLogs(ctx context.Context, address string, token string, containerID string, tail string) ([]LogEntry, error) {
 	route := ContainerLogsPath(containerID)
 	if tail != "" {
@@ -84,12 +84,12 @@ func (c *Client) get(ctx context.Context, address string, route string, token st
 		if message == "" {
 			message = http.StatusText(response.StatusCode)
 		}
-		return fmt.Errorf("agent returned HTTP %d: %s", response.StatusCode, message)
+		return fmt.Errorf("nodelet returned HTTP %d: %s", response.StatusCode, message)
 	}
 	return json.NewDecoder(response.Body).Decode(out)
 }
 
-// joinURL 拼接 Agent 地址和协议路径。
+// joinURL 拼接 Nodelet 地址和协议路径。
 func joinURL(address string, route string) (string, error) {
 	base, err := url.Parse(address)
 	if err != nil {

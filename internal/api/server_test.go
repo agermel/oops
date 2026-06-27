@@ -2,14 +2,14 @@ package api
 
 import "testing"
 
-// TestSplitAgentResourcePathContainers 验证中心端容器列表路径解析。
-func TestSplitAgentResourcePathContainers(t *testing.T) {
-	agentID, containerID, action, ok := splitAgentResourcePath("/api/agents/local/containers")
+// TestSplitNodeletResourcePathContainers 验证中心端容器列表路径解析。
+func TestSplitNodeletResourcePathContainers(t *testing.T) {
+	nodeletID, containerID, action, ok := splitNodeletResourcePath("/api/nodelets/local/containers")
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	if agentID != "local" {
-		t.Fatalf("agentID = %q, want %q", agentID, "local")
+	if nodeletID != "local" {
+		t.Fatalf("nodeletID = %q, want %q", nodeletID, "local")
 	}
 	if containerID != "" {
 		t.Fatalf("containerID = %q, want empty", containerID)
@@ -19,14 +19,14 @@ func TestSplitAgentResourcePathContainers(t *testing.T) {
 	}
 }
 
-// TestSplitAgentResourcePathLogs 验证中心端容器日志路径解析。
-func TestSplitAgentResourcePathLogs(t *testing.T) {
-	agentID, containerID, action, ok := splitAgentResourcePath("/api/agents/local/containers/container-1/logs")
+// TestSplitNodeletResourcePathLogs 验证中心端容器日志路径解析。
+func TestSplitNodeletResourcePathLogs(t *testing.T) {
+	nodeletID, containerID, action, ok := splitNodeletResourcePath("/api/nodelets/local/containers/container-1/logs")
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	if agentID != "local" {
-		t.Fatalf("agentID = %q, want %q", agentID, "local")
+	if nodeletID != "local" {
+		t.Fatalf("nodeletID = %q, want %q", nodeletID, "local")
 	}
 	if containerID != "container-1" {
 		t.Fatalf("containerID = %q, want %q", containerID, "container-1")

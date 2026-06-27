@@ -1,15 +1,15 @@
-package agent
+package nodelet
 
 import "net/url"
 
 const (
-	// HealthPath 是 Agent 存活检查接口。
+	// HealthPath 是 Nodelet 存活检查接口。
 	HealthPath = "/health"
 
-	// HostPath 是 Agent 返回本机信息的接口。
+	// HostPath 是 Nodelet 返回本机信息的接口。
 	HostPath = "/host"
 
-	// ContainersPath 是 Agent 返回本机容器列表的接口。
+	// ContainersPath 是 Nodelet 返回本机容器列表的接口。
 	ContainersPath = "/containers"
 )
 
