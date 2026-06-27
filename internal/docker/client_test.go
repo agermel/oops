@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
@@ -45,6 +47,17 @@ func (f fakeAPI) Ping(context.Context, client.PingOptions) (client.PingResult, e
 // ServerVersion 返回测试用 Docker daemon 版本信息。
 func (f fakeAPI) ServerVersion(context.Context, client.ServerVersionOptions) (client.ServerVersionResult, error) {
 	return f.version, f.err
+}
+
+type streamAPI struct {
+	fakeAPI
+	options client.ContainerLogsOptions
+}
+
+// ContainerLogs 记录测试用实时日志选项。
+func (f *streamAPI) ContainerLogs(ctx context.Context, id string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+	f.options = options
+	return f.fakeAPI.ContainerLogs(ctx, id, options)
 }
 
 // TestHost 验证 Docker 信息能转换成 Nodelet Host。
@@ -134,6 +147,36 @@ func TestContainerLogs(t *testing.T) {
 	}
 	if logs[0].Stream != "stdout" {
 		t.Fatalf("Stream = %q, want %q", logs[0].Stream, "stdout")
+	}
+}
+
+// TestContainerLogsStream 验证 Docker 实时日志能转换成 Nodelet LogEntry。
+func TestContainerLogsStream(t *testing.T) {
+	var buffer bytes.Buffer
+	writeFrame(&buffer, stdcopy.Stdout, "2026-06-27T08:00:00Z app started\n")
+	api := &streamAPI{fakeAPI: fakeAPI{
+		info: system.Info{ID: "docker-host-id"},
+		logs: buffer.String(),
+	}}
+	client := NewClientWithAPI(api, "http://127.0.0.1:8686")
+
+	logs, err := client.ContainerLogsStream(httptest.NewRequest("GET", "/containers/container-1/logs/stream?tail=20", nil), "container-1")
+	if err != nil {
+		t.Fatalf("ContainerLogsStream() error = %v", err)
+	}
+
+	var entries []string
+	for entry := range logs {
+		entries = append(entries, entry.Message)
+	}
+	if len(entries) != 1 || entries[0] != "app started" {
+		t.Fatalf("entries = %#v, want app started", entries)
+	}
+	if !api.options.Follow {
+		t.Fatal("Follow = false, want true")
+	}
+	if api.options.Tail != "20" {
+		t.Fatalf("Tail = %q, want %q", api.options.Tail, "20")
 	}
 }
 

@@ -1,14 +1,21 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"io"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"oops/internal/nodelet"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 )
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 // parseLogs 把 Docker 原始日志转换成 Nodelet 日志结构。
 func parseLogs(containerID string, data []byte) []nodelet.LogEntry {
@@ -17,8 +24,12 @@ func parseLogs(containerID string, data []byte) []nodelet.LogEntry {
 	}
 
 	entries := make([]nodelet.LogEntry, 0)
-	stdout := newLogCollector(containerID, "stdout", &entries)
-	stderr := newLogCollector(containerID, "stderr", &entries)
+	stdout := newLogCollector(containerID, "stdout", func(entry nodelet.LogEntry) {
+		entries = append(entries, entry)
+	})
+	stderr := newLogCollector(containerID, "stderr", func(entry nodelet.LogEntry) {
+		entries = append(entries, entry)
+	})
 	if _, err := stdcopy.StdCopy(stdout, stderr, bytes.NewReader(data)); err == nil {
 		stdout.flush()
 		stderr.flush()
@@ -26,10 +37,51 @@ func parseLogs(containerID string, data []byte) []nodelet.LogEntry {
 	}
 
 	rawEntries := make([]nodelet.LogEntry, 0)
-	collector := newLogCollector(containerID, "stdout", &rawEntries)
+	collector := newLogCollector(containerID, "stdout", func(entry nodelet.LogEntry) {
+		rawEntries = append(rawEntries, entry)
+	})
 	_, _ = collector.Write(data)
 	collector.flush()
 	return rawEntries
+}
+
+// streamLogs 把 Docker 日志流转换成 Nodelet 日志结构流。
+func streamLogs(ctx context.Context, containerID string, reader io.ReadCloser) <-chan nodelet.LogEntry {
+	entries := make(chan nodelet.LogEntry)
+	go func() {
+		defer close(entries)
+		defer reader.Close()
+
+		emit := func(entry nodelet.LogEntry) {
+			select {
+			case entries <- entry:
+			case <-ctx.Done():
+			}
+		}
+
+		buffered := bufio.NewReader(reader)
+		stdout := newLogCollector(containerID, "stdout", emit)
+		stderr := newLogCollector(containerID, "stderr", emit)
+		if looksLikeDockerFrame(buffered) {
+			_, _ = stdcopy.StdCopy(stdout, stderr, buffered)
+			stdout.flush()
+			stderr.flush()
+			return
+		}
+
+		_, _ = io.Copy(stdout, buffered)
+		stdout.flush()
+	}()
+	return entries
+}
+
+// looksLikeDockerFrame 判断日志流是否是 Docker multiplexed frame。
+func looksLikeDockerFrame(reader *bufio.Reader) bool {
+	header, err := reader.Peek(8)
+	if err != nil {
+		return false
+	}
+	return (header[0] == 1 || header[0] == 2) && header[1] == 0 && header[2] == 0 && header[3] == 0
 }
 
 // logCollector 收集某个输出流上的日志行。
@@ -37,12 +89,12 @@ type logCollector struct {
 	containerID string
 	stream      string
 	buffer      bytes.Buffer
-	entries     *[]nodelet.LogEntry
+	emit        func(nodelet.LogEntry)
 }
 
 // newLogCollector 创建日志收集器。
-func newLogCollector(containerID string, stream string, entries *[]nodelet.LogEntry) *logCollector {
-	return &logCollector{containerID: containerID, stream: stream, entries: entries}
+func newLogCollector(containerID string, stream string, emit func(nodelet.LogEntry)) *logCollector {
+	return &logCollector{containerID: containerID, stream: stream, emit: emit}
 }
 
 // Write 写入 Docker 日志片段并按行解析。
@@ -66,7 +118,7 @@ func (c *logCollector) Write(p []byte) (int, error) {
 		if line == "" {
 			continue
 		}
-		*c.entries = append(*c.entries, parseLogLine(c.containerID, c.stream, line))
+		c.emit(parseLogLine(c.containerID, c.stream, line))
 	}
 	return written, nil
 }
@@ -77,7 +129,7 @@ func (c *logCollector) flush() {
 	if line == "" {
 		return
 	}
-	*c.entries = append(*c.entries, parseLogLine(c.containerID, c.stream, line))
+	c.emit(parseLogLine(c.containerID, c.stream, line))
 	c.buffer.Reset()
 }
 
@@ -89,6 +141,8 @@ func parseLogLine(containerID string, stream string, line string) nodelet.LogEnt
 		ContainerID: containerID,
 		Stream:      stream,
 		Message:     message,
+		RawMessage:  message,
+		Level:       guessLogLevel(message),
 	}
 }
 
@@ -103,4 +157,29 @@ func splitTimestamp(line string) (time.Time, string) {
 		return time.Time{}, line
 	}
 	return timestamp, parts[1]
+}
+
+// guessLogLevel 根据常见日志词判断级别。
+func guessLogLevel(message string) string {
+	normalized := strings.ToLower(ansiPattern.ReplaceAllString(message, ""))
+	words := strings.FieldsFunc(normalized, func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	for _, word := range words {
+		switch word {
+		case "fatal", "critical", "crit", "severe":
+			return "fatal"
+		case "error", "err":
+			return "error"
+		case "warn", "warning", "wrn":
+			return "warn"
+		case "info", "inf":
+			return "info"
+		case "debug", "dbg":
+			return "debug"
+		case "trace", "verbose":
+			return "trace"
+		}
+	}
+	return "unknown"
 }

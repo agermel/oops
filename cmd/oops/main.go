@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"oops/internal/api"
+	"oops/internal/common"
 	"oops/internal/config"
 )
 
@@ -16,9 +17,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// 组装 HTTP 服务
 	server := api.NewFromConfig(cfg, "web/dist")
 
-	addr := envOrDefault("OOPS_ADDR", ":8081")
+	addr := common.EnvOrDefault("OOPS_ADDR", ":8081")
 	log.Printf("ops plane API listening on http://localhost%s", addr)
 	log.Fatal(http.ListenAndServe(addr, server.Routes()))
 }
@@ -37,13 +39,4 @@ func loadConfig() (config.Config, error) {
 		return config.Config{}, err
 	}
 	return config.Load("config/config.example.yaml")
-}
-
-// envOrDefault 读取环境变量，空值时使用默认值。
-func envOrDefault(key string, fallback string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	return value
 }

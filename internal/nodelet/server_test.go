@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -11,6 +12,7 @@ type fakeHostProvider struct {
 	host       Host
 	containers []Container
 	logs       []LogEntry
+	streamLogs []LogEntry
 	err        error
 }
 
@@ -27,6 +29,19 @@ func (f fakeHostProvider) Containers(_ *http.Request) ([]Container, error) {
 // ContainerLogs 返回测试用容器日志。
 func (f fakeHostProvider) ContainerLogs(_ *http.Request, _ string) ([]LogEntry, error) {
 	return f.logs, f.err
+}
+
+// ContainerLogsStream 返回测试用容器日志流。
+func (f fakeHostProvider) ContainerLogsStream(_ *http.Request, _ string) (<-chan LogEntry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	logs := make(chan LogEntry, len(f.streamLogs))
+	for _, entry := range f.streamLogs {
+		logs <- entry
+	}
+	close(logs)
+	return logs, nil
 }
 
 // TestServerHealth 验证 Nodelet 存活接口。
@@ -147,6 +162,27 @@ func TestServerContainerLogs(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+}
+
+// TestServerContainerLogsStream 验证 Nodelet 容器日志 SSE 接口。
+func TestServerContainerLogsStream(t *testing.T) {
+	server := NewServer(fakeHostProvider{streamLogs: []LogEntry{
+		{ContainerID: "container-1", Stream: "stdout", Message: "started"},
+	}})
+	request := httptest.NewRequest(http.MethodGet, ContainerLogsStreamPath("container-1"), nil)
+	response := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want %q", response.Header().Get("Content-Type"), "text/event-stream")
+	}
+	if !strings.Contains(response.Body.String(), `data: {"timestamp":"0001-01-01T00:00:00Z","containerId":"container-1","stream":"stdout","message":"started"}`) {
+		t.Fatalf("body = %q", response.Body.String())
 	}
 }
 

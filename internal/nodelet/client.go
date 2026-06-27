@@ -57,6 +57,15 @@ func (c *Client) ContainerLogs(ctx context.Context, address string, token string
 	return logs, nil
 }
 
+// ContainerLogsStream 读取远端 Nodelet 上某个容器的实时日志 SSE 流。
+func (c *Client) ContainerLogsStream(ctx context.Context, address string, token string, containerID string, tail string) (io.ReadCloser, error) {
+	route := ContainerLogsStreamPath(containerID)
+	if tail != "" {
+		route += "?tail=" + url.QueryEscape(tail)
+	}
+	return c.stream(ctx, address, route, token)
+}
+
 // get 发起 GET 请求并反序列化 JSON 响应。
 func (c *Client) get(ctx context.Context, address string, route string, token string, out any) error {
 	endpoint, err := joinURL(address, route)
@@ -87,6 +96,45 @@ func (c *Client) get(ctx context.Context, address string, route string, token st
 		return fmt.Errorf("nodelet returned HTTP %d: %s", response.StatusCode, message)
 	}
 	return json.NewDecoder(response.Body).Decode(out)
+}
+
+// stream 发起 GET 请求并返回响应体，调用方负责关闭。
+func (c *Client) stream(ctx context.Context, address string, route string, token string) (io.ReadCloser, error) {
+	endpoint, err := joinURL(address, route)
+	if err != nil {
+		return nil, err
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	httpClient := c.httpClient
+	if httpClient.Timeout != 0 {
+		clone := *httpClient
+		clone.Timeout = 0
+		httpClient = &clone
+	}
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		defer response.Body.Close()
+		data, _ := io.ReadAll(response.Body)
+		message := strings.TrimSpace(string(data))
+		if message == "" {
+			message = http.StatusText(response.StatusCode)
+		}
+		return nil, fmt.Errorf("nodelet returned HTTP %d: %s", response.StatusCode, message)
+	}
+	return response.Body, nil
 }
 
 // joinURL 拼接 Nodelet 地址和协议路径。

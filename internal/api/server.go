@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ type NodeletClient interface {
 
 	// ContainerLogs 读取远端 Nodelet 上某个容器的历史日志。
 	ContainerLogs(context.Context, string, string, string, string) ([]nodelet.LogEntry, error)
+
+	// ContainerLogsStream 读取远端 Nodelet 上某个容器的实时日志 SSE 流。
+	ContainerLogsStream(context.Context, string, string, string, string) (io.ReadCloser, error)
 }
 
 // Options 保存中心端 API 服务依赖。
@@ -201,10 +205,10 @@ func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
-
 	if action == "containers" {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
 		containers, err := s.nodeletClient.Containers(ctx, item.Address, item.Token)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -215,6 +219,9 @@ func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if action == "logs" {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
 		logs, err := s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -224,7 +231,52 @@ func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if action == "logs/stream" {
+		s.handleNodeletLogsStream(w, r, item, containerID)
+		return
+	}
+
 	http.NotFound(w, r)
+}
+
+// handleNodeletLogsStream 透传远端 Nodelet 的容器日志 SSE。
+func (s *Server) handleNodeletLogsStream(w http.ResponseWriter, r *http.Request, item config.NodeletConfig, containerID string) {
+	stream, err := s.nodeletClient.ContainerLogsStream(r.Context(), item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer stream.Close()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	copyAndFlush(w, flusher, stream)
+}
+
+// copyAndFlush 复制流式响应并在每个块后刷新。
+func copyAndFlush(w io.Writer, flusher http.Flusher, reader io.Reader) {
+	buffer := make([]byte, 32*1024)
+	for {
+		n, readErr := reader.Read(buffer)
+		if n > 0 {
+			if _, err := w.Write(buffer[:n]); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 // findNodelet 按配置 ID 查找 Nodelet。
@@ -246,6 +298,9 @@ func splitNodeletResourcePath(rawPath string) (string, string, string, bool) {
 	}
 	if len(parts) == 4 && parts[0] != "" && parts[1] == "containers" && parts[2] != "" && parts[3] == "logs" {
 		return parts[0], parts[2], "logs", true
+	}
+	if len(parts) == 5 && parts[0] != "" && parts[1] == "containers" && parts[2] != "" && parts[3] == "logs" && parts[4] == "stream" {
+		return parts[0], parts[2], "logs/stream", true
 	}
 	return "", "", "", false
 }

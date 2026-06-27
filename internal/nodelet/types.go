@@ -37,4 +37,6 @@ type LogEntry struct {
 	ContainerID string    `json:"containerId"`
 	Stream      string    `json:"stream"`
 	Message     string    `json:"message"`
+	RawMessage  string    `json:"rawMessage,omitempty"`
+	Level       string    `json:"level,omitempty"`
 }

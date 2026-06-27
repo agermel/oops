@@ -142,6 +142,33 @@ func (c *Client) ContainerLogs(r *http.Request, containerID string) ([]nodelet.L
 	return parseLogs(containerID, data), nil
 }
 
+// ContainerLogsStream 返回指定容器的实时日志流。
+func (c *Client) ContainerLogsStream(r *http.Request, containerID string) (<-chan nodelet.LogEntry, error) {
+	if _, err := c.api.Ping(r.Context(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		return nil, err
+	}
+
+	tail := r.URL.Query().Get("tail")
+	if tail == "" {
+		tail = "100"
+	}
+	if _, err := strconv.Atoi(tail); err != nil {
+		tail = "100"
+	}
+
+	reader, err := c.api.ContainerLogs(r.Context(), containerID, client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+		Tail:       tail,
+		Follow:     true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return streamLogs(r.Context(), containerID, reader), nil
+}
+
 // hostID 返回面板中稳定使用的机器 ID。
 func hostID(info system.Info) string {
 	if info.Swarm.NodeID != "" {

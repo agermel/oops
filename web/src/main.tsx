@@ -1,5 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import AnsiConvertor from "ansi-to-html";
+import debounce from "lodash.debounce";
 import {
   AlertTriangle,
   Bell,
@@ -90,6 +92,8 @@ type LogEntry = {
   containerId: string;
   stream: string;
   message: string;
+  rawMessage?: string;
+  level?: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "unknown";
 };
 
 const navigation = [
@@ -105,6 +109,15 @@ const statusIcon = {
   unknown: AlertTriangle
 };
 
+const MAX_LOGS = 2000;
+const LOG_FLUSH_MS = 250;
+const LOG_MAX_WAIT_MS = 1000;
+const ansiConvertor = new AnsiConvertor({
+  escapeXML: true,
+  fg: "#f5f7fa",
+  bg: "#1f2430"
+});
+
 function App() {
   const [items, setItems] = React.useState<StatusItem[]>([]);
   const [nodelets, setNodelets] = React.useState<NodeletItem[]>([]);
@@ -116,8 +129,38 @@ function App() {
   const [nodeletsLoading, setNodeletsLoading] = React.useState(true);
   const [containersLoading, setContainersLoading] = React.useState(false);
   const [logsLoading, setLogsLoading] = React.useState(false);
+  const [autoScroll, setAutoScroll] = React.useState(true);
   const [error, setError] = React.useState("");
   const [nodeletError, setNodeletError] = React.useState("");
+  const logEventSource = React.useRef<EventSource | null>(null);
+  const logBuffer = React.useRef<LogEntry[]>([]);
+  const logsPanel = React.useRef<HTMLDivElement | null>(null);
+
+  const flushLogs = React.useMemo(
+    () =>
+      debounce(
+        () => {
+          if (logBuffer.current.length === 0) {
+            return;
+          }
+          const nextLogs = logBuffer.current;
+          logBuffer.current = [];
+          setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
+        },
+        LOG_FLUSH_MS,
+        { maxWait: LOG_MAX_WAIT_MS }
+      ),
+    []
+  );
+
+  function closeLogStream() {
+    if (logEventSource.current) {
+      logEventSource.current.close();
+      logEventSource.current = null;
+    }
+    flushLogs.cancel();
+    logBuffer.current = [];
+  }
 
   const counters = React.useMemo(() => {
     return items.reduce(
@@ -170,6 +213,7 @@ function App() {
   }
 
   async function loadContainers(nodeletId: string) {
+    closeLogStream();
     setSelectedNodelet(nodeletId);
     setSelectedContainer("");
     setLogs([]);
@@ -189,24 +233,33 @@ function App() {
     }
   }
 
-  async function loadLogs(nodeletId: string, containerId: string) {
+  function loadLogs(nodeletId: string, containerId: string) {
+    closeLogStream();
     setSelectedContainer(containerId);
     setLogsLoading(true);
+    setLogs([]);
     setNodeletError("");
-    try {
-      const response = await fetch(
-        `/api/nodelets/${encodeURIComponent(nodeletId)}/containers/${encodeURIComponent(containerId)}/logs?tail=100`
-      );
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      setLogs(await response.json());
-    } catch (err) {
-      setLogs([]);
-      setNodeletError(err instanceof Error ? err.message : "日志读取失败");
-    } finally {
+
+    const url = `/api/nodelets/${encodeURIComponent(nodeletId)}/containers/${encodeURIComponent(containerId)}/logs/stream?tail=100`;
+    const source = new EventSource(url);
+    logEventSource.current = source;
+
+    source.onopen = () => {
       setLogsLoading(false);
-    }
+      setNodeletError("");
+    };
+    source.onmessage = (event) => {
+      try {
+        logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
+        flushLogs();
+      } catch (err) {
+        setNodeletError(err instanceof Error ? err.message : "日志事件解析失败");
+      }
+    };
+    source.onerror = () => {
+      setLogsLoading(false);
+      setNodeletError("日志流连接失败");
+    };
   }
 
   async function refresh() {
@@ -216,6 +269,18 @@ function App() {
   React.useEffect(() => {
     refresh();
   }, []);
+
+  React.useEffect(() => {
+    return () => {
+      closeLogStream();
+    };
+  }, [flushLogs]);
+
+  React.useEffect(() => {
+    if (autoScroll && logsPanel.current) {
+      logsPanel.current.scrollTop = logsPanel.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
 
   return (
     <div className="shell">
@@ -429,28 +494,55 @@ function App() {
           </section>
 
           <section className="fleet-section">
-            <div className="section-title">
-              <FileText size={18} />
-              <h2>日志列表</h2>
+            <div className="section-title logs-title">
+              <span>
+                <FileText size={18} />
+                <h2>日志列表</h2>
+              </span>
+              <div className="log-actions">
+                <label>
+                  <input type="checkbox" checked={autoScroll} onChange={(event) => setAutoScroll(event.target.checked)} />
+                  <span>自动滚动</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    flushLogs.cancel();
+                    logBuffer.current = [];
+                    setLogs([]);
+                  }}
+                  disabled={logs.length === 0}
+                >
+                  清空
+                </button>
+              </div>
             </div>
-            <div className="logs-panel">
+            <div className="logs-panel" ref={logsPanel}>
               {logsLoading ? (
-                <div className="empty-card">正在读取日志</div>
+                <div className="empty-card">正在连接日志流</div>
               ) : logs.length === 0 ? (
-                <div className="empty-card">选择一个容器查看最近 100 行日志</div>
+                <div className="empty-card">{selectedContainer ? "等待实时日志" : "选择一个容器查看最近 100 行日志"}</div>
               ) : (
-                logs.map((entry, index) => (
-                  <div key={`${entry.timestamp}-${index}`} className="log-line">
-                    <span>{entry.timestamp || "-"}</span>
-                    <b>{entry.stream}</b>
-                    <code>{entry.message}</code>
-                  </div>
-                ))
+                logs.map((entry, index) => <LogRow key={`${entry.timestamp}-${index}`} entry={entry} />)
               )}
             </div>
           </section>
         </section>
       </main>
+    </div>
+  );
+}
+
+function LogRow({ entry }: { entry: LogEntry }) {
+  const level = entry.level || "unknown";
+  const html = ansiConvertor.toHtml(entry.rawMessage || entry.message || "");
+
+  return (
+    <div className={`log-line level-${level}`}>
+      <span>{entry.timestamp || "-"}</span>
+      <b className={`log-stream-tag ${entry.stream === "stderr" ? "stderr" : "stdout"}`}>{entry.stream}</b>
+      <strong className={`log-level ${level}`}>{level}</strong>
+      <code dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }

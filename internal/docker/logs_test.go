@@ -10,16 +10,22 @@ import (
 
 // TestParseRawLogs 验证 TTY 格式日志解析。
 func TestParseRawLogs(t *testing.T) {
-	logs := parseLogs("container-1", []byte("2026-06-27T08:00:00Z app started\n"))
+	logs := parseLogs("container-1", []byte("2026-06-27T08:00:00Z info app started\n"))
 
 	if len(logs) != 1 {
 		t.Fatalf("len(logs) = %d, want %d", len(logs), 1)
 	}
-	if logs[0].Message != "app started" {
-		t.Fatalf("Message = %q, want %q", logs[0].Message, "app started")
+	if logs[0].Message != "info app started" {
+		t.Fatalf("Message = %q, want %q", logs[0].Message, "info app started")
 	}
 	if logs[0].Stream != "stdout" {
 		t.Fatalf("Stream = %q, want %q", logs[0].Stream, "stdout")
+	}
+	if logs[0].RawMessage != "info app started" {
+		t.Fatalf("RawMessage = %q, want %q", logs[0].RawMessage, "info app started")
+	}
+	if logs[0].Level != "info" {
+		t.Fatalf("Level = %q, want %q", logs[0].Level, "info")
 	}
 }
 
@@ -39,6 +45,21 @@ func TestParseMultiplexedLogs(t *testing.T) {
 	}
 	if logs[1].Stream != "stderr" || logs[1].Message != "err" {
 		t.Fatalf("logs[1] = %#v", logs[1])
+	}
+}
+
+// TestGuessLogLevel 验证常见日志级别识别。
+func TestGuessLogLevel(t *testing.T) {
+	cases := map[string]string{
+		"ERROR request failed":       "error",
+		`{"level":"warn","msg":"x"}`: "warn",
+		"\x1b[31mFATAL panic\x1b[0m": "fatal",
+		"plain line":                 "unknown",
+	}
+	for input, want := range cases {
+		if got := guessLogLevel(input); got != want {
+			t.Fatalf("guessLogLevel(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

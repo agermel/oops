@@ -3,6 +3,7 @@ package nodelet
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +19,9 @@ type Provider interface {
 
 	// ContainerLogs 返回指定容器的历史日志。
 	ContainerLogs(r *http.Request, containerID string) ([]LogEntry, error)
+
+	// ContainerLogsStream 返回指定容器的实时日志流。
+	ContainerLogsStream(r *http.Request, containerID string) (<-chan LogEntry, error)
 }
 
 // Server 暴露 Nodelet 的 HTTP 协议。
@@ -93,31 +97,76 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 // handleContainer 处理单个容器下的子资源。
 func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	containerID, action, ok := splitContainerPath(r.URL.Path)
-	if !ok || action != "logs" {
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	logs, err := s.provider.ContainerLogs(r, containerID)
+	switch action {
+	case "logs":
+		logs, err := s.provider.ContainerLogs(r, containerID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, logs)
+	case "logs/stream":
+		s.handleContainerLogsStream(w, r, containerID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// handleContainerLogsStream 以 SSE 持续返回容器日志。
+func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Request, containerID string) {
+	logs, err := s.provider.ContainerLogsStream(r, containerID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, logs)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	for entry := range logs {
+		data, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
 }
 
 // splitContainerPath 拆分 /containers/{id}/{action} 路径。
 func splitContainerPath(path string) (string, string, bool) {
 	rest := strings.TrimPrefix(path, "/containers/")
 	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "logs" {
+		containerID, err := url.PathUnescape(parts[0])
+		if err != nil {
+			return "", "", false
+		}
+		return containerID, parts[1], true
 	}
-	containerID, err := url.PathUnescape(parts[0])
-	if err != nil {
-		return "", "", false
+	if len(parts) == 3 && parts[0] != "" && parts[1] == "logs" && parts[2] == "stream" {
+		containerID, err := url.PathUnescape(parts[0])
+		if err != nil {
+			return "", "", false
+		}
+		return containerID, "logs/stream", true
 	}
-	return containerID, parts[1], true
+	return "", "", false
 }
 
 // writeJSON 写入 JSON 响应。

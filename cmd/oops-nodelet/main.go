@@ -5,14 +5,15 @@ import (
 	"net/http"
 	"os"
 
+	"oops/internal/common"
 	"oops/internal/docker"
 	"oops/internal/nodelet"
 )
 
 // 子服务器的 nodelet 进程
 func main() {
-	addr := envOrDefault("OOPS_NODELET_ADDR", ":8686")
-	publicAddress := envOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
+	addr := common.EnvOrDefault("OOPS_NODELET_ADDR", ":8686")
+	publicAddress := common.EnvOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
 	token := os.Getenv("OOPS_NODELET_TOKEN")
 
 	dockerClient, err := docker.NewClient(publicAddress)
@@ -24,13 +25,4 @@ func main() {
 
 	log.Printf("oops nodelet listening on http://localhost%s", addr)
 	log.Fatal(http.ListenAndServe(addr, server.Routes()))
-}
-
-// envOrDefault 读取环境变量，空值时使用默认值。
-func envOrDefault(key string, fallback string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	return value
 }
