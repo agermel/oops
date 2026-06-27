@@ -19,7 +19,11 @@ import {
   Settings,
   Sparkles,
   TerminalSquare,
-  XCircle
+  XCircle,
+  Send,
+  Bot,
+  User,
+  X
 } from "lucide-react";
 import "./styles.css";
 
@@ -132,6 +136,12 @@ function App() {
   const [autoScroll, setAutoScroll] = React.useState(true);
   const [error, setError] = React.useState("");
   const [nodeletError, setNodeletError] = React.useState("");
+  const [chatOpen, setChatOpen] = React.useState(false);
+  const [chatMessages, setChatMessages] = React.useState<{ role: string; content: string }[]>([]);
+  const [chatInput, setChatInput] = React.useState("");
+  const [chatLoading, setChatLoading] = React.useState(false);
+  const [chatError, setChatError] = React.useState("");
+
   const logEventSource = React.useRef<EventSource | null>(null);
   const logBuffer = React.useRef<LogEntry[]>([]);
   const logsPanel = React.useRef<HTMLDivElement | null>(null);
@@ -266,6 +276,36 @@ function App() {
     await Promise.all([refreshConnections(), refreshNodelets()]);
   }
 
+  async function sendChat(question?: string) {
+    const q = (question ?? chatInput).trim();
+    if (!q || chatLoading) {
+      return;
+    }
+    setChatInput("");
+    setChatError("");
+    setChatMessages((prev) => [...prev, { role: "user", content: q }]);
+    setChatLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      setChatMessages((prev) => [...prev, { role: "assistant", content: data.answer }]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "聊天请求失败";
+      setChatError(msg);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
   React.useEffect(() => {
     refresh();
   }, []);
@@ -305,7 +345,7 @@ function App() {
           <button title="通知">
             <Bell size={20} />
           </button>
-          <button title="智能助手">
+          <button title="智能助手" onClick={() => setChatOpen((v) => !v)} className={chatOpen ? "chat-active" : ""}>
             <Sparkles size={20} />
           </button>
           <button className="avatar" title="用户">
@@ -527,6 +567,49 @@ function App() {
               )}
             </div>
           </section>
+
+          {chatOpen && (
+            <section className="chat-panel">
+              <div className="chat-header">
+                <span><Sparkles size={18} /> 智能助手</span>
+                <button onClick={() => setChatOpen(false)} title="关闭">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="chat-body">
+                {chatMessages.length === 0 && !chatLoading && (
+                  <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>
+                )}
+                {chatMessages.map((msg, i) => (
+                  <div key={i} className={`chat-msg ${msg.role}`}>
+                    <div className="chat-avatar">
+                      {msg.role === "user" ? <User size={16} /> : <Bot size={16} />}
+                    </div>
+                    <div className="chat-content">{msg.content}</div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div className="chat-msg assistant">
+                    <div className="chat-avatar"><Bot size={16} /></div>
+                    <div className="chat-content chat-typing">思考中<span>.</span><span>.</span><span>.</span></div>
+                  </div>
+                )}
+                {chatError && <div className="chat-error">{chatError}</div>}
+              </div>
+              <div className="chat-footer">
+                <input
+                  placeholder="输入问题，按 Enter 发送"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { sendChat(); } }}
+                  disabled={chatLoading}
+                />
+                <button onClick={() => sendChat()} disabled={chatLoading || !chatInput.trim()} title="发送">
+                  <Send size={18} />
+                </button>
+              </div>
+            </section>
+          )}
         </section>
       </main>
     </div>
