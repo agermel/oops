@@ -345,14 +345,41 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	// 向大模型请求
-	answer, err := s.llmClient.Ask(ctx, req.Question)
+	// 向大模型请求，流式返回每一步。
+	events, err := s.llmClient.Ask(ctx, req.Question)
 	if err != nil {
 		writeJSON(w, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeJSON(w, map[string]string{"answer": answer})
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, `{"error":"streaming unsupported"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	// 发送初始注释，强制浏览器进入流模式。
+	fmt.Fprintf(w, ":ok\n\n")
+	flusher.Flush()
+
+	for evt := range events {
+		data, err := json.Marshal(evt)
+		if err != nil {
+			return
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 // ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。

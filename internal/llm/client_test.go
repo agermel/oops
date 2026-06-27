@@ -61,9 +61,15 @@ func TestClientAskSkipped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	answer, err := client.Ask(ctx, "有哪些机器？如果不止一台，请列出它们的名称。")
+	events, err := client.Ask(ctx, "有哪些机器？如果不止一台，请列出它们的名称。")
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
+	}
+	var answer string
+	for evt := range events {
+		if evt.Type == "answer" {
+			answer = evt.Content
+		}
 	}
 	if answer == "" {
 		t.Fatal("Ask() returned empty answer")

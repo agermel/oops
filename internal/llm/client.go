@@ -34,7 +34,7 @@ func NewClient(ctx context.Context, cfg config.LLMConfig, ops OpsData) (*Client,
 	}, nil
 }
 
-// Ask 向 LLM Agent 提问并返回回答。
-func (c *Client) Ask(ctx context.Context, question string) (string, error) {
+// Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
+func (c *Client) Ask(ctx context.Context, question string) (<-chan StepEvent, error) {
 	return Ask(ctx, c.model, c.tools, question)
 }

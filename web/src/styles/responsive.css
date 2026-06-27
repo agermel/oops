@@ -1,0 +1,52 @@
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-rows: 48px 48px minmax(0, 1fr);
+  }
+
+  .global-header {
+    height: 48px;
+    grid-template-columns: 150px 1fr auto;
+    gap: 12px;
+    padding: 0 10px;
+  }
+
+  .elastic-brand {
+    font-size: 22px;
+  }
+
+  .global-actions button:not(.avatar) {
+    display: none;
+  }
+
+  .side-rail,
+  .rail-menu,
+  .rail-nav button {
+    width: 48px;
+  }
+
+  .app-bar {
+    height: 48px;
+  }
+
+  .content {
+    padding: 14px;
+  }
+
+  .workspace-card {
+    padding: 20px;
+  }
+
+  .workspace-head {
+    flex-direction: column;
+  }
+
+  h1 {
+    font-size: 34px;
+  }
+
+  .toolbar,
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+}
