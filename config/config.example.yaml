@@ -1,0 +1,37 @@
+env: "prod"
+
+connections:
+  - id: "elasticsearch"
+    name: "Elasticsearch"
+    type: "elasticsearch"
+    address: "http://127.0.0.1:9200"
+  - id: "jaeger"
+    name: "Jaeger"
+    type: "jaeger"
+    address: "http://127.0.0.1:16686"
+  - id: "nacos"
+    name: "Nacos"
+    type: "nacos"
+    address: "http://127.0.0.1:8848"
+
+mysql:
+  dsn: "user:password@tcp(127.0.0.1:3306)/app?charset=utf8mb4&parseTime=True&loc=Local"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: "password"
+
+etcd:
+  endpoints:
+    - "127.0.0.1:2379"
+  username: "root"
+  password: "password"
+
+kafka:
+  addrs:
+    - "127.0.0.1:9092"
+  username: "root"
+  password: "password"
+
+otel:
+  endpoint: "127.0.0.1:4318"

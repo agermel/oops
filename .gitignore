@@ -1,0 +1,4 @@
+.excaildraw.json
+config/config.yaml
+web/node_modules/
+web/dist/
