@@ -3,10 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"oops/internal/config"
 	"oops/internal/connection"
 	"oops/internal/connection/checker"
+	"oops/internal/llm"
 	"oops/internal/nodelet"
 )
 
@@ -38,7 +40,8 @@ type Options struct {
 	Nodelets      []config.NodeletConfig
 	NodeletClient NodeletClient
 	Registry      *connection.Registry
-	StaticDir     string
+	LLMEnabled    bool
+	LLMConfig     config.LLMConfig
 }
 
 // Server 保存中心端 API 服务运行所需的配置和依赖。
@@ -47,7 +50,7 @@ type Server struct {
 	nodelets      []config.NodeletConfig
 	nodeletClient NodeletClient
 	registry      *connection.Registry
-	staticDir     string
+	llmClient     *llm.Client
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -66,13 +69,14 @@ type nodeletItem struct {
 }
 
 // NewFromConfig 使用配置创建中心端 API 服务。
-func NewFromConfig(cfg config.Config, staticDir string) *Server {
+func NewFromConfig(cfg config.Config) *Server {
 	return New(Options{
 		Connections:   cfg.Connections(),
 		Nodelets:      cfg.Nodelets,
 		NodeletClient: nodelet.NewClient(nil),
 		Registry:      checker.NewDefaultRegistry(),
-		StaticDir:     staticDir,
+		LLMEnabled:    cfg.LLM.Enabled,
+		LLMConfig:     cfg.LLM,
 	})
 }
 
@@ -84,27 +88,43 @@ func New(options Options) *Server {
 	if options.Registry == nil {
 		options.Registry = checker.NewDefaultRegistry()
 	}
-	if options.StaticDir == "" {
-		options.StaticDir = "web/dist"
-	}
 
-	return &Server{
+	s := &Server{
 		connections:   options.Connections,
 		nodelets:      options.Nodelets,
 		nodeletClient: options.NodeletClient,
 		registry:      options.Registry,
-		staticDir:     options.StaticDir,
 	}
+
+	if options.LLMEnabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		client, err := llm.NewClient(ctx, options.LLMConfig, s)
+		if err != nil {
+			// LLM 不可用时不影响其他功能，仅日志输出。
+			log.Printf("llm: create client: %v", err)
+		} else {
+			s.llmClient = client
+		}
+	}
+
+	return s
 }
 
-// Routes 返回中心端 API 和静态文件路由。
+// Routes 返回中心端 API 路由。
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	s.Mount(mux)
+	return mux
+}
+
+// Mount 把中心端 API 路由挂载到指定 mux。
+func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/connections/status", s.handleConnectionStatus)
 	mux.HandleFunc("/api/nodelets", s.handleNodelets)
 	mux.HandleFunc("/api/nodelets/", s.handleNodeletResource)
-	mux.HandleFunc("/", s.handleStatic)
-	return mux
+	mux.HandleFunc("/api/chat", s.handleChat)
 }
 
 // handleConnectionStatus 执行所有连接检查并返回 JSON。
@@ -305,20 +325,120 @@ func splitNodeletResourcePath(rawPath string) (string, string, string, bool) {
 	return "", "", "", false
 }
 
-// handleStatic 在生产模式下提供 React 构建产物。
-func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.staticDir, filepath.Clean(r.URL.Path))
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		http.ServeFile(w, r, path)
+// handleChat 处理 LLM 对话请求。
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	// 暂未配置大模型
+	if s.llmClient == nil {
+		http.Error(w, `{"error":"LLM not configured. Set llm.enabled=true and llm.api_key in config."}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	indexPath := filepath.Join(s.staticDir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
-		http.Error(w, "React build is missing. Run: npm --prefix web install && npm --prefix web run build", http.StatusServiceUnavailable)
+	// 请求构建
+	var req struct {
+		Question string `json:"question"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
+		http.Error(w, `{"error":"question is required"}`, http.StatusBadRequest)
 		return
 	}
-	http.ServeFile(w, r, indexPath)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	// 向大模型请求
+	answer, err := s.llmClient.Ask(ctx, req.Question)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]string{"answer": answer})
+}
+
+// ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。
+func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error) {
+	results := make([]llm.NodeletSummary, len(s.nodelets))
+	var wg sync.WaitGroup
+	for index, item := range s.nodelets {
+		wg.Add(1)
+		go func(index int, item config.NodeletConfig) {
+			defer wg.Done()
+
+			checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+			defer cancel()
+
+			summary := llm.NodeletSummary{
+				ID:      item.ID,
+				Name:    item.Name,
+				Address: item.Address,
+			}
+
+			host, err := s.nodeletClient.Host(checkCtx, item.Address, item.Token)
+			if err != nil {
+				summary.Error = err.Error()
+			} else {
+				summary.Available = true
+				summary.DockerVersion = host.DockerVersion
+				summary.Runtime = host.Runtime
+				summary.NCPU = host.NCPU
+				summary.MemTotal = host.MemTotal
+			}
+			results[index] = summary
+		}(index, item)
+	}
+	wg.Wait()
+	return results, nil
+}
+
+// ListContainers 实现 llm.OpsData，返回指定 Nodelet 的容器列表。
+func (s *Server) ListContainers(ctx context.Context, nodeletID string) ([]nodelet.Container, error) {
+	item, ok := s.findNodelet(nodeletID)
+	if !ok {
+		return nil, fmt.Errorf("nodelet %q not found", nodeletID)
+	}
+	return s.nodeletClient.Containers(ctx, item.Address, item.Token)
+}
+
+// GetLogs 实现 llm.OpsData，返回指定容器的历史日志。
+func (s *Server) GetLogs(ctx context.Context, nodeletID, containerID string, tail int) ([]nodelet.LogEntry, error) {
+	item, ok := s.findNodelet(nodeletID)
+	if !ok {
+		return nil, fmt.Errorf("nodelet %q not found", nodeletID)
+	}
+	return s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, strconv.Itoa(tail))
+}
+
+// CheckConnections 实现 llm.OpsData，执行所有连接健康检查。
+func (s *Server) CheckConnections(ctx context.Context) ([]llm.ConnectionStatus, error) {
+	results := make([]llm.ConnectionStatus, len(s.connections))
+	var wg sync.WaitGroup
+	for index, conn := range s.connections {
+		wg.Add(1)
+		go func(index int, conn connection.Connection) {
+			defer wg.Done()
+
+			checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+			defer cancel()
+
+			result, err := s.registry.Check(checkCtx, conn)
+			cs := llm.ConnectionStatus{
+				ID:      conn.ID,
+				Name:    conn.Name,
+				Type:    conn.Type,
+				Address: conn.Address,
+				Status:  string(result.Status),
+				Message: result.Message,
+				Latency: result.Latency,
+			}
+			if err != nil {
+				cs.Error = err.Error()
+				cs.Status = string(connection.StatusUnknown)
+			}
+			results[index] = cs
+		}(index, conn)
+	}
+	wg.Wait()
+	return results, nil
 }
 
 // writeJSON 写入 JSON 响应。

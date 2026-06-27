@@ -98,7 +98,6 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 			Token:   "secret",
 		}},
 		NodeletClient: client,
-		StaticDir:     t.TempDir(),
 	})
 	request := httptest.NewRequest(http.MethodGet, "/api/nodelets/local/containers/container-1/logs/stream?tail=20", nil)
 	response := httptest.NewRecorder()
@@ -116,5 +115,18 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 	}
 	if client.streamTail != "20" {
 		t.Fatalf("tail = %q, want %q", client.streamTail, "20")
+	}
+}
+
+// TestRoutesDoesNotServeStatic 验证 API 包不接管前端静态文件。
+func TestRoutesDoesNotServeStatic(t *testing.T) {
+	server := New(Options{NodeletClient: &fakeNodeletClient{}})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
 }
