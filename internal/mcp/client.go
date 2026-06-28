@@ -125,14 +125,15 @@ var safeVerifyTools = []string{
 	"list_databases", "list_keys", "get_config",
 }
 
-// Verify probes an MCP connection by calling a safe tool. Returns nil
-// if the backend service responds without error.
+// Verify probes an MCP connection by calling safe tools in order.
+// Returns nil if any safe tool responds without error.
 func Verify(ctx context.Context, session MCPSession, tools []tool.BaseTool) error {
 	if len(tools) == 0 {
 		return fmt.Errorf("no tools available for verification")
 	}
 
-	var probeName string
+	// Build ordered list of probe candidates from safeVerifyTools that exist.
+	var probes []string
 	for _, name := range safeVerifyTools {
 		for _, t := range tools {
 			info, err := t.Info(ctx)
@@ -140,47 +141,51 @@ func Verify(ctx context.Context, session MCPSession, tools []tool.BaseTool) erro
 				continue
 			}
 			if info.Name == name {
-				probeName = name
+				probes = append(probes, name)
 				break
 			}
 		}
-		if probeName != "" {
-			break
-		}
 	}
-	if probeName == "" {
+	// Fallback: if no safe tool found, use the first available tool.
+	if len(probes) == 0 {
 		info, err := tools[0].Info(ctx)
 		if err != nil {
 			return fmt.Errorf("get tool info: %w", err)
 		}
-		probeName = info.Name
+		probes = append(probes, info.Name)
 	}
 
-	console.Feed("mcp: verifying connection with %q ...", probeName)
+	var lastErr error
+	for _, probeName := range probes {
+		console.Feed("mcp: verifying connection with %q ...", probeName)
 
-	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+		verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		req := mcp.CallToolRequest{}
+		req.Params.Name = probeName
+		req.Params.Arguments = map[string]any{}
 
-	req := mcp.CallToolRequest{}
-	req.Params.Name = probeName
-	req.Params.Arguments = map[string]any{}
-
-	result, err := session.CallTool(verifyCtx, req)
-	if err != nil {
-		return fmt.Errorf("verify %q: call: %w", probeName, err)
-	}
-	if result.IsError {
-		var msgs []string
-		for _, block := range result.Content {
-			if tb, ok := block.(mcp.TextContent); ok {
-				msgs = append(msgs, tb.Text)
-			}
+		result, err := session.CallTool(verifyCtx, req)
+		cancel()
+		if err != nil {
+			lastErr = fmt.Errorf("verify %q: call: %w", probeName, err)
+			continue
 		}
-		return fmt.Errorf("verify %q: %s", probeName, joinStrings(msgs, "; "))
+		if result.IsError {
+			var msgs []string
+			for _, block := range result.Content {
+				if tb, ok := block.(mcp.TextContent); ok {
+					msgs = append(msgs, tb.Text)
+				}
+			}
+			lastErr = fmt.Errorf("verify %q: %s", probeName, joinStrings(msgs, "; "))
+			continue
+		}
+
+		console.Feed("mcp: verify %q ok", probeName)
+		return nil
 	}
 
-	console.Feed("mcp: verify %q ok", probeName)
-	return nil
+	return fmt.Errorf("all verify probes failed, last: %w", lastErr)
 }
 
 func joinStrings(ss []string, sep string) string {

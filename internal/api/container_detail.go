@@ -30,9 +30,10 @@ type healthResult struct {
 
 // mcpStatus 是容器级 MCP 连接的运行时状态。
 type mcpStatus struct {
-	Connected bool   `json:"connected"`
-	ToolCount int    `json:"toolCount"`
-	Error     string `json:"error,omitempty"`
+	Connected    bool   `json:"connected"`
+	ToolCount    int    `json:"toolCount"`
+	Error        string `json:"error,omitempty"`
+	ConnectionID string `json:"connectionId,omitempty"`
 }
 
 // buildContainerDetail 聚合容器的所有信息。
@@ -56,26 +57,47 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 		DSN:         dsn,
 	}
 
-	// 查找匹配的 MCP 连接：类型相同且处于运行状态。
+	// 查找匹配的 MCP 连接：优先按容器 ID 精确匹配，回退按类型匹配。
 	if s.mcpManager != nil && stype.IsDatabase() {
-		for _, conn := range s.mcpManager.List() {
-			if conn.Type == string(stype) && conn.Status == "running" {
+		// Primary: match by container binding.
+		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
+		if bound != nil {
+			if bound.Status == "running" {
 				result.MCP = &mcpStatus{
-					Connected: true,
-					ToolCount: conn.ToolCount,
+					Connected:    true,
+					ToolCount:    bound.ToolCount,
+					ConnectionID: bound.ID,
 				}
-				break
+			} else {
+				result.MCP = &mcpStatus{
+					Connected:    false,
+					Error:        bound.Error,
+					ConnectionID: bound.ID,
+				}
 			}
-		}
-		// 没有找到运行中的连接时，检查是否有已配置但未运行的。
-		if result.MCP == nil {
+		} else {
+			// Fallback: type-based matching for backward compat with
+			// existing connections that have no container binding.
 			for _, conn := range s.mcpManager.List() {
-				if conn.Type == string(stype) {
+				if conn.Type == string(stype) && conn.Status == "running" {
 					result.MCP = &mcpStatus{
-						Connected: false,
-						Error:     conn.Error,
+						Connected:    true,
+						ToolCount:    conn.ToolCount,
+						ConnectionID: conn.ID,
 					}
 					break
+				}
+			}
+			if result.MCP == nil {
+				for _, conn := range s.mcpManager.List() {
+					if conn.Type == string(stype) {
+						result.MCP = &mcpStatus{
+							Connected:    false,
+							Error:        conn.Error,
+							ConnectionID: conn.ID,
+						}
+						break
+					}
 				}
 			}
 		}
@@ -215,6 +237,42 @@ func splitContainerDetailPath(rawPath string) (string, string, string, bool) {
 		return parts[0], parts[2], parts[4], true
 	}
 	return "", "", "", false
+}
+
+// handleContainerMCPConnection 处理容器绑定的 MCP 连接。
+// GET/DELETE /api/projects/:pid/servers/:sid/containers/:cid/mcp
+func (s *Server) handleContainerMCPConnection(w http.ResponseWriter, r *http.Request) {
+	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
+	if !ok {
+		writeJSONError(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	if s.mcpManager == nil {
+		writeJSON(w, nil)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
+		writeJSON(w, bound)
+
+	case http.MethodDelete:
+		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
+		if bound == nil {
+			writeJSONError(w, "no connection bound to this container", http.StatusNotFound)
+			return
+		}
+		if err := s.mcpManager.Remove(bound.ID); err != nil {
+			writeJSONError(w, err.Error(), mcpErrorStatus(err))
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	default:
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // errNotFound 返回一个标记为 404 的错误。

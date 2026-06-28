@@ -576,7 +576,7 @@ type toolsResponse struct {
 // handleTools 处理 GET /api/tools — 返回所有工具（内置 + MCP）及其启用状态。
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -646,7 +646,7 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPut {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -659,7 +659,7 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 
@@ -701,7 +701,7 @@ func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(parts) >= 4 && parts[3] == "containers" {
-			// 子资源: logs/stream, check
+			// 子资源: logs/stream, check, mcp
 			if len(parts) >= 7 && parts[5] == "logs" && parts[6] == "stream" {
 				s.handleProjectLogsStream(w, r)
 				return
@@ -710,12 +710,32 @@ func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
 				s.handleProjectHealthCheck(w, r)
 				return
 			}
+			if len(parts) >= 6 && parts[5] == "mcp" {
+				s.handleContainerMCPConnection(w, r)
+				return
+			}
 			s.handleProjectContainers(w, r)
 			return
 		}
 	}
 
 	http.NotFound(w, r)
+}
+
+// mcpErrorStatus maps MCP manager errors to appropriate HTTP status codes.
+// Validation/conflict errors return 4xx so the frontend can display the reason.
+func mcpErrorStatus(err error) int {
+	msg := err.Error()
+	if strings.Contains(msg, "already exists") || strings.Contains(msg, "already has connection") {
+		return http.StatusConflict
+	}
+	if strings.Contains(msg, "not found") {
+		return http.StatusNotFound
+	}
+	if strings.Contains(msg, "id is required") || strings.Contains(msg, "not in the allowed list") {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 // handleMCPConnections handles GET (list) and POST (add) on /api/mcp/connections.
@@ -731,22 +751,23 @@ func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var cfg mcp.ConnectionConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			writeJSONError(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 		if s.mcpManager == nil {
-			http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+			writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 			return
 		}
 		if err := s.mcpManager.Add(cfg); err != nil {
-			sanitizedError(w, "mcp add", err, http.StatusInternalServerError)
+			logutil.Error("api: mcp add", zap.Error(err))
+			writeJSONError(w, err.Error(), mcpErrorStatus(err))
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]string{"status": "ok"})
 
 	default:
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -762,27 +783,29 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		var cfg mcp.ConnectionConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			writeJSONError(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 		cfg.ID = id
 		if s.mcpManager == nil {
-			http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+			writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 			return
 		}
 		if err := s.mcpManager.Update(cfg); err != nil {
-			sanitizedError(w, "mcp update", err, http.StatusInternalServerError)
+			logutil.Error("api: mcp update", zap.Error(err))
+			writeJSONError(w, err.Error(), mcpErrorStatus(err))
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
 
 	case http.MethodDelete:
 		if s.mcpManager == nil {
-			http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+			writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 			return
 		}
 		if err := s.mcpManager.Remove(id); err != nil {
-			sanitizedError(w, "mcp remove", err, http.StatusInternalServerError)
+			logutil.Error("api: mcp remove", zap.Error(err))
+			writeJSONError(w, err.Error(), mcpErrorStatus(err))
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -792,7 +815,7 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 		s.handleMCPTest(w, r)
 
 	default:
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -800,16 +823,16 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 	var cfg mcp.ConnectionConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	if s.mcpManager == nil {
-		http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
 	if err := s.mcpManager.Test(cfg); err != nil {
 		logutil.Error("api: mcp test", zap.Error(err))
-		writeJSON(w, map[string]string{"status": "failed", "error": "connection test failed"})
+		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})

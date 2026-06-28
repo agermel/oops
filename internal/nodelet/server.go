@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -81,6 +82,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 	host, err := s.provider.Host(r)
 	if err != nil {
+		log.Printf("ERROR host: %v", err)
 		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
@@ -91,6 +93,7 @@ func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	containers, err := s.provider.Containers(r)
 	if err != nil {
+		log.Printf("ERROR containers: %v", err)
 		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
@@ -109,6 +112,7 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	case "inspect":
 		detail, err := s.provider.ContainerInspect(r, containerID)
 		if err != nil {
+			log.Printf("ERROR inspect %s: %v", containerID, err)
 			writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
@@ -116,6 +120,7 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	case "logs":
 		logs, err := s.provider.ContainerLogs(r, containerID)
 		if err != nil {
+			log.Printf("ERROR logs %s: %v", containerID, err)
 			writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
@@ -131,6 +136,7 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Request, containerID string) {
 	logs, err := s.provider.ContainerLogsStream(r, containerID)
 	if err != nil {
+		log.Printf("ERROR logs/stream %s: %v", containerID, err)
 		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}

@@ -62,13 +62,15 @@ type ToolInfo struct {
 
 // ConnectionConfig defines a single MCP server connection managed by the panel.
 type ConnectionConfig struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`    // mysql, redis, etc.
-	Command string   `json:"command"` // path to community MCP server binary
-	Args    []string `json:"args"`    // e.g. ["--read-only"]
-	Env     []string `json:"env"`     // e.g. ["MYSQL_DSN=user:pass@tcp(host:3306)/db"]
-	Enabled bool     `json:"enabled"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`    // mysql, redis, etc.
+	Command     string   `json:"command"` // path to community MCP server binary
+	Args        []string `json:"args"`    // e.g. ["--read-only"]
+	Env         []string `json:"env"`     // e.g. ["MYSQL_DSN=user:pass@tcp(host:3306)/db"]
+	Enabled     bool     `json:"enabled"`
+	ContainerID string   `json:"containerId,omitempty"` // bound container, if any
+	NodeletID   string   `json:"nodeletId,omitempty"`   // bound nodelet, if any
 }
 
 // ConnectionWithStatus is the public-facing view of a connection.
@@ -117,17 +119,24 @@ func NewManager(configPath string, onChange func([]tool.BaseTool)) (*Manager, er
 		m.config = ManagerConfig{Connections: []ConnectionConfig{}}
 	}
 
-	// Start all enabled connections on startup.
+	// Start all enabled connections asynchronously on startup.
+	// 每个连接独立 goroutine，互不阻塞；启动完成后通过 notifyChange 推送工具变更。
 	m.mu.Lock()
 	for i := range m.config.Connections {
 		cfg := m.config.Connections[i]
 		if !cfg.Enabled {
 			continue
 		}
-		if err := m.startLocked(cfg); err != nil {
-			logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
-			m.errors[cfg.ID] = err.Error()
-		}
+		go func(cfg ConnectionConfig) {
+			m.mu.Lock()
+			err := m.startLocked(cfg)
+			if err != nil {
+				logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
+				m.errors[cfg.ID] = err.Error()
+			}
+			m.mu.Unlock()
+			m.notifyChange()
+		}(cfg)
 	}
 	m.mu.Unlock()
 
@@ -157,6 +166,30 @@ func (m *Manager) List() []ConnectionWithStatus {
 	return result
 }
 
+// FindByContainer returns the connection bound to a specific container, or nil if none exists.
+func (m *Manager) FindByContainer(nodeletID, containerID string) *ConnectionWithStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.config.Connections {
+		cfg := &m.config.Connections[i]
+		if cfg.ContainerID == containerID && cfg.NodeletID == nodeletID {
+			item := ConnectionWithStatus{ConnectionConfig: *cfg}
+			if proc, ok := m.processes[cfg.ID]; ok {
+				item.Status = "running"
+				item.ToolCount = len(proc.tools)
+			} else if cfg.Enabled {
+				item.Status = "error"
+				item.Error = m.errors[cfg.ID]
+			} else {
+				item.Status = "stopped"
+			}
+			return &item
+		}
+	}
+	return nil
+}
+
 // GetConnectionTools 返回每个运行中连接的工具列表，按 connectionID 分组。
 // 仅包含当前正在运行的连接；已停止或异常的连接不会出现在结果中。
 func (m *Manager) GetConnectionTools() map[string][]ToolInfo {
@@ -181,50 +214,70 @@ func (m *Manager) GetConnectionTools() map[string][]ToolInfo {
 	return result
 }
 
-// Add persists a new connection and starts it if enabled.
+// Add persists a new connection and starts it asynchronously if enabled.
 func (m *Manager) Add(cfg ConnectionConfig) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if cfg.ID == "" {
+		m.mu.Unlock()
 		return fmt.Errorf("id is required")
 	}
 	if cfg.Command != "" {
 		if err := validateCommand(cfg.Command); err != nil {
+			m.mu.Unlock()
 			return err
 		}
 	}
+	// Per-container uniqueness: one container can have at most one MCP connection.
+	if cfg.ContainerID != "" && cfg.NodeletID != "" {
+		for _, existing := range m.config.Connections {
+			if existing.ContainerID == cfg.ContainerID && existing.NodeletID == cfg.NodeletID {
+				m.mu.Unlock()
+				return fmt.Errorf("container %q on nodelet %q already has connection %q", cfg.ContainerID, cfg.NodeletID, existing.ID)
+			}
+		}
+	}
+	// Global ID uniqueness (safety net).
 	for _, existing := range m.config.Connections {
 		if existing.ID == cfg.ID {
+			m.mu.Unlock()
 			return fmt.Errorf("connection %q already exists", cfg.ID)
 		}
 	}
 
 	m.config.Connections = append(m.config.Connections, cfg)
 	if err := m.saveLocked(); err != nil {
+		m.mu.Unlock()
 		return fmt.Errorf("save: %w", err)
 	}
 
+	// 先持久化并返回，后台异步启动子进程。
 	if cfg.Enabled {
-		if err := m.startLocked(cfg); err != nil {
-			logutil.Error("mcp: add start", zap.String("id", cfg.ID), zap.Error(err))
-			m.errors[cfg.ID] = err.Error()
-			// Persisted successfully, start failure is non-fatal.
-		}
+		go func() {
+			m.mu.Lock()
+			err := m.startLocked(cfg)
+			if err != nil {
+				logutil.Error("mcp: add start", zap.String("id", cfg.ID), zap.Error(err))
+				m.errors[cfg.ID] = err.Error()
+			}
+			m.mu.Unlock()
+			m.notifyChange()
+		}()
 	}
 
 	m.notifyChangeLocked()
+	m.mu.Unlock()
 	return nil
 }
 
 // Update persists changes to an existing connection, stops the old subprocess,
-// and starts a new one if enabled.
+// and starts a new one asynchronously if enabled.
 func (m *Manager) Update(cfg ConnectionConfig) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if cfg.Command != "" {
 		if err := validateCommand(cfg.Command); err != nil {
+			m.mu.Unlock()
 			return err
 		}
 	}
@@ -237,25 +290,49 @@ func (m *Manager) Update(cfg ConnectionConfig) error {
 		}
 	}
 	if idx < 0 {
+		m.mu.Unlock()
 		return fmt.Errorf("connection %q not found", cfg.ID)
 	}
 
+	// Per-container uniqueness: don't allow stealing another container's binding.
+	if cfg.ContainerID != "" && cfg.NodeletID != "" {
+		for i, existing := range m.config.Connections {
+			if i == idx {
+				continue
+			}
+			if existing.ContainerID == cfg.ContainerID && existing.NodeletID == cfg.NodeletID {
+				m.mu.Unlock()
+				return fmt.Errorf("container %q on nodelet %q already has connection %q", cfg.ContainerID, cfg.NodeletID, existing.ID)
+			}
+		}
+	}
+
+	// 同步停止旧进程。
 	m.stopLocked(cfg.ID)
 	delete(m.errors, cfg.ID)
 
 	m.config.Connections[idx] = cfg
 	if err := m.saveLocked(); err != nil {
+		m.mu.Unlock()
 		return fmt.Errorf("save: %w", err)
 	}
 
+	// 先持久化并返回，后台异步启动新进程。
 	if cfg.Enabled {
-		if err := m.startLocked(cfg); err != nil {
-			logutil.Error("mcp: update start", zap.String("id", cfg.ID), zap.Error(err))
-			m.errors[cfg.ID] = err.Error()
-		}
+		go func() {
+			m.mu.Lock()
+			err := m.startLocked(cfg)
+			if err != nil {
+				logutil.Error("mcp: update start", zap.String("id", cfg.ID), zap.Error(err))
+				m.errors[cfg.ID] = err.Error()
+			}
+			m.mu.Unlock()
+			m.notifyChange()
+		}()
 	}
 
 	m.notifyChangeLocked()
+	m.mu.Unlock()
 	return nil
 }
 
