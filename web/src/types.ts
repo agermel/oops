@@ -10,6 +10,7 @@ import {
   Globe,
   Layers,
   Terminal,
+  Cog,
 } from "lucide-react";
 
 // ---- 项目 ----
@@ -192,6 +193,7 @@ export const navigation = [
 export const projectNavigation = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
   { id: "mcp", label: "MCP 连接", icon: Wrench },
+  { id: "tools", label: "工具管理", icon: Cog },
   { id: "chat", label: "助手", icon: Sparkles },
   { id: "console", label: "控制台", icon: Terminal },
 ] as const;

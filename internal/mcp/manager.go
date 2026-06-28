@@ -54,6 +54,12 @@ func validateCommand(cmd string) error {
 	return fmt.Errorf("command %q is not in the allowed list", cmd)
 }
 
+// ToolInfo 是一个工具的基本信息，供前端工具管理面板使用。
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 // ConnectionConfig defines a single MCP server connection managed by the panel.
 type ConnectionConfig struct {
 	ID      string   `json:"id"`
@@ -147,6 +153,30 @@ func (m *Manager) List() []ConnectionWithStatus {
 			item.Status = "stopped"
 		}
 		result[i] = item
+	}
+	return result
+}
+
+// GetConnectionTools 返回每个运行中连接的工具列表，按 connectionID 分组。
+// 仅包含当前正在运行的连接；已停止或异常的连接不会出现在结果中。
+func (m *Manager) GetConnectionTools() map[string][]ToolInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make(map[string][]ToolInfo, len(m.processes))
+	for id, proc := range m.processes {
+		tools := make([]ToolInfo, 0, len(proc.tools))
+		for _, bt := range proc.tools {
+			info, err := bt.Info(context.Background())
+			if err != nil {
+				continue
+			}
+			tools = append(tools, ToolInfo{
+				Name:        info.Name,
+				Description: info.Desc,
+			})
+		}
+		result[id] = tools
 	}
 	return result
 }

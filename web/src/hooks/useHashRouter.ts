@@ -8,7 +8,8 @@ export type Route =
   | { view: "project-overview"; projectId: string; serverId?: string; containerId?: string }
   | { view: "project-mcp"; projectId: string }
   | { view: "project-chat"; projectId: string }
-  | { view: "project-console"; projectId: string };
+  | { view: "project-console"; projectId: string }
+  | { view: "project-tools"; projectId: string };
 
 // ---- 解析 & 序列化 ----
 
@@ -53,6 +54,11 @@ export function parseHashRoute(hash: string): Route {
     return { view: "project-console", projectId };
   }
 
+  // #/projects/:pid/tools
+  if (segs[2] === "tools") {
+    return { view: "project-tools", projectId };
+  }
+
   // #/projects/:pid/servers/:nid[/containers/:cid]
   if (segs[2] === "servers" && segs.length >= 4) {
     const serverId = segs[3];
@@ -86,6 +92,8 @@ export function routeToHash(route: Route): string {
       return `#/projects/${encodeURIComponent(route.projectId)}/chat`;
     case "project-console":
       return `#/projects/${encodeURIComponent(route.projectId)}/console`;
+    case "project-tools":
+      return `#/projects/${encodeURIComponent(route.projectId)}/tools`;
   }
 }
 

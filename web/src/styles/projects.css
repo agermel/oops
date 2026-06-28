@@ -935,7 +935,32 @@
 .mcp-table-wrap table {
   width: 100%;
   min-width: 800px;
+  table-layout: fixed;
   border-collapse: collapse;
+}
+
+.mcp-col-name {
+  width: 18%;
+}
+
+.mcp-col-type {
+  width: 92px;
+}
+
+.mcp-col-status {
+  width: 30%;
+}
+
+.mcp-col-count {
+  width: 72px;
+}
+
+.mcp-col-command {
+  width: 190px;
+}
+
+.mcp-col-actions {
+  width: 96px;
 }
 
 .mcp-table-wrap th,
@@ -945,6 +970,11 @@
   text-align: left;
   vertical-align: middle;
   font-size: 13px;
+}
+
+.mcp-table-wrap th:nth-child(4),
+.mcp-table-wrap td:nth-child(4) {
+  text-align: center;
 }
 
 .mcp-table-wrap th {
@@ -963,6 +993,7 @@
 .mcp-name-cell {
   color: var(--link);
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .mcp-table-empty {
@@ -971,9 +1002,20 @@
   color: var(--muted);
 }
 
+.mcp-actions-cell {
+  padding-right: 10px;
+}
+
 .mcp-actions {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
+}
+
+.mcp-table-wrap td.mono {
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 /* ---- MCP 状态 pill ---- */
@@ -1027,4 +1069,132 @@
   color: #bd271e;
   background: #fff4f2;
   border: 1px solid #ffccc7;
+}
+
+/* ---- 工具管理 ---- */
+
+.tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.tools-group-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tools-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 15px;
+  background: #fff;
+  transition: background 0.15s;
+}
+
+.tool-row + .tool-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.tool-row.tool-disabled {
+  background: #fafbfc;
+}
+
+.tool-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tool-name {
+  font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tool-disabled .tool-name {
+  color: var(--muted);
+}
+
+.tool-desc {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Toggle Switch ---- */
+
+.tool-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.toggle-track {
+  display: block;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: #d3dae6;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.toggle-input:checked + .toggle-track {
+  background: var(--primary);
+}
+
+.toggle-input:focus-visible + .toggle-track {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.toggle-track.toggle-busy {
+  opacity: 0.6;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition: transform 0.2s;
+}
+
+.toggle-input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(18px);
 }

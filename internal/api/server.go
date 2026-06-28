@@ -168,6 +168,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat", wrap(s.handleChat))
 	mux.HandleFunc("/api/mcp/connections", wrap(s.handleMCPConnections))
 	mux.HandleFunc("/api/mcp/connections/", wrap(s.handleMCPConnection))
+	mux.HandleFunc("/api/tools", wrap(s.handleTools))
+	mux.HandleFunc("/api/tools/", wrap(s.handleToolByID))
 
 	// 实时控制台 SSE。
 	mux.HandleFunc("/api/console/stream", securityHeaders(authorize(console.Default().SSEHandler)))
@@ -556,6 +558,113 @@ func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
 		zap.Int("native", len(nativeTools)),
 		zap.Int("mcp", len(mcpBaseTools)),
 	)
+}
+
+// toolItem 是 GET /api/tools 返回的单个工具条目。
+type toolItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+}
+
+// toolsResponse 是 GET /api/tools 的响应体。
+type toolsResponse struct {
+	Native []toolItem            `json:"native"`
+	MCP    map[string][]toolItem `json:"mcp"`
+}
+
+// handleTools 处理 GET /api/tools — 返回所有工具（内置 + MCP）及其启用状态。
+func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	resp := toolsResponse{
+		Native: []toolItem{},
+		MCP:    make(map[string][]toolItem),
+	}
+
+	// 获取禁用状态。
+	disabled := make(map[string]bool)
+	if s.llmClient != nil {
+		disabled = s.llmClient.DisabledTools()
+	}
+
+	// 原生工具。
+	nativeTools, err := llm.NewTools(s)
+	if err == nil {
+		for _, t := range nativeTools {
+			info, err := t.Info(r.Context())
+			if err != nil {
+				continue
+			}
+			resp.Native = append(resp.Native, toolItem{
+				Name:        info.Name,
+				Description: info.Desc,
+				Enabled:     !disabled[info.Name],
+			})
+		}
+	}
+
+	// MCP 工具（按连接分组）。
+	if s.mcpManager != nil {
+		// 构建连接 ID → 名称的映射。
+		connNames := make(map[string]string)
+		for _, conn := range s.mcpManager.List() {
+			connNames[conn.ID] = conn.Name
+		}
+
+		for connID, mcpTools := range s.mcpManager.GetConnectionTools() {
+			name := connNames[connID]
+			if name == "" {
+				name = connID
+			}
+			items := make([]toolItem, 0, len(mcpTools))
+			for _, mt := range mcpTools {
+				items = append(items, toolItem{
+					Name:        mt.Name,
+					Description: mt.Description,
+					Enabled:     !disabled[mt.Name],
+				})
+			}
+			if len(items) > 0 {
+				resp.MCP[name] = items
+			}
+		}
+	}
+
+	writeJSON(w, resp)
+}
+
+// handleToolByID 处理 PUT /api/tools/{name} — 切换单个工具的启用状态。
+func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/tools/")
+	if name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	if r.Method != http.MethodPut {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.llmClient == nil {
+		http.Error(w, `{"error":"llm not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+
+	s.llmClient.SetToolEnabled(name, req.Enabled)
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // handleProjectsRouter 根据 URL 路径将请求分发到对应的项目子资源 handler。

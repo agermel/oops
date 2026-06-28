@@ -12,9 +12,11 @@ import (
 
 // Client 封装 LLM 模型和工具，提供统一的提问接口。
 type Client struct {
-	model   model.ToolCallingChatModel
-	toolsMu sync.RWMutex
-	tools   []tool.InvokableTool
+	model    model.ToolCallingChatModel
+	toolsMu  sync.RWMutex
+	allTools []tool.InvokableTool // 原始全量工具列表（未过滤）
+	tools    []tool.InvokableTool // 当前生效的工具列表（已过滤禁用项）
+	disabled map[string]bool      // toolName → true 表示已禁用
 }
 
 // NewClient 创建 LLM 客户端。tools 由调用方组装（原生工具 + MCP 工具等）。
@@ -25,17 +27,62 @@ func NewClient(ctx context.Context, cfg config.LLMConfig, tools []tool.Invokable
 	}
 
 	return &Client{
-		model: chatModel,
-		tools: tools,
+		model:    chatModel,
+		allTools: tools,
+		tools:    tools,
+		disabled: make(map[string]bool),
 	}, nil
 }
 
-// UpdateTools 运行时替换工具列表（MCP 连接变更时调用）。
-// 线程安全，不影响正在执行的 Ask。
+// UpdateTools 运行时替换全量工具列表（MCP 连接变更时调用）。
+// 会重新应用当前的禁用列表。
 func (c *Client) UpdateTools(tools []tool.InvokableTool) {
 	c.toolsMu.Lock()
 	defer c.toolsMu.Unlock()
-	c.tools = tools
+	c.allTools = tools
+	c.rebuildLocked()
+}
+
+// SetToolEnabled 设置单个工具的启用状态。enabled=false 表示禁用。
+// 线程安全，设置后立即重建生效工具列表。
+func (c *Client) SetToolEnabled(name string, enabled bool) {
+	c.toolsMu.Lock()
+	defer c.toolsMu.Unlock()
+	if enabled {
+		delete(c.disabled, name)
+	} else {
+		c.disabled[name] = true
+	}
+	c.rebuildLocked()
+}
+
+// DisabledTools 返回当前被禁用的工具名集合（浅拷贝）。
+func (c *Client) DisabledTools() map[string]bool {
+	c.toolsMu.RLock()
+	defer c.toolsMu.RUnlock()
+	out := make(map[string]bool, len(c.disabled))
+	for k, v := range c.disabled {
+		out[k] = v
+	}
+	return out
+}
+
+// rebuildLocked 根据 disabled 过滤 allTools 并赋值给 c.tools。
+// 调用方必须持有 c.toolsMu。
+func (c *Client) rebuildLocked() {
+	if len(c.disabled) == 0 {
+		c.tools = c.allTools
+		return
+	}
+	filtered := make([]tool.InvokableTool, 0, len(c.allTools))
+	for _, t := range c.allTools {
+		info, err := t.Info(context.Background())
+		if err != nil || c.disabled[info.Name] {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	c.tools = filtered
 }
 
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。

@@ -1,8 +1,12 @@
 /* Chat Panel */
 
+.chat-workspace {
+  padding: 0;
+}
+
 .chat-panel {
-  margin-top: 28px;
-  border: 1px solid var(--border);
+  height: 100%;
+  border: 0;
   border-radius: 4px;
   background: #fff;
   overflow: hidden;

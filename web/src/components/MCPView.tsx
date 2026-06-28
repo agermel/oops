@@ -332,6 +332,14 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
 
       <div className="mcp-table-wrap">
         <table>
+          <colgroup>
+            <col className="mcp-col-name" />
+            <col className="mcp-col-type" />
+            <col className="mcp-col-status" />
+            <col className="mcp-col-count" />
+            <col className="mcp-col-command" />
+            <col className="mcp-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>名称</th>
@@ -364,13 +372,15 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
                   </td>
                   <td>{item.toolCount}</td>
                   <td className="mono">{item.command}</td>
-                  <td className="mcp-actions">
-                    <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
-                      <Edit3 size={14} />
-                    </button>
-                    <button className="ghost-button small danger" aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
-                      <Trash2 size={14} />
-                    </button>
+                  <td className="mcp-actions-cell">
+                    <div className="mcp-actions">
+                      <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
+                        <Edit3 size={14} />
+                      </button>
+                      <button className="ghost-button small danger" aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))

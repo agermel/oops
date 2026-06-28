@@ -19,6 +19,7 @@ import { ProjectsView } from "./components/ProjectsView";
 import { ProjectDetailView } from "./components/ProjectDetailView";
 import { ChatView } from "./components/ChatView";
 import { MCPView } from "./components/MCPView";
+import { ToolsView } from "./components/ToolsView";
 import { ConsolePanel } from "./components/ConsolePanel";
 import "./styles.css";
 
@@ -36,6 +37,7 @@ export function App() {
     route.view === "project-mcp" ? "mcp" :
     route.view === "project-chat" ? "chat" :
     route.view === "project-console" ? "console" :
+    route.view === "project-tools" ? "tools" :
     route.view === "project-overview" ? "overview" :
     "overview";
   const urlServerId = route.view === "project-overview" ? route.serverId : undefined;
@@ -327,6 +329,7 @@ export function App() {
     if (section === "mcp") navigate({ view: "project-mcp", projectId: selectedProjectID });
     else if (section === "chat") navigate({ view: "project-chat", projectId: selectedProjectID });
     else if (section === "console") navigate({ view: "project-console", projectId: selectedProjectID });
+    else if (section === "tools") navigate({ view: "project-tools", projectId: selectedProjectID });
     else navigate({ view: "project-overview", projectId: selectedProjectID });
   }
 
@@ -498,6 +501,7 @@ export function App() {
     const parts: string[] = [];
     if (selectedProject) parts.push(selectedProject.name);
     if (selectedProject && projectSection === "mcp") parts.push("MCP 管理");
+    if (selectedProject && projectSection === "tools") parts.push("工具管理");
     if (selectedProject && projectSection === "chat") parts.push("助手");
     if (selectedProject && projectSection === "console") parts.push("控制台");
     document.title = parts.length > 0 ? `${parts.join(" · ")} — Oops` : "Oops";
@@ -599,8 +603,20 @@ export function App() {
           </section>
         )}
 
-        {activeNav === "projects" && selectedProject && projectSection === "chat" && (
+        {activeNav === "projects" && selectedProject && projectSection === "tools" && (
           <section className="workspace-card">
+            <div className="workspace-head">
+              <div>
+                <h1>工具管理</h1>
+                <p>管理 LLM Agent 可用的工具。关闭某个工具后，Agent 将无法调用它。</p>
+              </div>
+            </div>
+            <ToolsView />
+          </section>
+        )}
+
+        {activeNav === "projects" && selectedProject && projectSection === "chat" && (
+          <section className="workspace-card chat-workspace">
             <ChatView
               chatExchanges={chatExchanges}
               currentSteps={currentSteps}
