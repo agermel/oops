@@ -16,7 +16,10 @@ import (
 	"oops/internal/connection"
 	"oops/internal/connection/checker"
 	"oops/internal/llm"
+	"oops/internal/mcp"
 	"oops/internal/nodelet"
+
+	"github.com/cloudwego/eino/components/tool"
 )
 
 // NodeletClient 是中心端访问 oops-nodelet 的最小接口。
@@ -51,6 +54,7 @@ type Server struct {
 	nodeletClient NodeletClient
 	registry      *connection.Registry
 	llmClient     *llm.Client
+	mcpManager    *mcp.Manager
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -70,7 +74,7 @@ type nodeletItem struct {
 
 // NewFromConfig 使用配置创建中心端 API 服务。
 func NewFromConfig(cfg config.Config) *Server {
-	return New(Options{
+	s := New(Options{
 		Connections:   cfg.Connections(),
 		Nodelets:      cfg.Nodelets,
 		NodeletClient: nodelet.NewClient(nil),
@@ -78,6 +82,18 @@ func NewFromConfig(cfg config.Config) *Server {
 		LLMEnabled:    cfg.LLM.Enabled,
 		LLMConfig:     cfg.LLM,
 	})
+
+	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
+	mgr, err := mcp.NewManager("config/mcp_connections.json", func(mcpBaseTools []tool.BaseTool) {
+		s.onMCPToolsChanged(mcpBaseTools)
+	})
+	if err != nil {
+		log.Printf("mcp: manager: %v", err)
+	} else {
+		s.mcpManager = mgr
+	}
+
+	return s
 }
 
 // New 创建中心端 API 服务。
@@ -100,7 +116,13 @@ func New(options Options) *Server {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		client, err := llm.NewClient(ctx, options.LLMConfig, s)
+		nativeTools, err := llm.NewTools(s)
+		if err != nil {
+			log.Printf("llm: create tools: %v", err)
+			return s
+		}
+
+		client, err := llm.NewClient(ctx, options.LLMConfig, nativeTools)
 		if err != nil {
 			// LLM 不可用时不影响其他功能，仅日志输出。
 			log.Printf("llm: create client: %v", err)
@@ -125,6 +147,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/nodelets", s.handleNodelets)
 	mux.HandleFunc("/api/nodelets/", s.handleNodeletResource)
 	mux.HandleFunc("/api/chat", s.handleChat)
+	mux.HandleFunc("/api/mcp/connections", s.handleMCPConnections)
+	mux.HandleFunc("/api/mcp/connections/", s.handleMCPConnection)
 }
 
 // handleConnectionStatus 执行所有连接检查并返回 JSON。
@@ -466,6 +490,127 @@ func (s *Server) CheckConnections(ctx context.Context) ([]llm.ConnectionStatus, 
 	}
 	wg.Wait()
 	return results, nil
+}
+
+// onMCPToolsChanged 是 MCP Manager 的工具变更回调。
+// 合并原生工具和 MCP 工具后热更新 LLM Client。
+func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
+	if s.llmClient == nil {
+		return
+	}
+
+	nativeTools, err := llm.NewTools(s)
+	if err != nil {
+		log.Printf("mcp: create native tools: %v", err)
+		return
+	}
+
+	allTools := make([]tool.InvokableTool, 0, len(nativeTools)+len(mcpBaseTools))
+	allTools = append(allTools, nativeTools...)
+	for _, bt := range mcpBaseTools {
+		if it, ok := bt.(tool.InvokableTool); ok {
+			allTools = append(allTools, it)
+		}
+	}
+
+	s.llmClient.UpdateTools(allTools)
+	log.Printf("mcp: tools updated, %d total (%d native + %d mcp)", len(allTools), len(nativeTools), len(mcpBaseTools))
+}
+
+// handleMCPConnections handles GET (list) and POST (add) on /api/mcp/connections.
+func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		if s.mcpManager == nil {
+			writeJSON(w, []mcp.ConnectionWithStatus{})
+			return
+		}
+		writeJSON(w, s.mcpManager.List())
+
+	case http.MethodPost:
+		var cfg mcp.ConnectionConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			return
+		}
+		if s.mcpManager == nil {
+			http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.mcpManager.Add(cfg); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+// handleMCPConnection handles PUT (update), DELETE (remove), and POST test on /api/mcp/connections/{id}.
+func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/mcp/connections/")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var cfg mcp.ConnectionConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			return
+		}
+		cfg.ID = id
+		if s.mcpManager == nil {
+			http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.mcpManager.Update(cfg); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	case http.MethodDelete:
+		if s.mcpManager == nil {
+			http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.mcpManager.Remove(id); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	case http.MethodPost:
+		// POST test — /api/mcp/connections/{id}/test ended up here
+		s.handleMCPTest(w, r)
+
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+// handleMCPTest tests a provisional MCP connection without saving.
+func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
+	var cfg mcp.ConnectionConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	if s.mcpManager == nil {
+		http.Error(w, `{"error":"mcp manager not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.mcpManager.Test(cfg); err != nil {
+		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // writeJSON 写入 JSON 响应。

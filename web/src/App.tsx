@@ -2,7 +2,7 @@ import React from "react";
 import { flushSync } from "react-dom";
 import debounce from "lodash.debounce";
 import { RefreshCw, Search, ChevronDown } from "lucide-react";
-import type { StatusItem, NodeletItem, Container, LogEntry, StepEvent, ChatExchange } from "./types";
+import type { StatusItem, NodeletItem, Container, LogEntry, StepEvent, ChatExchange, MCPConnectionStatus } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
@@ -10,10 +10,15 @@ import { AppBar } from "./components/AppBar";
 import { ConnectionsView } from "./components/ConnectionsView";
 import { FleetView } from "./components/FleetView";
 import { ChatView } from "./components/ChatView";
+import { MCPView } from "./components/MCPView";
 import "./styles.css";
 
 export function App() {
   const [activeNav, setActiveNav] = React.useState("connections");
+  const [connectionsSubTab, setConnectionsSubTab] = React.useState<"status" | "mcp">("status");
+  const [mcpConnections, setMCPConnections] = React.useState<MCPConnectionStatus[]>([]);
+  const [mcpLoading, setMCPLoading] = React.useState(false);
+  const [mcpError, setMCPError] = React.useState("");
   const [items, setItems] = React.useState<StatusItem[]>([]);
   const [nodelets, setNodelets] = React.useState<NodeletItem[]>([]);
   const [containers, setContainers] = React.useState<Container[]>([]);
@@ -164,6 +169,22 @@ export function App() {
     };
   }
 
+  async function fetchMCPConnections() {
+    setMCPLoading(true);
+    setMCPError("");
+    try {
+      const response = await fetch("/api/mcp/connections");
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      setMCPConnections(await response.json());
+    } catch (err) {
+      setMCPError(err instanceof Error ? err.message : "MCP 连接列表读取失败");
+    } finally {
+      setMCPLoading(false);
+    }
+  }
+
   async function refresh() {
     await Promise.all([refreshConnections(), refreshNodelets()]);
   }
@@ -268,6 +289,22 @@ export function App() {
               <h1>连接面板</h1>
               <p>集中查看组件可达性、机器列表、容器列表和容器日志。</p>
             </div>
+            {activeNav === "connections" && (
+              <div className="sub-tabs">
+                <button
+                  className={connectionsSubTab === "status" ? "active" : ""}
+                  onClick={() => setConnectionsSubTab("status")}
+                >
+                  连接状态
+                </button>
+                <button
+                  className={connectionsSubTab === "mcp" ? "active" : ""}
+                  onClick={() => { setConnectionsSubTab("mcp"); fetchMCPConnections(); }}
+                >
+                  MCP
+                </button>
+              </div>
+            )}
             <button className="primary-button" onClick={refresh} disabled={loading}>
               <RefreshCw size={17} className={loading ? "spin" : ""} />
               <span>刷新状态</span>
@@ -285,13 +322,22 @@ export function App() {
             </button>
           </div>
 
-          {activeNav === "connections" && (
+          {activeNav === "connections" && connectionsSubTab === "status" && (
             <ConnectionsView
               items={items}
               loading={loading}
               error={error}
               counters={counters}
               onRefresh={refresh}
+            />
+          )}
+
+          {activeNav === "connections" && connectionsSubTab === "mcp" && (
+            <MCPView
+              connections={mcpConnections}
+              loading={mcpLoading}
+              error={mcpError}
+              onRefresh={fetchMCPConnections}
             />
           )}
 

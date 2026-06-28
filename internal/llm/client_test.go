@@ -19,7 +19,12 @@ func TestClientNew(t *testing.T) {
 		APIKey:  "test-key",
 	}
 
-	client, err := NewClient(context.Background(), cfg, ops)
+	tools, err := NewTools(ops)
+	if err != nil {
+		t.Fatalf("NewTools() error = %v", err)
+	}
+
+	client, err := NewClient(context.Background(), cfg, tools)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
@@ -53,7 +58,12 @@ func TestClientAskSkipped(t *testing.T) {
 		APIKey:  os.Getenv("OOPS_LLM_TEST_API_KEY"),
 	}
 
-	client, err := NewClient(context.Background(), cfg, ops)
+	tools, err := NewTools(ops)
+	if err != nil {
+		t.Fatalf("NewTools() error = %v", err)
+	}
+
+	client, err := NewClient(context.Background(), cfg, tools)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}

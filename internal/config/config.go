@@ -32,6 +32,7 @@ type Config struct {
 	Kafka            KafkaConfig             `mapstructure:"kafka"`
 	OTel             OTelConfig              `mapstructure:"otel"`
 	LLM              LLMConfig               `mapstructure:"llm"`
+	MCP              MCPConfig               `mapstructure:"mcp"`
 }
 
 // NodeletConfig 保存一台 oops-nodelet 的访问地址。
@@ -78,6 +79,28 @@ type LLMConfig struct {
 	Model   string `mapstructure:"model"`
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
+}
+
+// MCPConfig 保存一个 MCP Server 的连接配置。
+//
+// 社区 MCP Server（如 askdba/mysql-mcp-server）通常用 stdio 模式：
+//
+//	transport: "stdio"
+//	command: "mysql-mcp-server"
+//	args: ["--read-only"]
+//	env: ["MYSQL_DSN=user:pass@tcp(...)"]
+//
+// 跨网络部署时用 sse 模式：
+//
+//	transport: "sse"
+//	url: "http://10.0.0.1:19900/sse"
+type MCPConfig struct {
+	Enabled   bool     `mapstructure:"enabled"`
+	Transport string   `mapstructure:"transport"` // "stdio" | "sse"
+	Command   string   `mapstructure:"command"`   // stdio: 二进制路径
+	Args      []string `mapstructure:"args"`      // stdio: 启动参数
+	Env       []string `mapstructure:"env"`       // stdio: 环境变量
+	URL       string   `mapstructure:"url"`       // sse: 端点地址
 }
 
 // Load 使用 Viper 读取指定 YAML 配置文件。

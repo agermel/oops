@@ -47,3 +47,13 @@ llm:
   model: "gpt-4o-mini"
   base_url: "https://api.openai.com/v1"
   api_key: "${OOPS_LLM_API_KEY}"
+
+mcp:
+  enabled: false
+  # stdio 方式（社区 MCP Server 主流方式，二进制需在 oops 同机）
+  transport: "stdio"
+  command: "mysql-mcp-server"
+  args: ["--read-only"]
+  # sse 方式（跨网络部署，社区 MCP Server 需支持 SSE transport）
+  # transport: "sse"
+  # url: "http://127.0.0.1:19900/sse"

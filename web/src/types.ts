@@ -110,6 +110,24 @@ export const statusIcon = {
   unknown: AlertTriangle,
 };
 
+// MCPConnectionConfig 对应后端 MCP 连接配置。
+export type MCPConnectionConfig = {
+  id: string;
+  name: string;
+  type: string;
+  command: string;
+  args: string[];
+  env: string[];
+  enabled: boolean;
+};
+
+// MCPConnectionStatus 是带运行时状态的 MCP 连接。
+export type MCPConnectionStatus = MCPConnectionConfig & {
+  status: "running" | "stopped" | "error";
+  error?: string;
+  toolCount: number;
+};
+
 export const MAX_LOGS = 2000;
 export const LOG_FLUSH_MS = 250;
 export const LOG_MAX_WAIT_MS = 1000;

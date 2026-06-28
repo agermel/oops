@@ -1,0 +1,328 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"sync"
+	"time"
+
+	"oops/internal/config"
+
+	"github.com/cloudwego/eino/components/tool"
+)
+
+// ConnectionConfig defines a single MCP server connection managed by the panel.
+type ConnectionConfig struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`    // mysql, redis, etc.
+	Command string   `json:"command"` // path to community MCP server binary
+	Args    []string `json:"args"`    // e.g. ["--read-only"]
+	Env     []string `json:"env"`     // e.g. ["MYSQL_DSN=user:pass@tcp(host:3306)/db"]
+	Enabled bool     `json:"enabled"`
+}
+
+// ConnectionWithStatus is the public-facing view of a connection.
+type ConnectionWithStatus struct {
+	ConnectionConfig
+	Status    string `json:"status"` // "running" | "stopped" | "error"
+	Error     string `json:"error,omitempty"`
+	ToolCount int    `json:"toolCount"`
+}
+
+// ManagerConfig is the top-level structure of mcp_connections.json.
+type ManagerConfig struct {
+	Connections []ConnectionConfig `json:"connections"`
+}
+
+type managedProcess struct {
+	cfg    ConnectionConfig
+	closer func()
+	tools  []tool.BaseTool
+}
+
+// Manager manages MCP server subprocess lifecycles and persists configuration.
+type Manager struct {
+	mu         sync.Mutex
+	configPath string
+	config     ManagerConfig
+	processes  map[string]*managedProcess // id → running process
+	errors     map[string]string          // id → last error
+	onChange   func([]tool.BaseTool)
+}
+
+// NewManager loads persisted connections, starts all enabled ones,
+// and calls onChange whenever the tool list changes.
+func NewManager(configPath string, onChange func([]tool.BaseTool)) (*Manager, error) {
+	m := &Manager{
+		configPath: configPath,
+		processes:  make(map[string]*managedProcess),
+		errors:     make(map[string]string),
+		onChange:   onChange,
+	}
+
+	if err := m.load(); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("load mcp config: %w", err)
+		}
+		m.config = ManagerConfig{Connections: []ConnectionConfig{}}
+	}
+
+	// Start all enabled connections on startup.
+	m.mu.Lock()
+	for i := range m.config.Connections {
+		cfg := m.config.Connections[i]
+		if !cfg.Enabled {
+			continue
+		}
+		if err := m.startLocked(cfg); err != nil {
+			log.Printf("mcp: start %q: %v", cfg.ID, err)
+			m.errors[cfg.ID] = err.Error()
+		}
+	}
+	m.mu.Unlock()
+
+	m.notifyChange()
+	return m, nil
+}
+
+// List returns all connections with their current runtime status.
+func (m *Manager) List() []ConnectionWithStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]ConnectionWithStatus, len(m.config.Connections))
+	for i, cfg := range m.config.Connections {
+		item := ConnectionWithStatus{ConnectionConfig: cfg}
+		if proc, ok := m.processes[cfg.ID]; ok {
+			item.Status = "running"
+			item.ToolCount = len(proc.tools)
+		} else if cfg.Enabled {
+			item.Status = "error"
+			item.Error = m.errors[cfg.ID]
+		} else {
+			item.Status = "stopped"
+		}
+		result[i] = item
+	}
+	return result
+}
+
+// Add persists a new connection and starts it if enabled.
+func (m *Manager) Add(cfg ConnectionConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if cfg.ID == "" {
+		return fmt.Errorf("id is required")
+	}
+	for _, existing := range m.config.Connections {
+		if existing.ID == cfg.ID {
+			return fmt.Errorf("connection %q already exists", cfg.ID)
+		}
+	}
+
+	m.config.Connections = append(m.config.Connections, cfg)
+	if err := m.saveLocked(); err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+
+	if cfg.Enabled {
+		if err := m.startLocked(cfg); err != nil {
+			m.errors[cfg.ID] = err.Error()
+			// Persisted successfully, start failure is non-fatal.
+		}
+	}
+
+	m.notifyChangeLocked()
+	return nil
+}
+
+// Update persists changes to an existing connection, stops the old subprocess,
+// and starts a new one if enabled.
+func (m *Manager) Update(cfg ConnectionConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	idx := -1
+	for i, existing := range m.config.Connections {
+		if existing.ID == cfg.ID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("connection %q not found", cfg.ID)
+	}
+
+	m.stopLocked(cfg.ID)
+	delete(m.errors, cfg.ID)
+
+	m.config.Connections[idx] = cfg
+	if err := m.saveLocked(); err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+
+	if cfg.Enabled {
+		if err := m.startLocked(cfg); err != nil {
+			m.errors[cfg.ID] = err.Error()
+		}
+	}
+
+	m.notifyChangeLocked()
+	return nil
+}
+
+// Remove deletes a connection and stops its subprocess.
+func (m *Manager) Remove(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	idx := -1
+	for i, existing := range m.config.Connections {
+		if existing.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("connection %q not found", id)
+	}
+
+	m.stopLocked(id)
+	delete(m.errors, id)
+
+	m.config.Connections = append(m.config.Connections[:idx], m.config.Connections[idx+1:]...)
+	if err := m.saveLocked(); err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+
+	m.notifyChangeLocked()
+	return nil
+}
+
+// Test attempts a temporary connection to verify the config works.
+// It does not persist or affect running processes.
+func (m *Manager) Test(cfg ConnectionConfig) error {
+	mcpCfg := config.MCPConfig{
+		Enabled:   true,
+		Transport: "stdio",
+		Command:   cfg.Command,
+		Args:      cfg.Args,
+		Env:       cfg.Env,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, closer, err := Connect(ctx, mcpCfg)
+	if err != nil {
+		return fmt.Errorf("test connect: %w", err)
+	}
+	closer()
+	return nil
+}
+
+// Close stops all running subprocesses.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id := range m.processes {
+		m.stopLocked(id)
+	}
+}
+
+// --- internal (caller must hold m.mu) ---
+
+func (m *Manager) load() error {
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &m.config)
+}
+
+func (m *Manager) saveLocked() error {
+	data, err := json.MarshalIndent(m.config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	if err := os.WriteFile(m.configPath, data, 0600); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) startLocked(cfg ConnectionConfig) error {
+	mcpCfg := config.MCPConfig{
+		Enabled:   true,
+		Transport: "stdio",
+		Command:   cfg.Command,
+		Args:      cfg.Args,
+		Env:       cfg.Env,
+	}
+
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+		tools, closer, err := Connect(ctx, mcpCfg)
+		cancel()
+
+		if err == nil {
+			m.processes[cfg.ID] = &managedProcess{
+				cfg:    cfg,
+				closer: closer,
+				tools:  tools,
+			}
+			log.Printf("mcp: %q started, %d tool(s) discovered", cfg.ID, len(tools))
+			return nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries {
+			log.Printf("mcp: %q attempt %d/%d failed: %v, retrying...", cfg.ID, attempt, maxRetries, err)
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	return fmt.Errorf("connect (%d attempts): %w", maxRetries, lastErr)
+}
+
+func (m *Manager) stopLocked(id string) {
+	proc, ok := m.processes[id]
+	if !ok {
+		return
+	}
+	proc.closer()
+	delete(m.processes, id)
+	log.Printf("mcp: %q stopped", id)
+}
+
+func (m *Manager) collectToolsLocked() []tool.BaseTool {
+	var all []tool.BaseTool
+	for _, proc := range m.processes {
+		all = append(all, proc.tools...)
+	}
+	return all
+}
+
+func (m *Manager) notifyChange() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifyChangeLocked()
+}
+
+func (m *Manager) notifyChangeLocked() {
+	if m.onChange == nil {
+		return
+	}
+	tools := m.collectToolsLocked()
+	m.onChange(tools)
+}
