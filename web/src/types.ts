@@ -1,21 +1,12 @@
 import AnsiConvertor from "ansi-to-html";
 import {
-  Gauge,
-  TerminalSquare,
   Sparkles,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
   FolderKanban,
-  Wrench,
   Search,
-  Trash2,
-  Plus,
   Server,
   Database,
   Globe,
   Layers,
-  FileText,
 } from "lucide-react";
 
 // ---- 项目 ----
@@ -63,17 +54,6 @@ export type ServerWithNodelet = {
 };
 
 // ---- 容器 ----
-
-export type Container = {
-  id: string;
-  name: string;
-  image: string;
-  state: string;
-  health?: string;
-  hostId: string;
-  created: string;
-  startedAt: string;
-};
 
 export type ContainerWithType = {
   id: string;
@@ -142,29 +122,6 @@ export type LogEntry = {
   level?: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "unknown";
 };
 
-// ---- 连接健康检查 (保留兼容) ----
-
-export type Connection = {
-  id: string;
-  name: string;
-  type: string;
-  address: string;
-};
-
-export type Result = {
-  connectionId: string;
-  status: "alive" | "dead" | "unknown";
-  message?: string;
-  latency: number;
-  checkedAt: string;
-};
-
-export type StatusItem = {
-  connection: Connection;
-  result: Result;
-  error?: string;
-};
-
 // ---- LLM 对话 ----
 
 export type StepEvent = {
@@ -189,28 +146,6 @@ export type NodeletItem = {
   host: Host;
   available: boolean;
   error?: string;
-};
-
-export const statusIcon = {
-  alive: CheckCircle2,
-  dead: XCircle,
-  unknown: AlertTriangle,
-};
-
-export type MCPConnectionConfig = {
-  id: string;
-  name: string;
-  type: string;
-  command: string;
-  args: string[];
-  env: string[];
-  enabled: boolean;
-};
-
-export type MCPConnectionStatus = MCPConnectionConfig & {
-  status: "running" | "stopped" | "error";
-  error?: string;
-  toolCount: number;
 };
 
 // ---- 导航 ----

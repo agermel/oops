@@ -20,6 +20,7 @@ import "./styles.css";
 
 export function App() {
   const [activeNav, setActiveNav] = React.useState("projects");
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
   // ---- 项目状态 ----
   const [projects, setProjects] = React.useState<Project[]>([]);
@@ -330,9 +331,14 @@ export function App() {
   const selectedProject = projects.find((p) => p.id === selectedProjectID);
 
   return (
-    <div className="shell">
+    <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Header activeNav={activeNav} onNavChange={setActiveNav} />
-      <SideRail activeNav={activeNav} onNavChange={setActiveNav} />
+      <SideRail
+        activeNav={activeNav}
+        collapsed={sidebarCollapsed}
+        onCollapsedChange={setSidebarCollapsed}
+        onNavChange={setActiveNav}
+      />
 
       <main className={`content ${activeNav === "projects" && selectedProject ? "project-detail-content" : ""}`}>
         {activeNav === "projects" && !selectedProject && (
