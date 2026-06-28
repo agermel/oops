@@ -2,6 +2,8 @@ import AnsiConvertor from "ansi-to-html";
 import {
   Sparkles,
   FolderKanban,
+  LayoutDashboard,
+  Wrench,
   Search,
   Server,
   Database,
@@ -103,6 +105,24 @@ export type MCPStatus = {
   error?: string;
 };
 
+// MCPConnectionConfig 对应后端 MCP 连接配置。
+export type MCPConnectionConfig = {
+  id: string;
+  name: string;
+  type: string;
+  command: string;
+  args: string[];
+  env: string[];
+  enabled: boolean;
+};
+
+// MCPConnectionStatus 是带运行时状态的 MCP 连接。
+export type MCPConnectionStatus = MCPConnectionConfig & {
+  status: "running" | "stopped" | "error";
+  error?: string;
+  toolCount: number;
+};
+
 export type ContainerDetail = {
   container: ContainerInspect;
   serviceType: string;
@@ -148,10 +168,17 @@ export type NodeletItem = {
   error?: string;
 };
 
-// ---- 导航 ----
+// ---- 全局导航 ----
 
 export const navigation = [
   { id: "projects", label: "项目", icon: FolderKanban },
+] as const;
+
+// ---- 项目内导航 ----
+
+export const projectNavigation = [
+  { id: "overview", label: "概览", icon: LayoutDashboard },
+  { id: "mcp", label: "MCP 连接", icon: Wrench },
   { id: "chat", label: "助手", icon: Sparkles },
 ] as const;
 

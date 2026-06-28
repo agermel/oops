@@ -168,6 +168,8 @@
   border-right: 1px solid var(--border);
   box-shadow: none;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .rail-menu {
@@ -236,6 +238,46 @@
   justify-content: center;
   width: 48px;
   padding: 0;
+}
+
+.rail-back {
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.rail-back button {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: var(--muted);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rail-back button:hover {
+  background: #f1f4f9;
+  color: var(--text);
+}
+
+.shell.sidebar-collapsed .rail-back {
+  padding: 8px;
+}
+
+.shell.sidebar-collapsed .rail-back button {
+  justify-content: center;
+  padding: 0;
+}
+
+.shell.sidebar-collapsed .rail-back button span {
+  display: none;
 }
 
 /* App Bar */

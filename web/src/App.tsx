@@ -16,11 +16,13 @@ import { SideRail } from "./components/SideRail";
 import { ProjectsView } from "./components/ProjectsView";
 import { ProjectDetailView } from "./components/ProjectDetailView";
 import { ChatView } from "./components/ChatView";
+import { MCPView } from "./components/MCPView";
 import "./styles.css";
 
 export function App() {
   const [activeNav, setActiveNav] = React.useState("projects");
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+  const [projectSection, setProjectSection] = React.useState("overview");
 
   // ---- 项目状态 ----
   const [projects, setProjects] = React.useState<Project[]>([]);
@@ -103,6 +105,7 @@ export function App() {
 
   function enterProject(id: string) {
     setSelectedProjectID(id);
+    setProjectSection("overview");
     setSelectedContainerID("");
     setSelectedNodeletID("");
     setContainerDetail(undefined);
@@ -115,6 +118,7 @@ export function App() {
 
   function leaveProject() {
     setSelectedProjectID("");
+    setProjectSection("overview");
     setServers([]);
     setContainers({});
     setExpandedServers(new Set());
@@ -131,9 +135,11 @@ export function App() {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data: ServerWithNodelet[] = await resp.json();
       setServers(data);
-      // 自动展开第一台服务器。
+      // 自动展开第一台服务器并加载容器。
       if (data.length > 0) {
-        setExpandedServers(new Set([data[0].nodelet.id]));
+        const firstID = data[0].nodelet.id;
+        setExpandedServers(new Set([firstID]));
+        loadContainers(projectID, firstID);
       }
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "读取服务器列表失败");
@@ -152,15 +158,15 @@ export function App() {
       setExpandedServers(next);
       // 按需加载容器列表。
       if (!containers[nodeletID]) {
-        loadContainers(nodeletID);
+        loadContainers(selectedProjectID, nodeletID);
       }
     }
   }
 
-  async function loadContainers(nodeletID: string) {
+  async function loadContainers(projectID: string, nodeletID: string) {
     setContainersLoading(true);
     try {
-      const pid = encodeURIComponent(selectedProjectID);
+      const pid = encodeURIComponent(projectID);
       const nid = encodeURIComponent(nodeletID);
       const resp = await fetch(`/api/projects/${pid}/servers/${nid}/containers`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -334,13 +340,15 @@ export function App() {
     <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Header activeNav={activeNav} onNavChange={setActiveNav} />
       <SideRail
-        activeNav={activeNav}
+        activeNav={selectedProject ? projectSection : activeNav}
         collapsed={sidebarCollapsed}
+        variant={selectedProject ? "project" : "global"}
         onCollapsedChange={setSidebarCollapsed}
-        onNavChange={setActiveNav}
+        onNavChange={selectedProject ? setProjectSection : setActiveNav}
+        onBack={selectedProject ? leaveProject : undefined}
       />
 
-      <main className={`content ${activeNav === "projects" && selectedProject ? "project-detail-content" : ""}`}>
+      <main className={`content ${activeNav === "projects" && selectedProject && projectSection === "overview" ? "project-detail-content" : ""}`}>
         {activeNav === "projects" && !selectedProject && (
           <section className="workspace-card">
             <div className="workspace-head">
@@ -359,7 +367,7 @@ export function App() {
           </section>
         )}
 
-        {activeNav === "projects" && selectedProject && (
+        {activeNav === "projects" && selectedProject && projectSection === "overview" && (
           <ProjectDetailView
             project={selectedProject}
             servers={servers}
@@ -393,7 +401,19 @@ export function App() {
           />
         )}
 
-        {activeNav === "chat" && (
+        {activeNav === "projects" && selectedProject && projectSection === "mcp" && (
+          <section className="workspace-card">
+            <div className="workspace-head">
+              <div>
+                <h1>MCP 管理</h1>
+                <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
+              </div>
+            </div>
+            <MCPView />
+          </section>
+        )}
+
+        {activeNav === "projects" && selectedProject && projectSection === "chat" && (
           <section className="workspace-card">
             <ChatView
               chatExchanges={chatExchanges}

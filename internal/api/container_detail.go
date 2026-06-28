@@ -56,7 +56,31 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 		DSN:         dsn,
 	}
 
-	// TODO: MCP 容器级状态查询在 MCP Manager 重构后启用。
+	// 查找匹配的 MCP 连接：类型相同且处于运行状态。
+	if s.mcpManager != nil && stype.IsDatabase() {
+		for _, conn := range s.mcpManager.List() {
+			if conn.Type == string(stype) && conn.Status == "running" {
+				result.MCP = &mcpStatus{
+					Connected: true,
+					ToolCount: conn.ToolCount,
+				}
+				break
+			}
+		}
+		// 没有找到运行中的连接时，检查是否有已配置但未运行的。
+		if result.MCP == nil {
+			for _, conn := range s.mcpManager.List() {
+				if conn.Type == string(stype) {
+					result.MCP = &mcpStatus{
+						Connected: false,
+						Error:     conn.Error,
+					}
+					break
+				}
+			}
+		}
+	}
+
 	return result, nil
 }
 

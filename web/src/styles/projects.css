@@ -888,3 +888,100 @@
   font-size: 0.85rem;
   color: var(--fg-dim, #6b7280);
 }
+
+/* ---- MCP 连接表格 ---- */
+.mcp-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.mcp-table-wrap table {
+  width: 100%;
+  min-width: 800px;
+  border-collapse: collapse;
+}
+
+.mcp-table-wrap th,
+.mcp-table-wrap td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  font-size: 13px;
+}
+
+.mcp-table-wrap th {
+  color: var(--text);
+  font-weight: 800;
+  background: #f8fafc;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.mcp-table-wrap tbody tr:hover {
+  background: #f8fbff;
+}
+
+.mcp-name-cell {
+  color: var(--link);
+  font-weight: 600;
+}
+
+.mcp-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* ---- MCP 状态 pill ---- */
+.status-pill.running {
+  color: #007d75;
+  background: #e6f7f5;
+  border: 1px solid #9adfd9;
+}
+
+.status-pill.stopped {
+  color: #69707d;
+  background: #f1f4f9;
+  border: 1px solid #d3dae6;
+}
+
+.status-pill.error {
+  color: #bd271e;
+  background: #fff4f2;
+  border: 1px solid #ffccc7;
+}
+
+/* ---- MCP 表单 ---- */
+.checkbox-label {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.test-result {
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.test-result.success {
+  color: #007d75;
+  background: #e6f7f5;
+  border: 1px solid #9adfd9;
+}
+
+.test-result.fail {
+  color: #bd271e;
+  background: #fff4f2;
+  border: 1px solid #ffccc7;
+}
