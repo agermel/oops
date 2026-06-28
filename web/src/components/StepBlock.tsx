@@ -1,19 +1,7 @@
 import React from "react";
 import { Bot, ChevronDown, ChevronRight } from "lucide-react";
-import { Streamdown } from "streamdown";
-import { useTypewriter } from "../hooks/useTypewriter";
+import { StreamingText } from "./StreamingText";
 import type { StepEvent } from "../types";
-
-function StreamingText({ text, animate }: { text: string; animate: boolean }) {
-  const displayed = useTypewriter(text, animate);
-  const done = !animate || displayed.length >= text.length;
-  return (
-    <>
-      <Streamdown className="stream-markdown" mode={animate ? "streaming" : "static"} controls={false}>{displayed}</Streamdown>
-      {!done && <span className="cursor-blink">|</span>}
-    </>
-  );
-}
 
 function summarizeToolArgs(toolArgs: string): string {
   try {

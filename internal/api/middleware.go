@@ -2,10 +2,11 @@ package api
 
 import (
 	"crypto/subtle"
-	"log"
 	"net/http"
 	"os"
-	"strings"
+
+	"oops/internal/logutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -19,34 +20,29 @@ func APIToken() string {
 	return os.Getenv("OOPS_TOKEN")
 }
 
-// MCPAllowedCommands 返回 MCP stdio 子进程允许的命令列表。
-// 可通过环境变量 OOPS_MCP_ALLOWED_COMMANDS 扩展，逗号分隔。
-// 默认空列表表示不允许任何命令。
-func MCPAllowedCommands() []string {
-	base := []string{}
-	if extra := os.Getenv("OOPS_MCP_ALLOWED_COMMANDS"); extra != "" {
-		for _, cmd := range strings.Split(extra, ",") {
-			cmd = strings.TrimSpace(cmd)
-			if cmd != "" {
-				base = append(base, cmd)
-			}
-		}
-	}
-	return base
-}
-
 // authorize 是所有 API 路由的 Bearer Token 鉴权中间件。
 // 使用 subtle.ConstantTimeCompare 防时序攻击。
+// 同时支持 ?token= 查询参数（供 EventSource/WebSocket 等无法自定义 header 的场景）。
 func authorize(next http.HandlerFunc) http.HandlerFunc {
 	token := APIToken()
 	if token == "" {
 		return next
 	}
 
+	expected := "Bearer " + token
+
 	return func(w http.ResponseWriter, r *http.Request) {
-		expected := "Bearer " + token
-		actual := r.Header.Get("Authorization")
-		if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
+		auth := r.Header.Get("Authorization")
+
+		// SSE / WebSocket 等客户端无法设置 Authorization header，
+		// 允许通过 ?token= 查询参数传入。
+		if auth == "" {
+			if qt := r.URL.Query().Get("token"); qt != "" {
+				auth = "Bearer " + qt
+			}
+		}
+
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -78,7 +74,7 @@ func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
 
 // sanitizedError 记录真实错误到日志，返回脱敏后的 HTTP 错误响应。
 func sanitizedError(w http.ResponseWriter, context string, err error, status int) {
-	log.Printf("api: %s: %v", context, err)
+	logutil.Error("api: "+context, zap.Error(err))
 	msg := http.StatusText(status)
 	if msg == "" {
 		msg = "internal error"

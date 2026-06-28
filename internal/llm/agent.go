@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"oops/internal/config"
+	"oops/internal/errutil"
+	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
@@ -12,6 +14,8 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
+
+	"go.uber.org/zap"
 )
 
 // systemPrompt 是 Agent 的系统提示词。
@@ -74,9 +78,10 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, question string) (<-chan StepEvent, error) {
 	opt, future := react.WithMessageFuture()
 
-	// agent 
+	// agent
 	agent, err := newAgent(ctx, chatModel, tools)
 	if err != nil {
+		logutil.Error("llm: create agent", zap.Error(err))
 		return nil, err
 	}
 
@@ -103,10 +108,13 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 
 		// 读取中间步骤。
 		iter := future.GetMessages()
+		iterAborted := false
 		for {
 			msg, ok, err := iter.Next()
 			if err != nil {
-				sendEvent(ctx, events, StepEvent{Type: "error", Content: err.Error()})
+				logutil.Error("llm: iter", zap.Error(err))
+				sendEvent(ctx, events, StepEvent{Type: "error", Content: errutil.Sanitize(err.Error())})
+				iterAborted = true
 				return
 			}
 			if !ok {
@@ -114,6 +122,19 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			}
 
 			for _, evt := range messageToStepEvents(msg) {
+				switch evt.Type {
+				case "tool_call":
+					logutil.Infof("llm: tool call → %s(%s)", evt.ToolName, evt.ToolArgs)
+				case "tool_result":
+					if errutil.ContainsError(evt.Content) {
+						logutil.Error("llm: tool result",
+							zap.String("tool", evt.ToolName),
+							zap.String("error", errutil.Sanitize(evt.Content)),
+						)
+					} else {
+						logutil.Infof("llm: tool %q ok (%d bytes)", evt.ToolName, len(evt.Content))
+					}
+				}
 				if !sendEvent(ctx, events, evt) {
 					return
 				}
@@ -122,8 +143,13 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 
 		// 等待 agent.Generate 完成，获取最终答案。
 		result := <-genDone
+		// 若迭代器中途报错则跳过后续处理，避免双发 error 事件。
+		if iterAborted {
+			return
+		}
 		if result.err != nil {
-			sendEvent(ctx, events, StepEvent{Type: "error", Content: result.err.Error()})
+			logutil.Error("llm: generate", zap.Error(result.err))
+			sendEvent(ctx, events, StepEvent{Type: "error", Content: errutil.Sanitize(result.err.Error())})
 			return
 		}
 

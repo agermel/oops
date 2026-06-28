@@ -1,13 +1,13 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"os"
 	"time"
 
 	"oops/internal/common"
 	"oops/internal/docker"
+	"oops/internal/logutil"
 	"oops/internal/nodelet"
 )
 
@@ -19,7 +19,7 @@ func main() {
 
 	dockerClient, err := docker.NewClient(publicAddress)
 	if err != nil {
-		log.Fatal(err)
+		logutil.Fatalf("docker client: %v", err)
 	}
 
 	server := nodelet.NewServerWithToken(dockerClient, token)
@@ -32,6 +32,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Printf("oops nodelet listening on http://localhost%s", addr)
-	log.Fatal(httpServer.ListenAndServe())
+	logutil.Infof("oops nodelet listening on http://localhost%s", addr)
+	logutil.Fatalf("server: %v", httpServer.ListenAndServe())
 }

@@ -1,4 +1,5 @@
-import { Sparkles, Send, Bot, User } from "lucide-react";
+import React from "react";
+import { Sparkles, Send, Bot, User, Trash2 } from "lucide-react";
 import type { ChatExchange, StepEvent } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
@@ -29,6 +30,7 @@ export function ChatView({
   chatError,
   onInputChange,
   onSend,
+  onClear,
 }: {
   chatExchanges: ChatExchange[];
   currentSteps: StepEvent[];
@@ -38,25 +40,53 @@ export function ChatView({
   chatError: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
+  onClear: () => void;
 }) {
-  const visibleCurrentSteps = withToolNames(currentSteps.filter((s) => s.type !== "answer" && s.type !== "error"));
+  // 流式传输中是否已出现 error，用于停止工具调用的 running 动画。
+  const streamError = React.useMemo(
+    () => currentSteps.some((s) => s.type === "error"),
+    [currentSteps],
+  );
+
+  // 预处理当前步骤，注入 toolName 并过滤掉 answer/error。
+  const visibleCurrentSteps = React.useMemo(
+    () => withToolNames(currentSteps.filter((s) => s.type !== "answer" && s.type !== "error")),
+    [currentSteps],
+  );
+
+  // 预处理历史交换记录中的步骤（过滤并用 useMemo 缓存）。
+  const processedExchanges = React.useMemo(
+    () =>
+      chatExchanges.map((ex) => ({
+        ...ex,
+        displaySteps: withToolNames(ex.steps.filter((s) => s.type !== "answer" && s.type !== "error")),
+      })),
+    [chatExchanges],
+  );
+
+  const hasContent = chatExchanges.length > 0 || currentSteps.length > 0;
 
   return (
     <section className="chat-panel" id="chat-section">
       <div className="chat-header">
         <span><Sparkles size={18} /> 智能助手</span>
+        {hasContent && (
+          <button onClick={onClear} title="清空对话" aria-label="清空对话">
+            <Trash2 size={16} />
+          </button>
+        )}
       </div>
       <div className="chat-body" role="log" aria-live="polite">
         {chatExchanges.length === 0 && currentSteps.length === 0 && (
           <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>
         )}
-        {chatExchanges.map((ex, i) => (
+        {processedExchanges.map((ex, i) => (
           <div key={i} className="chat-exchange">
             <div className="chat-msg user">
               <div className="chat-avatar"><User size={16} /></div>
               <div className="chat-content">{ex.question}</div>
             </div>
-            {withToolNames(ex.steps.filter((s) => s.type !== "answer" && s.type !== "error")).map((step, j) => (
+            {ex.displaySteps.map((step, j) => (
               <StepBlock key={j} step={step} />
             ))}
             {ex.answer && <AnswerBlock content={ex.answer} animate={false} />}
@@ -70,20 +100,34 @@ export function ChatView({
               <div className="chat-content">{currentQuestion}</div>
             </div>
             {visibleCurrentSteps.map((step, j) => {
-              const hasResult = visibleCurrentSteps.slice(j + 1).some(s => s.type === "tool_result" && (!step.toolCallId || s.toolCallId === step.toolCallId));
+              // 若流中已出现 error，则所有工具调用视为已有结果，停止动画。
+              const hasResult =
+                streamError ||
+                visibleCurrentSteps.slice(j + 1).some(
+                  (s) =>
+                    s.type === "tool_result" &&
+                    (!step.toolCallId || s.toolCallId === step.toolCallId),
+                );
               return <StepBlock key={j} step={step} animate hasResult={hasResult} />;
             })}
-            {currentSteps.find((s) => s.type === "answer") && (
-              <AnswerBlock content={currentSteps.find((s) => s.type === "answer")!.content} animate />
+            {currentSteps.some((s) => s.type === "answer") && (
+              <AnswerBlock
+                content={currentSteps.find((s) => s.type === "answer")!.content}
+                animate
+              />
             )}
-            {!currentSteps.find((s) => s.type === "answer") && !currentSteps.find((s) => s.type === "error") && chatLoading && (
-              <div className="chat-msg assistant">
-                <div className="chat-avatar"><Bot size={16} /></div>
-                <div className="chat-content chat-thinking">Thinking…</div>
+            {!currentSteps.some((s) => s.type === "answer") &&
+              !streamError &&
+              chatLoading && (
+                <div className="chat-msg assistant">
+                  <div className="chat-avatar"><Bot size={16} /></div>
+                  <div className="chat-content chat-thinking">Thinking…</div>
+                </div>
+              )}
+            {streamError && (
+              <div className="chat-error">
+                {currentSteps.find((s) => s.type === "error")!.content}
               </div>
-            )}
-            {currentSteps.find((s) => s.type === "error") && (
-              <div className="chat-error">{currentSteps.find((s) => s.type === "error")!.content}</div>
             )}
           </div>
         )}
@@ -94,10 +138,20 @@ export function ChatView({
           placeholder="输入问题，按 Enter 发送"
           value={chatInput}
           onChange={(e) => onInputChange(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { onSend(); } }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onSend();
+            }
+          }}
           disabled={chatLoading}
         />
-        <button onClick={() => onSend()} disabled={chatLoading || !chatInput.trim()} title="发送" aria-label="发送消息">
+        <button
+          type="button"
+          onClick={() => onSend()}
+          disabled={chatLoading || !chatInput.trim()}
+          title="发送"
+          aria-label="发送消息"
+        >
           <Send size={18} />
         </button>
       </div>

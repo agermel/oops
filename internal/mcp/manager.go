@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,13 +11,15 @@ import (
 	"time"
 
 	"oops/internal/config"
+	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino/components/tool"
+	"go.uber.org/zap"
 )
 
 // allowedCommands returns the list of MCP stdio commands permitted to execute.
-// Controlled via OOPS_MCP_ALLOWED_COMMANDS (comma-separated). Empty list means
-// no command is allowed.
+// Controlled via OOPS_MCP_ALLOWED_COMMANDS (comma-separated). When the env var
+// is not set, all commands are allowed.
 func allowedCommands() []string {
 	extra := os.Getenv("OOPS_MCP_ALLOWED_COMMANDS")
 	if extra == "" {
@@ -35,13 +36,13 @@ func allowedCommands() []string {
 }
 
 // validateCommand checks whether cmd is in the allowed list.
-// If the allowed list is empty, all commands are rejected.
+// If OOPS_MCP_ALLOWED_COMMANDS is not set, all commands pass.
 // Allowed entries may be either a full binary path or a bare name
 // (e.g. "mysql-mcp-server" matches "/usr/local/bin/mysql-mcp-server").
 func validateCommand(cmd string) error {
 	allowed := allowedCommands()
 	if len(allowed) == 0 {
-		return fmt.Errorf("no MCP commands are allowed; set OOPS_MCP_ALLOWED_COMMANDS")
+		return nil // no restriction — allow all
 	}
 
 	base := filepath.Base(cmd)
@@ -118,7 +119,7 @@ func NewManager(configPath string, onChange func([]tool.BaseTool)) (*Manager, er
 			continue
 		}
 		if err := m.startLocked(cfg); err != nil {
-			log.Printf("mcp: start %q: %v", cfg.ID, err)
+			logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
 			m.errors[cfg.ID] = err.Error()
 		}
 	}
@@ -176,6 +177,7 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 
 	if cfg.Enabled {
 		if err := m.startLocked(cfg); err != nil {
+			logutil.Error("mcp: add start", zap.String("id", cfg.ID), zap.Error(err))
 			m.errors[cfg.ID] = err.Error()
 			// Persisted successfully, start failure is non-fatal.
 		}
@@ -218,6 +220,7 @@ func (m *Manager) Update(cfg ConnectionConfig) error {
 
 	if cfg.Enabled {
 		if err := m.startLocked(cfg); err != nil {
+			logutil.Error("mcp: update start", zap.String("id", cfg.ID), zap.Error(err))
 			m.errors[cfg.ID] = err.Error()
 		}
 	}
@@ -274,7 +277,7 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, closer, err := Connect(ctx, mcpCfg)
+	_, _, closer, err := Connect(ctx, mcpCfg)
 	if err != nil {
 		return fmt.Errorf("test connect: %w", err)
 	}
@@ -340,7 +343,7 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 
-		tools, closer, err := Connect(ctx, mcpCfg)
+		session, tools, closer, err := Connect(ctx, mcpCfg)
 		cancel()
 
 		if err == nil {
@@ -349,13 +352,37 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 				closer: closer,
 				tools:  tools,
 			}
-			log.Printf("mcp: %q started, %d tool(s) discovered", cfg.ID, len(tools))
+			logutil.Info("mcp: started",
+				zap.String("id", cfg.ID),
+				zap.Int("tools", len(tools)),
+			)
+
+			// 连接建立后主动验证后端服务确实可达。
+			if verifyErr := Verify(context.Background(), session, tools); verifyErr != nil {
+				closer()
+				delete(m.processes, cfg.ID)
+				logutil.Error("mcp: verify failed",
+					zap.String("id", cfg.ID),
+					zap.Error(verifyErr),
+				)
+				lastErr = verifyErr
+				if attempt < maxRetries {
+					time.Sleep(2 * time.Second)
+					continue
+				}
+				return fmt.Errorf("verify (%d attempts): %w", maxRetries, verifyErr)
+			}
 			return nil
 		}
 
 		lastErr = err
 		if attempt < maxRetries {
-			log.Printf("mcp: %q attempt %d/%d failed: %v, retrying...", cfg.ID, attempt, maxRetries, err)
+			logutil.Warn("mcp: connect retry",
+				zap.String("id", cfg.ID),
+				zap.Int("attempt", attempt),
+				zap.Int("max", maxRetries),
+				zap.Error(err),
+			)
 			time.Sleep(2 * time.Second)
 		}
 	}
@@ -370,7 +397,7 @@ func (m *Manager) stopLocked(id string) {
 	}
 	proc.closer()
 	delete(m.processes, id)
-	log.Printf("mcp: %q stopped", id)
+	logutil.Info("mcp: stopped", zap.String("id", id))
 }
 
 func (m *Manager) collectToolsLocked() []tool.BaseTool {

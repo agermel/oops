@@ -3,15 +3,13 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"log"
-	"strings"
 	"time"
 
 	"oops/internal/config"
+	"oops/internal/console"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -28,32 +26,28 @@ import (
 //
 //	transport: "stdio"  → launches a child process (command + args)
 //	transport: "sse"    → connects to a remote SSE endpoint (url)
-func Connect(ctx context.Context, cfg config.MCPConfig) ([]tool.BaseTool, func(), error) {
+func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
 	switch cfg.Transport {
 	case "stdio":
 		return connectStdio(ctx, cfg)
 	case "sse":
 		return connectSSE(ctx, cfg)
 	default:
-		return nil, nil, fmt.Errorf("unsupported mcp transport: %q", cfg.Transport)
+		return nil, nil, nil, fmt.Errorf("unsupported mcp transport: %q", cfg.Transport)
 	}
 }
 
-func connectStdio(ctx context.Context, cfg config.MCPConfig) ([]tool.BaseTool, func(), error) {
+func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("stdio: create client: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdio: create client: %w", err)
 	}
 
-	// Read subprocess stderr in background for debugging.
+	// MCP 子进程 stderr 逐行输出到控制台，实时可见。
 	stderrReader, hasStderr := mcpclient.GetStderr(c)
 	if hasStderr {
 		go func() {
-			var buf bytes.Buffer
-			_, _ = io.Copy(&buf, stderrReader)
-			if s := strings.TrimSpace(buf.String()); s != "" {
-				log.Printf("mcp: %q stderr: %s", cfg.Command, s)
-			}
+			_, _ = io.Copy(console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command)), stderrReader)
 		}()
 	}
 
@@ -61,7 +55,7 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) ([]tool.BaseTool, f
 	select {
 	case <-ctx.Done():
 		c.Close()
-		return nil, nil, ctx.Err()
+		return nil, nil, nil, ctx.Err()
 	case <-time.After(2 * time.Second):
 	}
 
@@ -74,27 +68,27 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) ([]tool.BaseTool, f
 
 	if _, err = c.Initialize(ctx, initReq); err != nil {
 		c.Close()
-		return nil, nil, fmt.Errorf("stdio: initialize: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdio: initialize: %w", err)
 	}
 
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
 	if err != nil {
 		c.Close()
-		return nil, nil, fmt.Errorf("stdio: get tools: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdio: get tools: %w", err)
 	}
 
-	return tools, func() { c.Close() }, nil
+	return c, tools, func() { c.Close() }, nil
 }
 
-func connectSSE(ctx context.Context, cfg config.MCPConfig) ([]tool.BaseTool, func(), error) {
+func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
 	c, err := mcpclient.NewSSEMCPClient(cfg.URL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sse: create client: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: create client: %w", err)
 	}
 
 	if err := c.Start(ctx); err != nil {
 		c.Close()
-		return nil, nil, fmt.Errorf("sse: start: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: start: %w", err)
 	}
 
 	initReq := mcp.InitializeRequest{}
@@ -106,14 +100,96 @@ func connectSSE(ctx context.Context, cfg config.MCPConfig) ([]tool.BaseTool, fun
 
 	if _, err = c.Initialize(ctx, initReq); err != nil {
 		c.Close()
-		return nil, nil, fmt.Errorf("sse: initialize: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: initialize: %w", err)
 	}
 
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
 	if err != nil {
 		c.Close()
-		return nil, nil, fmt.Errorf("sse: get tools: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: get tools: %w", err)
 	}
 
-	return tools, func() { c.Close() }, nil
+	return c, tools, func() { c.Close() }, nil
+}
+
+// ---- 连接验证 ----
+
+// MCPSession 抽象 MCP 连接的 CallTool 能力（stdio 和 sse 共有的接口）。
+type MCPSession interface {
+	CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
+}
+
+// safeVerifyTools 是连接验证时优先尝试的安全工具名列表。
+var safeVerifyTools = []string{
+	"ping", "echo", "dbsize", "info", "server_info",
+	"list_databases", "list_keys", "get_config",
+}
+
+// Verify probes an MCP connection by calling a safe tool. Returns nil
+// if the backend service responds without error.
+func Verify(ctx context.Context, session MCPSession, tools []tool.BaseTool) error {
+	if len(tools) == 0 {
+		return fmt.Errorf("no tools available for verification")
+	}
+
+	var probeName string
+	for _, name := range safeVerifyTools {
+		for _, t := range tools {
+			info, err := t.Info(ctx)
+			if err != nil {
+				continue
+			}
+			if info.Name == name {
+				probeName = name
+				break
+			}
+		}
+		if probeName != "" {
+			break
+		}
+	}
+	if probeName == "" {
+		info, err := tools[0].Info(ctx)
+		if err != nil {
+			return fmt.Errorf("get tool info: %w", err)
+		}
+		probeName = info.Name
+	}
+
+	console.Feed("mcp: verifying connection with %q ...", probeName)
+
+	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = probeName
+	req.Params.Arguments = map[string]any{}
+
+	result, err := session.CallTool(verifyCtx, req)
+	if err != nil {
+		return fmt.Errorf("verify %q: call: %w", probeName, err)
+	}
+	if result.IsError {
+		var msgs []string
+		for _, block := range result.Content {
+			if tb, ok := block.(mcp.TextContent); ok {
+				msgs = append(msgs, tb.Text)
+			}
+		}
+		return fmt.Errorf("verify %q: %s", probeName, joinStrings(msgs, "; "))
+	}
+
+	console.Feed("mcp: verify %q ok", probeName)
+	return nil
+}
+
+func joinStrings(ss []string, sep string) string {
+	r := ""
+	for i, s := range ss {
+		if i > 0 {
+			r += sep
+		}
+		r += s
+	}
+	return r
 }

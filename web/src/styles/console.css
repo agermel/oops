@@ -1,0 +1,118 @@
+/* ---- 控制台页面 ---- */
+
+.console-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.console-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.console-stat.error { color: #bd271e; }
+.console-stat.warn { color: #d4890a; }
+
+.console-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.console-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 0 10px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.console-filter-btn:hover {
+  color: var(--text);
+  border-color: #bac0cc;
+}
+.console-filter-btn.active {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: #eaf4ff;
+}
+
+.console-body-panel {
+  height: calc(100vh - 260px);
+  min-height: 300px;
+  overflow-y: auto;
+  background: #1f2430;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  color: #cccac3;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.console-empty {
+  color: #4a515d;
+  text-align: center;
+  padding: 40px 0;
+}
+
+.console-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.console-line:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.console-line.level-error {
+  background: rgba(189, 39, 30, 0.12);
+}
+.console-line.level-error:hover {
+  background: rgba(189, 39, 30, 0.18);
+}
+.console-line.level-warn {
+  background: rgba(245, 197, 66, 0.08);
+}
+.console-line.level-warn:hover {
+  background: rgba(245, 197, 66, 0.14);
+}
+
+.console-ts {
+  color: #4a515d;
+  flex-shrink: 0;
+}
+
+.console-level-tag {
+  color: #4a515d;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  min-width: 28px;
+}
+.level-error .console-level-tag { color: #e06c75; }
+.level-warn .console-level-tag { color: #e5c07b; }
+
+.console-msg { color: #908c7e; }
+.level-error .console-msg { color: #e8a0a5; }
+.level-warn .console-msg { color: #dfd5a5; }

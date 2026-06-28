@@ -109,7 +109,7 @@
 /* ---- 项目详情：左右分栏 ---- */
 .project-split {
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   gap: 18px;
   flex: 1;
   min-height: 0;
@@ -119,6 +119,7 @@
 .server-tree {
   width: 310px;
   min-width: 280px;
+  max-height: calc(100vh - 130px);
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -140,7 +141,7 @@
 }
 
 .tree-list {
-  flex: 1;
+  flex: 0 1 auto;
   overflow-y: auto;
   padding: 12px;
 }
@@ -779,11 +780,47 @@
   font-family: inherit;
 }
 
+.modal-body textarea {
+  resize: vertical;
+  min-height: 3rem;
+  white-space: pre-wrap;
+}
+
 .modal-body input:focus,
 .modal-body select:focus,
 .modal-body textarea:focus {
   outline: none;
   border-color: var(--accent, #3399ff);
+}
+
+/* ---- 连接参数字段 ---- */
+.creds-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0;
+}
+
+.creds-fieldset legend {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0 0.4rem;
+}
+
+.creds-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 0.75rem;
+}
+
+.creds-grid label {
+  margin-top: 0.25rem;
+}
+
+.creds-grid input {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .modal-foot {

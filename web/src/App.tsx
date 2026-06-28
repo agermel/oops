@@ -12,25 +12,52 @@ import type {
   MCPPrefill,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
+import { useHashRouter } from "./hooks/useHashRouter";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
 import { ProjectsView } from "./components/ProjectsView";
 import { ProjectDetailView } from "./components/ProjectDetailView";
 import { ChatView } from "./components/ChatView";
 import { MCPView } from "./components/MCPView";
+import { ConsolePanel } from "./components/ConsolePanel";
 import "./styles.css";
 
 export function App() {
-  const [activeNav, setActiveNav] = React.useState("projects");
+  // ---- Hash 路由（唯一导航数据源） ----
+  const { route, navigate, replace } = useHashRouter();
+
+  // 从 route 派生所有导航状态
+  const activeNav = route.view === "console" ? "console" : "projects";
+  const selectedProjectID =
+    route.view === "projects" || route.view === "console"
+      ? ""
+      : (route as any).projectId || "";
+  const projectSection: string =
+    route.view === "project-mcp" ? "mcp" :
+    route.view === "project-chat" ? "chat" :
+    route.view === "project-console" ? "console" :
+    route.view === "project-overview" ? "overview" :
+    "overview";
+  const urlServerId = route.view === "project-overview" ? route.serverId : undefined;
+  const urlContainerId = route.view === "project-overview" ? route.containerId : undefined;
+
+  // 供旧接口使用的派生值
+  const selectedNodeletID = urlServerId || "";
+  const selectedContainerID = urlContainerId || "";
+
+  // 跟踪当前已加载的项目，避免重复加载
+  const lastLoadedProjectRef = React.useRef("");
+
+  // 侧栏折叠（纯 UI 状态）
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-  const [projectSection, setProjectSection] = React.useState("overview");
+
+  // MCP 预填（跨视图传递）
   const [mcpPrefill, setMCPPrefill] = React.useState<MCPPrefill | null>(null);
 
   // ---- 项目状态 ----
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = React.useState(false);
   const [projectsError, setProjectsError] = React.useState("");
-  const [selectedProjectID, setSelectedProjectID] = React.useState("");
 
   // ---- 服务器 & 容器树状态 ----
   const [servers, setServers] = React.useState<ServerWithNodelet[]>([]);
@@ -38,8 +65,6 @@ export function App() {
   const [serverError, setServerError] = React.useState("");
   const [containers, setContainers] = React.useState<Record<string, ContainerWithType[]>>({});
   const [containersLoading, setContainersLoading] = React.useState(false);
-  const [selectedNodeletID, setSelectedNodeletID] = React.useState("");
-  const [selectedContainerID, setSelectedContainerID] = React.useState("");
   const [expandedServers, setExpandedServers] = React.useState<Set<string>>(new Set());
 
   // ---- 容器详情状态 ----
@@ -65,6 +90,8 @@ export function App() {
   const [currentQuestion, setCurrentQuestion] = React.useState("");
   const [chatLoading, setChatLoading] = React.useState(false);
   const [chatError, setChatError] = React.useState("");
+  const chatLoadingRef = React.useRef(false);
+  const chatStepsRef = React.useRef<StepEvent[]>([]);
 
   // ---- 日志缓冲区 ----
   const flushLogs = React.useMemo(
@@ -91,7 +118,8 @@ export function App() {
     logBuffer.current = [];
   }
 
-  // ---- 项目 CRUD ----
+  // ---------------- 数据获取（纯函数，不依赖闭包中的导航状态） ----------------
+
   async function fetchProjects() {
     setProjectsLoading(true);
     setProjectsError("");
@@ -106,35 +134,6 @@ export function App() {
     }
   }
 
-  function enterProject(id: string) {
-    setSelectedProjectID(id);
-    setProjectSection("overview");
-    setSelectedContainerID("");
-    setSelectedNodeletID("");
-    setContainerDetail(undefined);
-    setExpandedServers(new Set());
-    setContainers({});
-    closeLogStream();
-    setLogs([]);
-    loadProjectServers(id);
-  }
-
-  function configureMCP(prefill: MCPPrefill) {
-    setMCPPrefill(prefill);
-    setProjectSection("mcp");
-  }
-
-  function leaveProject() {
-    setSelectedProjectID("");
-    setProjectSection("overview");
-    setServers([]);
-    setContainers({});
-    setExpandedServers(new Set());
-    closeLogStream();
-    setLogs([]);
-  }
-
-  // ---- 服务器 ----
   async function loadProjectServers(projectID: string) {
     setServersLoading(true);
     setServerError("");
@@ -143,31 +142,10 @@ export function App() {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data: ServerWithNodelet[] = await resp.json();
       setServers(data);
-      // 自动展开第一台服务器并加载容器。
-      if (data.length > 0) {
-        const firstID = data[0].nodelet.id;
-        setExpandedServers(new Set([firstID]));
-        loadContainers(projectID, firstID);
-      }
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "读取服务器列表失败");
     } finally {
       setServersLoading(false);
-    }
-  }
-
-  async function toggleServer(nodeletID: string) {
-    const next = new Set(expandedServers);
-    if (next.has(nodeletID)) {
-      next.delete(nodeletID);
-      setExpandedServers(next);
-    } else {
-      next.add(nodeletID);
-      setExpandedServers(next);
-      // 按需加载容器列表。
-      if (!containers[nodeletID]) {
-        loadContainers(selectedProjectID, nodeletID);
-      }
     }
   }
 
@@ -187,18 +165,16 @@ export function App() {
     }
   }
 
-  async function selectContainer(nodeletID: string, containerID: string) {
+  async function selectContainer(projectId: string, nodeletID: string, containerID: string) {
     closeLogStream();
     setLogs([]);
-    setSelectedNodeletID(nodeletID);
-    setSelectedContainerID(containerID);
     setDetailError("");
     setHealth(undefined);
 
-    // 加载容器详情。
+    // 加载容器详情
     setDetailLoading(true);
     try {
-      const pid = encodeURIComponent(selectedProjectID);
+      const pid = encodeURIComponent(projectId);
       const nid = encodeURIComponent(nodeletID);
       const cid = encodeURIComponent(containerID);
       const resp = await fetch(`/api/projects/${pid}/servers/${nid}/containers/${cid}`);
@@ -214,17 +190,17 @@ export function App() {
       setDetailLoading(false);
     }
 
-    // 启动日志流。
-    loadLogStream(nodeletID, containerID);
+    // 启动日志流
+    loadLogStream(projectId, nodeletID, containerID);
   }
 
-  function loadLogStream(nodeletID: string, containerID: string) {
+  function loadLogStream(projectId: string, nodeletID: string, containerID: string) {
     closeLogStream();
     setLogsLoading(true);
     setLogsError("");
     setLogs([]);
 
-    const pid = encodeURIComponent(selectedProjectID);
+    const pid = encodeURIComponent(projectId);
     const nid = encodeURIComponent(nodeletID);
     const cid = encodeURIComponent(containerID);
     const url = `/api/projects/${pid}/servers/${nid}/containers/${cid}/logs/stream?tail=100`;
@@ -240,7 +216,7 @@ export function App() {
         logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
         flushLogs();
       } catch {
-        // 跳过无法解析的日志行。
+        // 跳过无法解析的日志行
       }
     };
     source.onerror = () => {
@@ -270,9 +246,11 @@ export function App() {
   // ---- 聊天 ----
   async function sendChat(question?: string) {
     const q = (question ?? chatInput).trim();
-    if (!q || chatLoading) return;
+    if (!q || chatLoadingRef.current) return;
+    chatLoadingRef.current = true;
     setChatInput("");
     setChatError("");
+    chatStepsRef.current = [];
     setCurrentSteps([]);
     setCurrentQuestion(q);
     setChatLoading(true);
@@ -307,28 +285,198 @@ export function App() {
           if (line.startsWith("data: ")) {
             try {
               const evt: StepEvent = JSON.parse(line.slice(6));
-              setCurrentSteps((prev) => [...prev, evt]);
+              chatStepsRef.current = [...chatStepsRef.current, evt];
+              setCurrentSteps(chatStepsRef.current);
             } catch { /* skip */ }
           }
         }
       }
 
-      setCurrentSteps((steps) => {
-        const answer = steps.find((s) => s.type === "answer");
-        const errStep = steps.find((s) => s.type === "error");
-        setChatExchanges((prev) => [...prev, { question: q, steps, answer: answer?.content, error: errStep?.content }]);
-        return [];
-      });
+      // 从 ref 读取最终步骤列表，避免在 setState updater 内调用另一个 setState
+      const steps = chatStepsRef.current;
+      const answer = steps.find((s) => s.type === "answer");
+      const errStep = steps.find((s) => s.type === "error");
+      setChatExchanges((prev) => [...prev, { question: q, steps, answer: answer?.content, error: errStep?.content }]);
+      chatStepsRef.current = [];
+      setCurrentSteps([]);
       setCurrentQuestion("");
       setChatLoading(false);
+      chatLoadingRef.current = false;
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "聊天请求失败");
       setCurrentQuestion("");
+      setCurrentSteps([]);
+      chatStepsRef.current = [];
       setChatLoading(false);
+      chatLoadingRef.current = false;
     }
   }
 
-  // ---- Effects ----
+  // ---------------- URL 写入（替代旧的动作函数） ----------------
+
+  function goToProjectList() {
+    navigate({ view: "projects" });
+  }
+
+  function goToProject(projectId: string) {
+    navigate({ view: "project-overview", projectId });
+  }
+
+  function goToProjectSection(section: string) {
+    if (!selectedProjectID) return;
+    if (section === "mcp") navigate({ view: "project-mcp", projectId: selectedProjectID });
+    else if (section === "chat") navigate({ view: "project-chat", projectId: selectedProjectID });
+    else if (section === "console") navigate({ view: "project-console", projectId: selectedProjectID });
+    else navigate({ view: "project-overview", projectId: selectedProjectID });
+  }
+
+  function clearChat() {
+    setChatExchanges([]);
+    setCurrentSteps([]);
+    chatStepsRef.current = [];
+    setCurrentQuestion("");
+    setChatError("");
+  }
+
+
+  function configureMCP(prefill: MCPPrefill) {
+    setMCPPrefill(prefill);
+    if (selectedProjectID) {
+      navigate({ view: "project-mcp", projectId: selectedProjectID });
+    }
+  }
+
+  function selectServerFromUI(nodeletID: string) {
+    if (!selectedProjectID) return;
+    replace({ view: "project-overview", projectId: selectedProjectID, serverId: nodeletID });
+  }
+
+  function selectContainerFromUI(nodeletID: string, containerID: string) {
+    if (!selectedProjectID) return;
+    replace({ view: "project-overview", projectId: selectedProjectID, serverId: nodeletID, containerId: containerID });
+  }
+
+  // 切换服务器展开/折叠
+  async function toggleServer(nodeletID: string) {
+    const next = new Set(expandedServers);
+    if (next.has(nodeletID)) {
+      next.delete(nodeletID);
+      setExpandedServers(next);
+      // 如果折叠的是 URL 中指定的服务器，回到项目概览
+      if (urlServerId === nodeletID) {
+        replace({ view: "project-overview", projectId: selectedProjectID });
+      }
+    } else {
+      next.add(nodeletID);
+      setExpandedServers(next);
+      if (!containers[nodeletID]) {
+        loadContainers(selectedProjectID, nodeletID);
+      }
+      // 同步到 URL
+      selectServerFromUI(nodeletID);
+    }
+  }
+
+  // ---------------- Effect 级联：URL → 数据加载 ----------------
+
+  // Effect A: 项目进入/离开
+  React.useEffect(() => {
+    if (selectedProjectID && selectedProjectID !== lastLoadedProjectRef.current) {
+      // 进入新项目
+      lastLoadedProjectRef.current = selectedProjectID;
+      setServers([]);
+      setContainers({});
+      setExpandedServers(new Set());
+      setContainerDetail(undefined);
+      closeLogStream();
+      setLogs([]);
+      loadProjectServers(selectedProjectID);
+    }
+    if (!selectedProjectID && lastLoadedProjectRef.current) {
+      // 离开项目
+      lastLoadedProjectRef.current = "";
+      setServers([]);
+      setContainers({});
+      setExpandedServers(new Set());
+      setContainerDetail(undefined);
+      closeLogStream();
+      setLogs([]);
+    }
+  }, [selectedProjectID]);
+
+  // Effect B: URL 中有 server 时，展开并加载容器
+  React.useEffect(() => {
+    if (!urlServerId || servers.length === 0) return;
+
+    const server = servers.find((s) => s.nodelet.id === urlServerId);
+    if (!server) {
+      // URL 中的 server 不在当前项目里，回退
+      replace({ view: "project-overview", projectId: selectedProjectID });
+      return;
+    }
+
+    setExpandedServers((prev) => {
+      if (prev.has(urlServerId)) return prev;
+      return new Set(prev).add(urlServerId);
+    });
+
+    if (!containers[urlServerId]) {
+      loadContainers(selectedProjectID, urlServerId);
+    }
+  }, [urlServerId, servers, selectedProjectID]);
+
+  // Effect C: URL 中有 container 时，选中并加载详情+日志
+  React.useEffect(() => {
+    if (!urlContainerId || !urlServerId) return;
+    // 避免重复选中同一个容器
+    if (urlContainerId === selectedContainerID && containerDetail) return;
+
+    const serverContainers = containers[urlServerId];
+    if (!serverContainers) return; // 容器列表还没加载
+
+    const container = serverContainers.find((c) => c.id === urlContainerId);
+    if (!container) {
+      // URL 中的 container 不存在，去掉
+      replace({ view: "project-overview", projectId: selectedProjectID, serverId: urlServerId });
+      return;
+    }
+
+    selectContainer(selectedProjectID, urlServerId, urlContainerId);
+  }, [urlContainerId, urlServerId, containers, selectedProjectID]);
+
+  // Effect D: 指定了 server 但没有 container → 自动选第一个容器
+  React.useEffect(() => {
+    if (!urlServerId || urlContainerId) return;
+    if (selectedContainerID) return; // 已有选中
+
+    const serverContainers = containers[urlServerId];
+    if (!serverContainers || serverContainers.length === 0) return;
+
+    const first = serverContainers[0];
+    replace({
+      view: "project-overview",
+      projectId: selectedProjectID,
+      serverId: urlServerId,
+      containerId: first.id,
+    });
+  }, [urlServerId, urlContainerId, containers, selectedProjectID]);
+
+  // Effect E: 进入项目概览且无 server → 自动展开首台服务器
+  React.useEffect(() => {
+    if (route.view !== "project-overview") return;
+    if (urlServerId) return;
+    if (servers.length === 0 || serversLoading) return;
+
+    const first = servers[0];
+    replace({
+      view: "project-overview",
+      projectId: selectedProjectID,
+      serverId: first.nodelet.id,
+    });
+  }, [route.view, urlServerId, servers, serversLoading, selectedProjectID]);
+
+  // ---------------- 基础 Effects ----------------
+
   React.useEffect(() => {
     fetchProjects();
   }, []);
@@ -343,7 +491,7 @@ export function App() {
     }
   }, [logs, autoScroll]);
 
-  // ---- Render ----
+  // ---- 标题 ----
   const selectedProject = projects.find((p) => p.id === selectedProjectID);
 
   React.useEffect(() => {
@@ -351,25 +499,40 @@ export function App() {
     if (selectedProject) parts.push(selectedProject.name);
     if (selectedProject && projectSection === "mcp") parts.push("MCP 管理");
     if (selectedProject && projectSection === "chat") parts.push("助手");
+    if (selectedProject && projectSection === "console") parts.push("控制台");
     document.title = parts.length > 0 ? `${parts.join(" · ")} — Oops` : "Oops";
   }, [selectedProject, projectSection]);
 
+  // ---- Render ----
   return (
     <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <a href="#main-content" className="skip-link">
         跳到主内容
       </a>
-      <Header activeNav={activeNav} onNavChange={setActiveNav} />
+      <Header activeNav={activeNav} onNavChange={() => {}} />
       <SideRail
         activeNav={selectedProject ? projectSection : activeNav}
         collapsed={sidebarCollapsed}
         variant={selectedProject ? "project" : "global"}
         onCollapsedChange={setSidebarCollapsed}
-        onNavChange={selectedProject ? setProjectSection : setActiveNav}
-        onBack={selectedProject ? leaveProject : undefined}
+        onNavChange={
+          selectedProject
+            ? goToProjectSection
+            : (id: string) => {
+                if (id === "console") navigate({ view: "console" });
+                else if (id === "projects") navigate({ view: "projects" });
+              }
+        }
+        onBack={selectedProject ? goToProjectList : undefined}
       />
 
-      <main id="main-content" className={`content ${activeNav === "projects" && selectedProject && projectSection === "overview" ? "project-detail-content" : ""}`}>
+      <main id="main-content" className="content">
+        {activeNav === "console" && !selectedProject && (
+          <section className="workspace-card">
+            <ConsolePanel />
+          </section>
+        )}
+
         {activeNav === "projects" && !selectedProject && (
           <section className="workspace-card">
             <div className="workspace-head">
@@ -382,7 +545,7 @@ export function App() {
               projects={projects}
               loading={projectsLoading}
               error={projectsError}
-              onSelect={enterProject}
+              onSelect={goToProject}
               onRefresh={fetchProjects}
             />
           </section>
@@ -408,9 +571,9 @@ export function App() {
             logsLoading={logsLoading}
             logsError={logsError}
             autoScroll={autoScroll}
-            onBack={leaveProject}
+            onBack={goToProjectList}
             onToggleServer={toggleServer}
-            onSelectContainer={selectContainer}
+            onSelectContainer={selectContainerFromUI}
             onServersChanged={() => loadProjectServers(selectedProjectID)}
             onHealthCheck={checkHealth}
             onAutoScrollChange={setAutoScroll}
@@ -447,7 +610,14 @@ export function App() {
               chatError={chatError}
               onInputChange={setChatInput}
               onSend={() => sendChat()}
+              onClear={clearChat}
             />
+          </section>
+        )}
+
+        {activeNav === "projects" && selectedProject && projectSection === "console" && (
+          <section className="workspace-card">
+            <ConsolePanel />
           </section>
         )}
       </main>

@@ -9,6 +9,7 @@ import {
   Database,
   Globe,
   Layers,
+  Terminal,
 } from "lucide-react";
 
 // ---- 项目 ----
@@ -127,6 +128,10 @@ export type MCPConnectionStatus = MCPConnectionConfig & {
 export type MCPPrefill = {
   name: string;
   type: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  database?: string;
   env: string[];
 };
 
@@ -179,6 +184,7 @@ export type NodeletItem = {
 
 export const navigation = [
   { id: "projects", label: "项目", icon: FolderKanban },
+  { id: "console", label: "控制台", icon: Terminal },
 ] as const;
 
 // ---- 项目内导航 ----
@@ -187,6 +193,7 @@ export const projectNavigation = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
   { id: "mcp", label: "MCP 连接", icon: Wrench },
   { id: "chat", label: "助手", icon: Sparkles },
+  { id: "console", label: "控制台", icon: Terminal },
 ] as const;
 
 // ---- 服务类型图标映射 ----

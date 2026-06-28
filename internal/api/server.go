@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,11 +14,14 @@ import (
 	"oops/internal/config"
 	"oops/internal/connection"
 	"oops/internal/connection/checker"
+	"oops/internal/console"
 	"oops/internal/llm"
+	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
 
 	"github.com/cloudwego/eino/components/tool"
+	"go.uber.org/zap"
 )
 
 // NodeletClient 是中心端访问 oops-nodelet 的最小接口。
@@ -92,7 +94,7 @@ func NewFromConfig(cfg config.Config) *Server {
 		s.onMCPToolsChanged(mcpBaseTools)
 	})
 	if err != nil {
-		log.Printf("mcp: manager: %v", err)
+		logutil.Error("mcp: manager", zap.Error(err))
 	} else {
 		s.mcpManager = mgr
 	}
@@ -100,7 +102,7 @@ func NewFromConfig(cfg config.Config) *Server {
 	// 项目存储。
 	projectStore, err := config.NewProjectStore(config.DefaultProjectsPath)
 	if err != nil {
-		log.Printf("projects: store: %v", err)
+		logutil.Error("projects: store", zap.Error(err))
 	} else {
 		s.projectStore = projectStore
 	}
@@ -130,14 +132,14 @@ func New(options Options) *Server {
 
 		nativeTools, err := llm.NewTools(s)
 		if err != nil {
-			log.Printf("llm: create tools: %v", err)
+			logutil.Error("llm: create tools", zap.Error(err))
 			return s
 		}
 
 		client, err := llm.NewClient(ctx, options.LLMConfig, nativeTools)
 		if err != nil {
 			// LLM 不可用时不影响其他功能，仅日志输出。
-			log.Printf("llm: create client: %v", err)
+			logutil.Error("llm: create client", zap.Error(err))
 		} else {
 			s.llmClient = client
 		}
@@ -166,6 +168,9 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat", wrap(s.handleChat))
 	mux.HandleFunc("/api/mcp/connections", wrap(s.handleMCPConnections))
 	mux.HandleFunc("/api/mcp/connections/", wrap(s.handleMCPConnection))
+
+	// 实时控制台 SSE。
+	mux.HandleFunc("/api/console/stream", securityHeaders(authorize(console.Default().SSEHandler)))
 
 	// 项目与容器详情 API。
 	mux.HandleFunc("/api/projects", wrap(s.handleProjects))
@@ -533,7 +538,7 @@ func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
 
 	nativeTools, err := llm.NewTools(s)
 	if err != nil {
-		log.Printf("mcp: create native tools: %v", err)
+		logutil.Error("mcp: create native tools", zap.Error(err))
 		return
 	}
 
@@ -546,7 +551,11 @@ func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
 	}
 
 	s.llmClient.UpdateTools(allTools)
-	log.Printf("mcp: tools updated, %d total (%d native + %d mcp)", len(allTools), len(nativeTools), len(mcpBaseTools))
+	logutil.Info("mcp: tools updated",
+		zap.Int("total", len(allTools)),
+		zap.Int("native", len(nativeTools)),
+		zap.Int("mcp", len(mcpBaseTools)),
+	)
 }
 
 // handleProjectsRouter 根据 URL 路径将请求分发到对应的项目子资源 handler。
@@ -690,7 +699,7 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.mcpManager.Test(cfg); err != nil {
-		log.Printf("api: mcp test: %v", err)
+		logutil.Error("api: mcp test", zap.Error(err))
 		writeJSON(w, map[string]string{"status": "failed", "error": "connection test failed"})
 		return
 	}

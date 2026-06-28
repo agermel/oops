@@ -72,11 +72,16 @@
   .project-split {
     grid-template-columns: 1fr;
     flex-direction: column;
+    align-items: stretch;
   }
 
   .server-tree {
     width: 100%;
     min-width: 0;
     min-height: 280px;
+  }
+
+  .container-detail {
+    width: 100%;
   }
 }

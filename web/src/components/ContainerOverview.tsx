@@ -5,12 +5,12 @@ import { serviceTypeIcons, serviceTypeLabels } from "../types";
 export function ContainerOverview({ detail, onConfigureMCP }: { detail: ContainerDetail; onConfigureMCP: (prefill: MCPPrefill) => void }) {
   function buildMCPPrefill(): MCPPrefill {
     const env: string[] = [];
+    // 把 DSN 中的 host/port/user/database 提出来作为独立字段，密码留空让用户填。
+    // env 里仍然放一个模板，方便高级用户直接修改。
     if (detail.dsn?.raw) {
       const type = detail.serviceType;
       if (type === "mysql") env.push(`MYSQL_DSN=${detail.dsn.raw}`);
       else if (type === "redis") {
-        // Redis MCP server typically accepts REDIS_URL or individual vars.
-        // Push the raw URL first, then individual vars for servers that need them.
         env.push(`REDIS_URL=${detail.dsn.raw}`);
         if (detail.dsn.host) env.push(`REDIS_HOST=${detail.dsn.host}`);
         if (detail.dsn.port) env.push(`REDIS_PORT=${String(detail.dsn.port)}`);
@@ -21,6 +21,10 @@ export function ContainerOverview({ detail, onConfigureMCP }: { detail: Containe
     return {
       name: detail.container.name,
       type: detail.serviceType,
+      host: detail.dsn?.host,
+      port: detail.dsn?.port,
+      user: detail.dsn?.user,
+      database: detail.dsn?.database,
       env,
     };
   }
