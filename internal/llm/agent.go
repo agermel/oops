@@ -103,6 +103,11 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 	go func() {
 		defer close(events)
 
+		// 派生可取消的 context：外层 goroutine 退出时（无论正常结束、迭代器报错、
+		// 还是客户端断开），cancel 能及时终止内层 agent.Generate，避免浪费 LLM 调用。
+		agentCtx, agentCancel := context.WithCancel(ctx)
+		defer agentCancel()
+
 		// 在后台执行 agent.Generate，主循环读取迭代器。
 		type generateResult struct {
 			msg *schema.Message
@@ -115,19 +120,17 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 				schema.SystemMessage(systemPrompt),
 				schema.UserMessage(question),
 			}
-			resp, err := agent.Generate(ctx, messages, opt)
+			resp, err := agent.Generate(agentCtx, messages, opt)
 			genDone <- generateResult{msg: resp, err: err}
 		}()
 
 		// 读取中间步骤。
 		iter := future.GetMessages()
-		iterAborted := false
 		for {
 			msg, ok, err := iter.Next()
 			if err != nil {
 				logutil.Error("llm: iter", zap.Error(err))
 				sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(err.Error())})
-				iterAborted = true
 				return
 			}
 			if !ok {
@@ -149,10 +152,6 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 
 		// 等待 agent.Generate 完成，获取最终答案。
 		result := <-genDone
-		// 若迭代器中途报错则跳过后续处理，避免双发 error 事件。
-		if iterAborted {
-			return
-		}
 		if result.err != nil {
 			logutil.Error("llm: generate", zap.Error(result.err))
 			sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(result.err.Error())})
