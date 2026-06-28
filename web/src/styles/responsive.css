@@ -49,10 +49,6 @@
     padding: 0;
   }
 
-  .app-bar {
-    height: 48px;
-  }
-
   .content {
     padding: 14px;
   }
@@ -73,8 +69,6 @@
     font-size: 34px;
   }
 
-  .toolbar,
-  .metrics,
   .project-split {
     grid-template-columns: 1fr;
     flex-direction: column;

@@ -1,5 +1,5 @@
 import React from "react";
-import { Plus, FolderKanban, Trash2, Edit3, ChevronRight } from "lucide-react";
+import { Plus, FolderKanban, Trash2, Edit3, ChevronRight, X } from "lucide-react";
 import type { Project } from "../types";
 
 function emptyProject(): Project {
@@ -131,7 +131,7 @@ export function ProjectsView({
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <h2>{editing.id ? "编辑项目" : "新建项目"}</h2>
-              <button className="ghost-button" onClick={closeForm}>✕</button>
+              <button className="ghost-button" onClick={closeForm}><X size={18} /></button>
             </div>
             <div className="modal-body">
               <label>名称</label>

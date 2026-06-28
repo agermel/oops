@@ -1,4 +1,4 @@
-import { Server, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { Server, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import React from "react";
 import type { ServerWithNodelet, ContainerWithType, NodeletItem } from "../types";
 import { serviceTypeIcons, serviceTypeLabels } from "../types";
@@ -146,7 +146,7 @@ export function ServerTree({
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <h2>添加服务器</h2>
-              <button className="ghost-button" onClick={() => setShowAddModal(false)}>✕</button>
+              <button className="ghost-button" onClick={() => setShowAddModal(false)}><X size={18} /></button>
             </div>
             <div className="modal-body">
               {addError && <div className="error-line">{addError}</div>}

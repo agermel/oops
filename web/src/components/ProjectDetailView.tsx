@@ -6,6 +6,7 @@ import type {
   ContainerWithType,
   ContainerDetail as ContainerDetailType,
   HealthResult,
+  LogEntry,
 } from "../types";
 import { ServerTree } from "./ServerTree";
 import { ContainerDetailView } from "./ContainerDetail";
@@ -51,7 +52,7 @@ export function ProjectDetailView({
   health?: HealthResult;
   healthLoading: boolean;
   expandedServers: Set<string>;
-  logs: any[];
+  logs: LogEntry[];
   logsLoading: boolean;
   autoScroll: boolean;
   onBack: () => void;

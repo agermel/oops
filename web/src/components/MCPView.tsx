@@ -209,7 +209,7 @@ export function MCPView() {
           <tbody>
             {connections.length === 0 && !loading ? (
               <tr>
-                <td colSpan={6} style={{ textAlign: "center", padding: "32px 0", color: "var(--muted)" }}>
+                <td colSpan={6} className="mcp-table-empty">
                   暂无 MCP 连接，点击"新增"创建
                 </td>
               </tr>

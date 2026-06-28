@@ -80,23 +80,10 @@ button {
   min-height: 86px;
   display: grid;
   place-items: center;
+  padding: 2rem;
   color: var(--muted);
+  font-size: 0.85rem;
   border: 1px dashed #d8e3f4;
   border-radius: 8px;
   background: #fbfdff;
-}
-
-.empty {
-  height: 92px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.empty svg,
-.empty span {
-  vertical-align: middle;
-}
-
-.empty svg {
-  margin-right: 8px;
 }

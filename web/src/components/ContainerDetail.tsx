@@ -1,6 +1,6 @@
 import React from "react";
 import { Info, Gauge, Wrench, FileText, RefreshCw } from "lucide-react";
-import type { ContainerDetail as ContainerDetailType, HealthResult } from "../types";
+import type { ContainerDetail as ContainerDetailType, HealthResult, LogEntry } from "../types";
 import { ContainerOverview } from "./ContainerOverview";
 import { ContainerHealth } from "./ContainerHealth";
 import { ContainerMCP } from "./ContainerMCP";
@@ -35,7 +35,7 @@ export function ContainerDetailView({
   health?: HealthResult;
   healthLoading: boolean;
   onHealthCheck: () => void;
-  logs: any[];
+  logs: LogEntry[];
   logsLoading: boolean;
   autoScroll: boolean;
   onAutoScrollChange: (v: boolean) => void;
