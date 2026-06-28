@@ -95,6 +95,14 @@ export type DSNInfo = {
   raw?: string;
 };
 
+// DSNConfig is the response from GET /containers/:cid/dsn.
+export type DSNConfig = {
+  detected: Record<string, string>;
+  overrides: Record<string, string>;
+  merged: Record<string, string>;
+  hasOverrides: boolean;
+};
+
 export type HealthResult = {
   status: "alive" | "dead" | "unknown";
   message?: string;
@@ -159,6 +167,8 @@ export type ContainerDetail = {
   container: ContainerInspect;
   serviceType: string;
   dsn?: DSNInfo;
+  dsnOverrides?: Record<string, string>;
+  hasDSNOverrides: boolean;
   health?: HealthResult;
   mcp?: MCPStatus;
 };

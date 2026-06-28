@@ -1,14 +1,16 @@
 import React from "react";
-import { Info, Gauge, Wrench, FileText } from "lucide-react";
+import { Info, Gauge, Wrench, FileText, Settings } from "lucide-react";
 import type { ContainerDetail as ContainerDetailType, HealthResult, LogEntry } from "../types";
 import { ContainerOverview } from "./ContainerOverview";
 import { ContainerHealth } from "./ContainerHealth";
 import { ContainerMCP } from "./ContainerMCP";
 import { ContainerLogs } from "./ContainerLogs";
+import { ContainerDSN } from "./ContainerDSN";
 
 const TABS = [
   { id: "overview", label: "概览", icon: Info },
   { id: "health", label: "健康", icon: Gauge },
+  { id: "dsn", label: "DSN 配置", icon: Settings },
   { id: "mcp", label: "MCP", icon: Wrench },
   { id: "logs", label: "日志", icon: FileText },
 ] as const;
@@ -54,6 +56,10 @@ export function ContainerDetailView({
 }) {
   const [activeTab, setActiveTab] = React.useState<TabID>("overview");
 
+  function handleEditDSN() {
+    setActiveTab("dsn");
+  }
+
   return (
     <div className="container-detail">
       {/* Tab bar */}
@@ -83,11 +89,22 @@ export function ContainerDetailView({
         ) : (
           <>
             <div role="tabpanel" hidden={activeTab !== "overview"}>
-              {activeTab === "overview" && <ContainerOverview detail={detail} />}
+              {activeTab === "overview" && <ContainerOverview detail={detail} onEditDSN={handleEditDSN} />}
             </div>
             <div role="tabpanel" hidden={activeTab !== "health"}>
               {activeTab === "health" && (
                 <ContainerHealth health={health || detail.health} loading={healthLoading} onCheck={onHealthCheck} />
+              )}
+            </div>
+            <div role="tabpanel" hidden={activeTab !== "dsn"}>
+              {activeTab === "dsn" && (
+                <ContainerDSN
+                  projectId={projectId}
+                  nodeletId={nodeletId}
+                  containerId={containerId}
+                  serviceType={detail.serviceType}
+                  onChanged={onMCPChanged}
+                />
               )}
             </div>
             <div role="tabpanel" hidden={activeTab !== "mcp"}>

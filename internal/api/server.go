@@ -61,6 +61,7 @@ type Server struct {
 	llmClient     *llm.Client
 	mcpManager    *mcp.Manager
 	projectStore  *config.ProjectStore
+	dsnStore      *config.ContainerDSNStore
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -105,6 +106,14 @@ func NewFromConfig(cfg config.Config) *Server {
 		logutil.Error("projects: store", zap.Error(err))
 	} else {
 		s.projectStore = projectStore
+	}
+
+	// 容器 DSN 覆盖值存储。
+	dsnStore, err := config.NewContainerDSNStore("config/container_dsn.json")
+	if err != nil {
+		logutil.Error("dsn: store", zap.Error(err))
+	} else {
+		s.dsnStore = dsnStore
 	}
 
 	return s
@@ -712,6 +721,10 @@ func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(parts) >= 6 && parts[5] == "mcp" {
 				s.handleContainerMCPConnection(w, r)
+				return
+			}
+			if len(parts) >= 6 && parts[5] == "dsn" {
+				s.handleContainerDSN(w, r)
 				return
 			}
 			s.handleProjectContainers(w, r)

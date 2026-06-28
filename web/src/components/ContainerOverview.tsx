@@ -1,7 +1,8 @@
 import type { ContainerDetail } from "../types";
 import { serviceTypeIcons, serviceLabel } from "../types";
+import { DSNInfoCard } from "./DSNInfoCard";
 
-export function ContainerOverview({ detail }: { detail: ContainerDetail }) {
+export function ContainerOverview({ detail, onEditDSN }: { detail: ContainerDetail; onEditDSN?: () => void }) {
   const Icon = serviceTypeIcons[detail.serviceType] || serviceTypeIcons.unknown;
   const label = serviceLabel(detail.serviceType);
 
@@ -33,43 +34,12 @@ export function ContainerOverview({ detail }: { detail: ContainerDetail }) {
           </dl>
         </div>
 
-        {detail.dsn && (
-          <div className="overview-card">
-            <h3>连接信息 (DSN)</h3>
-            <dl>
-              {detail.dsn.host && (
-                <>
-                  <dt>主机</dt>
-                  <dd className="mono">{detail.dsn.host}</dd>
-                </>
-              )}
-              {detail.dsn.port > 0 && (
-                <>
-                  <dt>端口</dt>
-                  <dd className="mono">{detail.dsn.port}</dd>
-                </>
-              )}
-              {detail.dsn.user && (
-                <>
-                  <dt>用户</dt>
-                  <dd className="mono">{detail.dsn.user}</dd>
-                </>
-              )}
-              {detail.dsn.database && (
-                <>
-                  <dt>数据库</dt>
-                  <dd className="mono">{detail.dsn.database}</dd>
-                </>
-              )}
-              {detail.dsn.raw && (
-                <>
-                  <dt>完整 DSN</dt>
-                  <dd className="mono dsn-raw">{detail.dsn.raw}</dd>
-                </>
-              )}
-            </dl>
-          </div>
-        )}
+        <DSNInfoCard
+          dsn={detail.dsn}
+          dsnOverrides={detail.dsnOverrides}
+          hasDSNOverrides={detail.hasDSNOverrides}
+          onEdit={onEditDSN}
+        />
 
         {detail.container.ports && detail.container.ports.length > 0 && (
           <div className="overview-card">

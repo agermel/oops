@@ -1547,3 +1547,107 @@
 .toggle-input:checked + .toggle-track .toggle-thumb {
   transform: translateX(18px);
 }
+
+/* ---- DSN 配置 ---- */
+
+.dsn-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem;
+}
+
+.dsn-config-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0.5rem 0 0;
+}
+
+.dsn-kv-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dsn-kv-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.dsn-kv-table thead {
+  background: var(--bg-muted);
+}
+
+.dsn-kv-table th,
+.dsn-kv-table td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.dsn-kv-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.dsn-kv-table input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: var(--font-mono, monospace);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.dsn-kv-table input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+}
+
+.dsn-kv-col-key { width: 30%; }
+.dsn-kv-col-value { width: 60%; }
+.dsn-kv-col-del { width: 10%; }
+
+.dsn-kv-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.dsn-kv-actions-right {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.overview-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.overview-card-head h3 {
+  margin: 0;
+}
+
+.success-line {
+  background: var(--bg-success, #e6f7e6);
+  color: var(--text-success, #2d6a2d);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.button-muted {
+  opacity: 0.5;
+}
+
+.dsn-overridden {
+  text-decoration: underline;
+  text-decoration-color: var(--accent, #3b82f6);
+  text-underline-offset: 3px;
+}

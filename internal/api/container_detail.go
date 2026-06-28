@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,11 +15,13 @@ import (
 
 // ContainerDetail 是容器详情页的聚合视图。
 type ContainerDetail struct {
-	Container   nodelet.ContainerInspect `json:"container"`
-	ServiceType string                   `json:"serviceType"`
-	DSN         *docker.DSNInfo          `json:"dsn,omitempty"`
-	Health      *healthResult            `json:"health,omitempty"`
-	MCP         *mcpStatus               `json:"mcp,omitempty"`
+	Container      nodelet.ContainerInspect `json:"container"`
+	ServiceType    string                   `json:"serviceType"`
+	DSN            *docker.DSNInfo          `json:"dsn,omitempty"`
+	DSNOverrides   map[string]string        `json:"dsnOverrides,omitempty"`
+	HasDSNOverrides bool                    `json:"hasDSNOverrides"`
+	Health         *healthResult            `json:"health,omitempty"`
+	MCP            *mcpStatus               `json:"mcp,omitempty"`
 }
 
 // healthResult 是一次健康探测的结果。
@@ -51,10 +54,40 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 	stype := docker.DetectServiceType(detail.Image)
 	dsn := docker.ExtractDSN(stype, detail)
 
+	// 合并用户 DSN 覆盖值。
+	var dsnOverrides map[string]string
+	if s.dsnStore != nil {
+		dsnOverrides = s.dsnStore.Get(nodeletID, containerID)
+	}
+	if len(dsnOverrides) > 0 {
+		if dsn == nil {
+			dsn = &docker.DSNInfo{}
+		}
+		if v, ok := dsnOverrides["host"]; ok {
+			dsn.Host = v
+		}
+		if v, ok := dsnOverrides["port"]; ok {
+			if p, err := strconv.Atoi(v); err == nil {
+				dsn.Port = p
+			}
+		}
+		if v, ok := dsnOverrides["user"]; ok {
+			dsn.User = v
+		}
+		if v, ok := dsnOverrides["database"]; ok {
+			dsn.Database = v
+		}
+		if v, ok := dsnOverrides["raw"]; ok {
+			dsn.Raw = v
+		}
+	}
+
 	result := &ContainerDetail{
-		Container:   detail,
-		ServiceType: string(stype),
-		DSN:         dsn,
+		Container:      detail,
+		ServiceType:    string(stype),
+		DSN:            dsn,
+		DSNOverrides:   dsnOverrides,
+		HasDSNOverrides: len(dsnOverrides) > 0,
 	}
 
 	// 查找匹配的 MCP 连接：优先按容器 ID 精确匹配，回退按类型匹配。
@@ -266,6 +299,143 @@ func (s *Server) handleContainerMCPConnection(w http.ResponseWriter, r *http.Req
 		}
 		if err := s.mcpManager.Remove(bound.ID); err != nil {
 			writeJSONError(w, err.Error(), mcpErrorStatus(err))
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	default:
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// dsnConfigResponse is the JSON shape for the DSN config endpoint.
+type dsnConfigResponse struct {
+	Detected     map[string]string `json:"detected"`
+	Overrides    map[string]string `json:"overrides"`
+	Merged       map[string]string `json:"merged"`
+	HasOverrides bool              `json:"hasOverrides"`
+}
+
+// dsnSaveRequest is the JSON shape for saving DSN overrides.
+type dsnSaveRequest struct {
+	Pairs map[string]string `json:"pairs"`
+}
+
+// dsnInfoToMap converts a docker.DSNInfo to a flat KV map.
+func dsnInfoToMap(dsn *docker.DSNInfo) map[string]string {
+	if dsn == nil {
+		return map[string]string{}
+	}
+	m := map[string]string{}
+	if dsn.Host != "" {
+		m["host"] = dsn.Host
+	}
+	if dsn.Port > 0 {
+		m["port"] = strconv.Itoa(dsn.Port)
+	}
+	if dsn.User != "" {
+		m["user"] = dsn.User
+	}
+	if dsn.Database != "" {
+		m["database"] = dsn.Database
+	}
+	if dsn.Raw != "" {
+		m["raw"] = dsn.Raw
+	}
+	return m
+}
+
+// mergeDSN merges user overrides on top of detected values.
+func mergeDSN(detected, overrides map[string]string) map[string]string {
+	merged := make(map[string]string, len(detected)+len(overrides))
+	for k, v := range detected {
+		merged[k] = v
+	}
+	for k, v := range overrides {
+		merged[k] = v
+	}
+	return merged
+}
+
+// handleContainerDSN handles per-container DSN configuration.
+// GET  /api/projects/:pid/servers/:sid/containers/:cid/dsn
+// PUT  /api/projects/:pid/servers/:sid/containers/:cid/dsn
+// DELETE /api/projects/:pid/servers/:sid/containers/:cid/dsn
+func (s *Server) handleContainerDSN(w http.ResponseWriter, r *http.Request) {
+	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
+	if !ok {
+		writeJSONError(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// 需要容器详情来获取检测到的 DSN（GET 需要，PUT/DELETE 不需要但用于验证容器存在。
+	item, itemOK := s.findNodelet(nodeletID)
+	if !itemOK {
+		writeJSONError(w, "nodelet not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
+		detail, err := s.nodeletClient.InspectContainer(ctx, item.Address, item.Token, containerID)
+		if err != nil {
+			writeJSONError(w, "inspect container: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		stype := docker.DetectServiceType(detail.Image)
+		var detected map[string]string
+		if stype.IsDatabase() {
+			dsn := docker.ExtractDSN(stype, detail)
+			detected = dsnInfoToMap(dsn)
+		} else {
+			detected = map[string]string{}
+		}
+
+		var overrides map[string]string
+		if s.dsnStore != nil {
+			overrides = s.dsnStore.Get(nodeletID, containerID)
+		}
+		if overrides == nil {
+			overrides = map[string]string{}
+		}
+
+		writeJSON(w, dsnConfigResponse{
+			Detected:     detected,
+			Overrides:    overrides,
+			Merged:       mergeDSN(detected, overrides),
+			HasOverrides: len(overrides) > 0,
+		})
+
+	case http.MethodPut:
+		if s.dsnStore == nil {
+			writeJSONError(w, "dsn store not available", http.StatusInternalServerError)
+			return
+		}
+
+		var req dsnSaveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := s.dsnStore.Set(nodeletID, containerID, req.Pairs); err != nil {
+			writeJSONError(w, "save dsn: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	case http.MethodDelete:
+		if s.dsnStore == nil {
+			writeJSONError(w, "dsn store not available", http.StatusInternalServerError)
+			return
+		}
+
+		if err := s.dsnStore.Delete(nodeletID, containerID); err != nil {
+			writeJSONError(w, "delete dsn: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
