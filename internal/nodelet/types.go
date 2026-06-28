@@ -40,3 +40,22 @@ type LogEntry struct {
 	RawMessage  string    `json:"rawMessage,omitempty"`
 	Level       string    `json:"level,omitempty"`
 }
+
+// PortMapping 表示容器的一个端口映射。
+type PortMapping struct {
+	HostPort      string `json:"hostPort,omitempty"`
+	ContainerPort int    `json:"containerPort"`
+	Protocol      string `json:"protocol,omitempty"`
+}
+
+// ContainerInspect 包含容器的详细信息，用于 DSN 提取和服务识别。
+type ContainerInspect struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Image   string            `json:"image"`
+	State   string            `json:"state"`
+	Env     []string          `json:"env"`     // 环境变量列表
+	Ports   []PortMapping     `json:"ports"`   // 端口映射
+	HostID  string            `json:"hostId"`
+	Created time.Time         `json:"created"`
+}

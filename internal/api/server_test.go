@@ -26,6 +26,11 @@ func (f *fakeNodeletClient) Containers(context.Context, string, string) ([]nodel
 	return nil, nil
 }
 
+// InspectContainer 返回测试用容器详细信息。
+func (f *fakeNodeletClient) InspectContainer(context.Context, string, string, string) (nodelet.ContainerInspect, error) {
+	return nodelet.ContainerInspect{}, nil
+}
+
 // ContainerLogs 返回测试用历史日志。
 func (f *fakeNodeletClient) ContainerLogs(context.Context, string, string, string, string) ([]nodelet.LogEntry, error) {
 	return nil, nil

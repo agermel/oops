@@ -6,40 +6,37 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  FolderKanban,
+  Wrench,
+  Search,
+  Trash2,
+  Plus,
+  Server,
+  Database,
+  Globe,
+  Layers,
+  FileText,
 } from "lucide-react";
 
-// Connection 对应后端返回的连接配置。
-export type Connection = {
+// ---- 项目 ----
+
+export type Project = {
   id: string;
   name: string;
-  type: string;
-  address: string;
+  description?: string;
+  nodeletIds: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
-// Result 对应后端一次健康探测的结果。
-export type Result = {
-  connectionId: string;
-  status: "alive" | "dead" | "unknown";
-  message?: string;
-  latency: number;
-  checkedAt: string;
-};
+// ---- Nodelet / 服务器 ----
 
-// StatusItem 是连接状态接口的一行数据。
-export type StatusItem = {
-  connection: Connection;
-  result: Result;
-  error?: string;
-};
-
-// NodeletConfig 对应中心端配置的一台 nodelet。
 export type NodeletConfig = {
   id: string;
   name: string;
   address: string;
 };
 
-// Host 对应 nodelet 返回的机器信息。
 export type Host = {
   id: string;
   name: string;
@@ -51,15 +48,22 @@ export type Host = {
   memTotal: number;
 };
 
-// NodeletItem 是中心端机器列表接口的一行数据。
-export type NodeletItem = {
-  nodelet: NodeletConfig;
-  host: Host;
+export type NodeletHostSummary = {
   available: boolean;
+  dockerVersion: string;
+  runtime: string;
+  nCPU: number;
+  memTotal: number;
+};
+
+export type ServerWithNodelet = {
+  nodelet: NodeletConfig;
+  host: NodeletHostSummary;
   error?: string;
 };
 
-// Container 对应某台机器上的一个容器。
+// ---- 容器 ----
+
 export type Container = {
   id: string;
   name: string;
@@ -71,7 +75,64 @@ export type Container = {
   startedAt: string;
 };
 
-// LogEntry 对应一条容器日志。
+export type ContainerWithType = {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  health?: string;
+  serviceType: string;
+};
+
+export type ContainerInspect = {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  env: string[];
+  ports: PortMapping[];
+  hostId: string;
+  created: string;
+};
+
+export type PortMapping = {
+  hostPort?: string;
+  containerPort: number;
+  protocol?: string;
+};
+
+// ---- 容器详情聚合 ----
+
+export type DSNInfo = {
+  host: string;
+  port: number;
+  database?: string;
+  user?: string;
+  raw?: string;
+};
+
+export type HealthResult = {
+  status: "alive" | "dead" | "unknown";
+  message?: string;
+  latency: number;
+};
+
+export type MCPStatus = {
+  connected: boolean;
+  toolCount: number;
+  error?: string;
+};
+
+export type ContainerDetail = {
+  container: ContainerInspect;
+  serviceType: string;
+  dsn?: DSNInfo;
+  health?: HealthResult;
+  mcp?: MCPStatus;
+};
+
+// ---- 日志 ----
+
 export type LogEntry = {
   timestamp: string;
   containerId: string;
@@ -81,7 +142,31 @@ export type LogEntry = {
   level?: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "unknown";
 };
 
-// StepEvent 对应 Agent 执行过程中的单个步骤（SSE 事件）。
+// ---- 连接健康检查 (保留兼容) ----
+
+export type Connection = {
+  id: string;
+  name: string;
+  type: string;
+  address: string;
+};
+
+export type Result = {
+  connectionId: string;
+  status: "alive" | "dead" | "unknown";
+  message?: string;
+  latency: number;
+  checkedAt: string;
+};
+
+export type StatusItem = {
+  connection: Connection;
+  result: Result;
+  error?: string;
+};
+
+// ---- LLM 对话 ----
+
 export type StepEvent = {
   type: "thinking" | "tool_call" | "tool_result" | "answer" | "error";
   content: string;
@@ -90,7 +175,6 @@ export type StepEvent = {
   toolCallId?: string;
 };
 
-// ChatExchange 是一轮完整的对话记录（用户问题 + Agent 步骤 + 最终答案）。
 export type ChatExchange = {
   question: string;
   steps: StepEvent[];
@@ -98,11 +182,14 @@ export type ChatExchange = {
   error?: string;
 };
 
-export const navigation = [
-  { id: "connections", label: "连接", icon: Gauge },
-  { id: "fleet", label: "容器", icon: TerminalSquare },
-  { id: "chat", label: "助手", icon: Sparkles },
-] as const;
+// ---- 兼容旧组件 ----
+
+export type NodeletItem = {
+  nodelet: NodeletConfig;
+  host: Host;
+  available: boolean;
+  error?: string;
+};
 
 export const statusIcon = {
   alive: CheckCircle2,
@@ -110,7 +197,6 @@ export const statusIcon = {
   unknown: AlertTriangle,
 };
 
-// MCPConnectionConfig 对应后端 MCP 连接配置。
 export type MCPConnectionConfig = {
   id: string;
   name: string;
@@ -121,12 +207,49 @@ export type MCPConnectionConfig = {
   enabled: boolean;
 };
 
-// MCPConnectionStatus 是带运行时状态的 MCP 连接。
 export type MCPConnectionStatus = MCPConnectionConfig & {
   status: "running" | "stopped" | "error";
   error?: string;
   toolCount: number;
 };
+
+// ---- 导航 ----
+
+export const navigation = [
+  { id: "projects", label: "项目", icon: FolderKanban },
+  { id: "chat", label: "助手", icon: Sparkles },
+] as const;
+
+// ---- 服务类型图标映射 ----
+
+export const serviceTypeIcons: Record<string, typeof Database> = {
+  mysql: Database,
+  redis: Layers,
+  postgres: Database,
+  mongo: Database,
+  nginx: Globe,
+  elasticsearch: Search,
+  kafka: Layers,
+  etcd: Layers,
+  unknown: Server,
+};
+
+export const serviceTypeLabels: Record<string, string> = {
+  mysql: "MySQL",
+  redis: "Redis",
+  postgres: "PostgreSQL",
+  mongo: "MongoDB",
+  nginx: "Nginx",
+  elasticsearch: "Elasticsearch",
+  kafka: "Kafka",
+  etcd: "Etcd",
+  jaeger: "Jaeger",
+  nacos: "Nacos",
+  rabbitmq: "RabbitMQ",
+  unknown: "未知",
+};
+
+// ---- 常量 ----
 
 export const MAX_LOGS = 2000;
 export const LOG_FLUSH_MS = 250;

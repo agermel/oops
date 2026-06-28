@@ -11,6 +11,7 @@ import (
 type fakeHostProvider struct {
 	host       Host
 	containers []Container
+	inspect    ContainerInspect
 	logs       []LogEntry
 	streamLogs []LogEntry
 	err        error
@@ -24,6 +25,11 @@ func (f fakeHostProvider) Host(_ *http.Request) (Host, error) {
 // Containers 返回测试用容器列表。
 func (f fakeHostProvider) Containers(_ *http.Request) ([]Container, error) {
 	return f.containers, f.err
+}
+
+// ContainerInspect 返回测试用容器详细信息。
+func (f fakeHostProvider) ContainerInspect(_ *http.Request, _ string) (ContainerInspect, error) {
+	return f.inspect, f.err
 }
 
 // ContainerLogs 返回测试用容器日志。

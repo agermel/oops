@@ -1,20 +1,60 @@
 import React from "react";
-import { Plus, Trash2, Play, Square, Wrench, X } from "lucide-react";
+import { Plus, Trash2, Wrench, X } from "lucide-react";
 import type { MCPConnectionStatus } from "../types";
 
-// emptyForm 返回一个空白的连接配置表单。
-function emptyForm(): MCPConnectionStatus {
+// typeDefaults 定义了每种连接类型的默认命令、参数和环境变量占位符。
+const typeDefaults: Record<string, { command: string; args: string[]; env: string[] }> = {
+  mysql: {
+    command: "./bin/mysql-mcp-server",
+    args: ["--silent"],
+    env: ["MYSQL_DSN=user:pass@tcp(host:3306)/db?charset=utf8mb4"],
+  },
+  redis: {
+    command: "./bin/redis-mcp-server",
+    args: [],
+    env: ["REDIS_HOST=127.0.0.1", "REDIS_PORT=6379", "REDIS_DB=0", "REDIS_PWD="],
+  },
+  postgres: {
+    command: "uvx",
+    args: ["--from", "mcp-server-postgres@latest", "mcp-server-postgres"],
+    env: ["DATABASE_URL=postgres://user:pass@host:5432/db"],
+  },
+  other: {
+    command: "",
+    args: [],
+    env: [],
+  },
+};
+
+// emptyForm 返回一个空白连接配置表单，使用指定类型的默认值。
+function emptyForm(type?: string): MCPConnectionStatus {
+  const t = type || "mysql";
+  const defs = typeDefaults[t] || typeDefaults.other;
   return {
     id: "",
     name: "",
-    type: "mysql",
-    command: "mysql-mcp-server",
-    args: ["--read-only"],
-    env: [],
+    type: t,
+    command: defs.command,
+    args: [...defs.args],
+    env: [...defs.env],
     enabled: true,
     status: "stopped",
     toolCount: 0,
   };
+}
+
+// envPlaceholder 根据类型返回合适的占位提示。
+function envPlaceholder(type: string): string {
+  switch (type) {
+    case "mysql":
+      return "MYSQL_DSN=user:pass@tcp(host:3306)/db?charset=utf8mb4";
+    case "redis":
+      return "REDIS_HOST=127.0.0.1\nREDIS_PORT=6379\nREDIS_DB=0\nREDIS_PWD=";
+    case "postgres":
+      return "DATABASE_URL=postgres://user:pass@host:5432/db";
+    default:
+      return "KEY=VALUE（每行一个）";
+  }
 }
 
 // formToConfig 将表单中的数组字段序列化为后端期望的格式。
@@ -47,7 +87,7 @@ export function MCPView({
   const [testing, setTesting] = React.useState(false);
 
   function openAdd() {
-    setEditing(emptyForm());
+    setEditing(emptyForm("mysql"));
     setShowForm(true);
     setTestResult("");
   }
@@ -211,7 +251,17 @@ export function MCPView({
               <label>类型</label>
               <select
                 value={editing.type}
-                onChange={(e) => setEditing({ ...editing, type: e.target.value })}
+                onChange={(e) => {
+                  const newType = e.target.value;
+                  const defs = typeDefaults[newType] || typeDefaults.other;
+                  setEditing({
+                    ...editing,
+                    type: newType,
+                    command: defs.command,
+                    args: [...defs.args],
+                    env: [...defs.env],
+                  });
+                }}
               >
                 <option value="mysql">MySQL</option>
                 <option value="redis">Redis</option>
@@ -239,7 +289,7 @@ export function MCPView({
                 rows={4}
                 value={editing.env.join("\n")}
                 onChange={(e) => setEditing({ ...editing, env: e.target.value.split("\n").filter(Boolean) })}
-                placeholder={"MYSQL_DSN=user:pass@tcp(host:3306)/db?charset=utf8mb4&parseTime=True"}
+                placeholder={envPlaceholder(editing.type)}
               />
 
               <label className="checkbox-label">

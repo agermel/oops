@@ -57,6 +57,15 @@ func (c *Client) ContainerLogs(ctx context.Context, address string, token string
 	return logs, nil
 }
 
+// InspectContainer 读取远端 Nodelet 上某个容器的详细信息（环境变量、端口等）。
+func (c *Client) InspectContainer(ctx context.Context, address string, token string, containerID string) (ContainerInspect, error) {
+	var detail ContainerInspect
+	if err := c.get(ctx, address, ContainerInspectPath(containerID), token, &detail); err != nil {
+		return ContainerInspect{}, err
+	}
+	return detail, nil
+}
+
 // ContainerLogsStream 读取远端 Nodelet 上某个容器的实时日志 SSE 流。
 func (c *Client) ContainerLogsStream(ctx context.Context, address string, token string, containerID string, tail string) (io.ReadCloser, error) {
 	route := ContainerLogsStreamPath(containerID)

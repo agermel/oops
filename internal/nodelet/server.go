@@ -17,6 +17,9 @@ type Provider interface {
 	// Containers 返回当前机器上的容器列表。
 	Containers(r *http.Request) ([]Container, error)
 
+	// ContainerInspect 返回指定容器的详细信息（环境变量、端口等）。
+	ContainerInspect(r *http.Request, containerID string) (ContainerInspect, error)
+
 	// ContainerLogs 返回指定容器的历史日志。
 	ContainerLogs(r *http.Request, containerID string) ([]LogEntry, error)
 
@@ -103,6 +106,13 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
+	case "inspect":
+		detail, err := s.provider.ContainerInspect(r, containerID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
 	case "logs":
 		logs, err := s.provider.ContainerLogs(r, containerID)
 		if err != nil {
@@ -152,12 +162,15 @@ func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Reques
 func splitContainerPath(path string) (string, string, bool) {
 	rest := strings.TrimPrefix(path, "/containers/")
 	parts := strings.Split(rest, "/")
-	if len(parts) == 2 && parts[0] != "" && parts[1] == "logs" {
+	if len(parts) == 2 && parts[0] != "" {
 		containerID, err := url.PathUnescape(parts[0])
 		if err != nil {
 			return "", "", false
 		}
-		return containerID, parts[1], true
+		action := parts[1]
+		if action == "logs" || action == "inspect" {
+			return containerID, action, true
+		}
 	}
 	if len(parts) == 3 && parts[0] != "" && parts[1] == "logs" && parts[2] == "stream" {
 		containerID, err := url.PathUnescape(parts[0])

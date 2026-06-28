@@ -30,6 +30,9 @@ type NodeletClient interface {
 	// Containers 读取远端 Nodelet 上的容器列表。
 	Containers(context.Context, string, string) ([]nodelet.Container, error)
 
+	// InspectContainer 读取远端 Nodelet 上某个容器的详细信息（环境变量、端口等）。
+	InspectContainer(context.Context, string, string, string) (nodelet.ContainerInspect, error)
+
 	// ContainerLogs 读取远端 Nodelet 上某个容器的历史日志。
 	ContainerLogs(context.Context, string, string, string, string) ([]nodelet.LogEntry, error)
 
@@ -55,6 +58,7 @@ type Server struct {
 	registry      *connection.Registry
 	llmClient     *llm.Client
 	mcpManager    *mcp.Manager
+	projectStore  *config.ProjectStore
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -91,6 +95,14 @@ func NewFromConfig(cfg config.Config) *Server {
 		log.Printf("mcp: manager: %v", err)
 	} else {
 		s.mcpManager = mgr
+	}
+
+	// 项目存储。
+	projectStore, err := config.NewProjectStore(config.DefaultProjectsPath)
+	if err != nil {
+		log.Printf("projects: store: %v", err)
+	} else {
+		s.projectStore = projectStore
 	}
 
 	return s
@@ -149,6 +161,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/mcp/connections", s.handleMCPConnections)
 	mux.HandleFunc("/api/mcp/connections/", s.handleMCPConnection)
+
+	// 项目与容器详情 API。
+	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("/api/projects/", s.handleProjectsRouter)
 }
 
 // handleConnectionStatus 执行所有连接检查并返回 JSON。
@@ -370,9 +386,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// 向大模型请求，流式返回每一步。
+	// 返回类型 <-chan，颗粒度是每一步
 	events, err := s.llmClient.Ask(ctx, req.Question)
 	if err != nil {
-		writeJSON(w, map[string]string{"error": err.Error()})
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -517,6 +534,51 @@ func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
 	log.Printf("mcp: tools updated, %d total (%d native + %d mcp)", len(allTools), len(nativeTools), len(mcpBaseTools))
 }
 
+// handleProjectsRouter 根据 URL 路径将请求分发到对应的项目子资源 handler。
+func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) == 0 || parts[0] == "" {
+		// /api/projects/ (trailing slash) → redirect to /api/projects
+		s.handleProjects(w, r)
+		return
+	}
+
+	// /api/projects/:pid
+	if len(parts) == 1 {
+		s.handleProject(w, r)
+		return
+	}
+
+	// /api/projects/:pid/servers
+	// /api/projects/:pid/servers/:sid/containers
+	// /api/projects/:pid/servers/:sid/containers/:cid
+	// /api/projects/:pid/servers/:sid/containers/:cid/logs/stream
+	// /api/projects/:pid/servers/:sid/containers/:cid/check
+	if parts[1] == "servers" {
+		if len(parts) == 2 {
+			s.handleProjectServers(w, r)
+			return
+		}
+		if len(parts) >= 4 && parts[3] == "containers" {
+			// 子资源: logs/stream, check
+			if len(parts) >= 7 && parts[5] == "logs" && parts[6] == "stream" {
+				s.handleProjectLogsStream(w, r)
+				return
+			}
+			if len(parts) >= 6 && parts[5] == "check" {
+				s.handleProjectHealthCheck(w, r)
+				return
+			}
+			s.handleProjectContainers(w, r)
+			return
+		}
+	}
+
+	http.NotFound(w, r)
+}
+
 // handleMCPConnections handles GET (list) and POST (add) on /api/mcp/connections.
 func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -538,7 +600,7 @@ func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.mcpManager.Add(cfg); err != nil {
-			writeJSON(w, map[string]string{"error": err.Error()})
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -570,7 +632,7 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.mcpManager.Update(cfg); err != nil {
-			writeJSON(w, map[string]string{"error": err.Error()})
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -581,7 +643,7 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.mcpManager.Remove(id); err != nil {
-			writeJSON(w, map[string]string{"error": err.Error()})
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -617,4 +679,11 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// writeJSONError 写入 JSON 格式的错误响应。
+func writeJSONError(w http.ResponseWriter, msg string, status int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
