@@ -624,6 +624,166 @@
   color: #7a8499;
 }
 
+/* ---- MCP 工具列表（展开行 / ContainerMCP 内联） ---- */
+.mcp-count-cell {
+  text-align: center;
+}
+
+.mcp-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #3f4b5d;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.mcp-expand-btn:hover {
+  background: #f0eef9;
+  color: #6356e5;
+}
+
+.mcp-expand-btn.disabled {
+  cursor: default;
+  color: #c4c9d4;
+}
+
+.mcp-row-expanded {
+  background: #f9f8fd;
+}
+
+.mcp-tools-row td {
+  padding: 0;
+  background: #f9f8fd;
+  border-top: 1px solid #eae6f5;
+}
+
+.mcp-tools-list {
+  padding: 8px 16px 12px;
+}
+
+.mcp-tools-subtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.mcp-tools-subtable th {
+  text-align: left;
+  padding: 6px 8px;
+  color: #5a657c;
+  font-weight: 500;
+  border-bottom: 1px solid #eae6f5;
+}
+
+.mcp-tool-col-status { width: 40px; }
+.mcp-tool-col-name { width: 160px; }
+.mcp-tool-col-desc { }
+.mcp-tool-col-test { width: 80px; text-align: center; }
+
+.mcp-tool-row td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #f2effa;
+  vertical-align: middle;
+}
+
+.mcp-tool-row code {
+  font-size: 0.76rem;
+  background: #f3f1fc;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.mcp-tool-desc {
+  color: #7a8499;
+  font-size: 0.76rem;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 工具测试状态图标 */
+.tool-status {
+  font-size: 0.85rem;
+}
+
+.tool-untested { color: #c4c9d4; }
+.tool-testing { color: #f59e0b; animation: spin 1s linear infinite; display: inline-block; }
+.tool-ok { color: #10b981; cursor: help; }
+.tool-err { color: #ef4444; cursor: help; }
+
+/* tool test detail row — full-width below the tool */
+.tool-test-detail-row td {
+  padding: 0.25rem 0.5rem 0.5rem 2rem;
+}
+
+.tool-test-detail-body {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  word-break: break-all;
+  white-space: pre-wrap;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-test-detail-body.error {
+  background: #fff4f2;
+  color: #bd271e;
+  border: 1px solid #ffccc7;
+}
+
+.tool-test-detail-body.ok {
+  background: #f6ffed;
+  color: #389e0d;
+  border: 1px solid #b7eb8f;
+}
+
+.tool-test-msg.error {
+  color: #ef4444;
+}
+
+.tool-test-msg.ok {
+  color: #6b7280;
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ContainerMCP 工具区域 */
+.mcp-tools-section {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.mcp-tools-section-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #3f4b5d;
+  margin-bottom: 0.4rem;
+}
+
+.mcp-tools-section .mcp-tools-list {
+  padding: 0;
+}
+
+.mcp-tools-section .mcp-tools-subtable {
+  font-size: 0.76rem;
+}
+
 /* 内联表单 (ContainerMCP) */
 .mcp-form-card {
   gap: 0;

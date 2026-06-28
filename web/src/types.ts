@@ -121,11 +121,25 @@ export type MCPConnectionConfig = {
   nodeletId?: string;
 };
 
+// ToolInfo 对应后端 ToolInfo，表示一个 MCP 工具的元数据。
+export type ToolInfo = {
+  name: string;
+  description: string;
+};
+
+// ToolTestResult 表示前端单个工具的测试状态。
+export type ToolTestResult = {
+  status: "untested" | "testing" | "ok" | "error";
+  output?: string;
+  error?: string;
+};
+
 // MCPConnectionStatus 是带运行时状态的 MCP 连接。
 export type MCPConnectionStatus = MCPConnectionConfig & {
   status: "running" | "stopped" | "error";
   error?: string;
   toolCount: number;
+  tools?: ToolInfo[];
 };
 
 // MCPPrefill 用于从容器 DSN 信息预填 MCP 连接表单。

@@ -20,42 +20,49 @@ import (
 
 // Connect connects to an MCP server as configured in cfg, initializes the
 // session, and returns every tool the server exposes. The returned closer
-// function should be called to tear down the connection.
+// function should be called to tear down the connection. The exitCh is
+// closed when the underlying subprocess exits (always nil for SSE).
 //
 // Two transports are supported:
 //
 //	transport: "stdio"  → launches a child process (command + args)
 //	transport: "sse"    → connects to a remote SSE endpoint (url)
-func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
+func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), <-chan struct{}, error) {
 	switch cfg.Transport {
 	case "stdio":
 		return connectStdio(ctx, cfg)
 	case "sse":
 		return connectSSE(ctx, cfg)
 	default:
-		return nil, nil, nil, fmt.Errorf("unsupported mcp transport: %q", cfg.Transport)
+		return nil, nil, nil, nil, fmt.Errorf("unsupported mcp transport: %q", cfg.Transport)
 	}
 }
 
-func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
+func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), <-chan struct{}, error) {
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("stdio: create client: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("stdio: create client: %w", err)
 	}
+
+	exitCh := make(chan struct{})
 
 	// MCP 子进程 stderr 逐行输出到控制台，实时可见。
 	stderrReader, hasStderr := mcpclient.GetStderr(c)
 	if hasStderr {
 		go func() {
 			_, _ = io.Copy(console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command)), stderrReader)
+			close(exitCh) // stderr pipe closed ⟹ process exited
 		}()
+	} else {
+		// 没有 stderr 时无法检测退出，关闭 exitCh 以避免监听者永久阻塞。
+		close(exitCh)
 	}
 
 	// Give the MCP server time to connect to its backend before init.
 	select {
 	case <-ctx.Done():
 		c.Close()
-		return nil, nil, nil, ctx.Err()
+		return nil, nil, nil, nil, ctx.Err()
 	case <-time.After(2 * time.Second):
 	}
 
@@ -68,27 +75,27 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 
 	if _, err = c.Initialize(ctx, initReq); err != nil {
 		c.Close()
-		return nil, nil, nil, fmt.Errorf("stdio: initialize: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("stdio: initialize: %w", err)
 	}
 
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
 	if err != nil {
 		c.Close()
-		return nil, nil, nil, fmt.Errorf("stdio: get tools: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("stdio: get tools: %w", err)
 	}
 
-	return c, tools, func() { c.Close() }, nil
+	return c, tools, func() { c.Close() }, exitCh, nil
 }
 
-func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
+func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), <-chan struct{}, error) {
 	c, err := mcpclient.NewSSEMCPClient(cfg.URL)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("sse: create client: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("sse: create client: %w", err)
 	}
 
 	if err := c.Start(ctx); err != nil {
 		c.Close()
-		return nil, nil, nil, fmt.Errorf("sse: start: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("sse: start: %w", err)
 	}
 
 	initReq := mcp.InitializeRequest{}
@@ -100,16 +107,17 @@ func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.B
 
 	if _, err = c.Initialize(ctx, initReq); err != nil {
 		c.Close()
-		return nil, nil, nil, fmt.Errorf("sse: initialize: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("sse: initialize: %w", err)
 	}
 
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
 	if err != nil {
 		c.Close()
-		return nil, nil, nil, fmt.Errorf("sse: get tools: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("sse: get tools: %w", err)
 	}
 
-	return c, tools, func() { c.Close() }, nil
+	// SSE 连接没有子进程退出概念，返回 nil channel。
+	return c, tools, func() { c.Close() }, nil, nil
 }
 
 // ---- 连接验证 ----
@@ -177,7 +185,11 @@ func Verify(ctx context.Context, session MCPSession, tools []tool.BaseTool) erro
 					msgs = append(msgs, tb.Text)
 				}
 			}
-			lastErr = fmt.Errorf("verify %q: %s", probeName, joinStrings(msgs, "; "))
+			errMsg := joinStrings(msgs, "; ")
+			if errMsg == "" {
+				errMsg = "no error detail"
+			}
+			lastErr = fmt.Errorf("verify %q: %s", probeName, errMsg)
 			continue
 		}
 

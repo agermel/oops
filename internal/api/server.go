@@ -771,10 +771,34 @@ func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleMCPConnection handles PUT (update), DELETE (remove), and POST test on /api/mcp/connections/{id}.
+// handleMCPConnection handles PUT (update), DELETE (remove), POST test and tool-test
+// on /api/mcp/connections/{id}, /api/mcp/connections/{id}/test,
+// and /api/mcp/connections/{id}/tools/{name}/test.
 func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/mcp/connections/")
-	if id == "" || strings.Contains(id, "/") {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/mcp/connections/")
+	if rest == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Parse: {id} or {id}/test or {id}/tools/{name}/test
+	parts := strings.SplitN(rest, "/", 4)
+	id := parts[0]
+
+	// POST /api/mcp/connections/{id}/tools/{name}/test
+	if r.Method == http.MethodPost && len(parts) >= 4 && parts[1] == "tools" && parts[3] == "test" {
+		s.handleMCPToolTest(w, r, id, parts[2])
+		return
+	}
+
+	// POST /api/mcp/connections/{id}/test
+	if r.Method == http.MethodPost && len(parts) >= 2 && parts[1] == "test" {
+		s.handleMCPTest(w, r)
+		return
+	}
+
+	// For PUT/DELETE, the id must be a simple name (no slashes).
+	if len(parts) > 1 {
 		http.NotFound(w, r)
 		return
 	}
@@ -810,10 +834,6 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
 
-	case http.MethodPost:
-		// POST test — /api/mcp/connections/{id}/test ended up here
-		s.handleMCPTest(w, r)
-
 	default:
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -836,6 +856,26 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleMCPToolTest tests a single tool on a running MCP connection.
+// POST /api/mcp/connections/{connID}/tools/{toolName}/test
+func (s *Server) handleMCPToolTest(w http.ResponseWriter, r *http.Request, connID, toolName string) {
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	output, err := s.mcpManager.TestTool(connID, toolName)
+	if err != nil {
+		logutil.Error("api: mcp tool test failed",
+			zap.String("connID", connID),
+			zap.String("tool", toolName),
+			zap.Error(err),
+		)
+		writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok", "output": output})
 }
 
 // writeJSON 写入 JSON 响应。

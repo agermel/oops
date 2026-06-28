@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"oops/internal/config"
+	"oops/internal/console"
 	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
+	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
 
@@ -76,9 +79,10 @@ type ConnectionConfig struct {
 // ConnectionWithStatus is the public-facing view of a connection.
 type ConnectionWithStatus struct {
 	ConnectionConfig
-	Status    string `json:"status"` // "running" | "stopped" | "error"
-	Error     string `json:"error,omitempty"`
-	ToolCount int    `json:"toolCount"`
+	Status    string     `json:"status"` // "running" | "stopped" | "error"
+	Error     string     `json:"error,omitempty"`
+	ToolCount int        `json:"toolCount"`
+	Tools     []ToolInfo `json:"tools,omitempty"`
 }
 
 // ManagerConfig is the top-level structure of mcp_connections.json.
@@ -87,9 +91,11 @@ type ManagerConfig struct {
 }
 
 type managedProcess struct {
-	cfg    ConnectionConfig
-	closer func()
-	tools  []tool.BaseTool
+	cfg     ConnectionConfig
+	session MCPSession // retained for per-tool testing
+	closer  func()
+	tools   []tool.BaseTool
+	exitCh  <-chan struct{} // closed when the subprocess exits (nil for SSE)
 }
 
 // Manager manages MCP server subprocess lifecycles and persists configuration.
@@ -155,6 +161,15 @@ func (m *Manager) List() []ConnectionWithStatus {
 		if proc, ok := m.processes[cfg.ID]; ok {
 			item.Status = "running"
 			item.ToolCount = len(proc.tools)
+			item.Tools = make([]ToolInfo, len(proc.tools))
+			for j, bt := range proc.tools {
+				info, err := bt.Info(context.Background())
+				if err != nil {
+					item.Tools[j] = ToolInfo{Name: "?", Description: err.Error()}
+				} else {
+					item.Tools[j] = ToolInfo{Name: info.Name, Description: info.Desc}
+				}
+			}
 		} else if cfg.Enabled {
 			item.Status = "error"
 			item.Error = m.errors[cfg.ID]
@@ -364,6 +379,155 @@ func (m *Manager) Remove(id string) error {
 	return nil
 }
 
+// TestTool calls a single tool on a running connection and returns its output.
+// It does not hold the manager lock during the call, so it doesn't block other operations.
+// If the tool has a parameter schema, default arguments are generated for required fields.
+func (m *Manager) TestTool(connID, toolName string) (string, error) {
+	// Briefly hold lock to copy session reference and look up tool schema.
+	m.mu.Lock()
+	proc, ok := m.processes[connID]
+	if !ok {
+		m.mu.Unlock()
+		return "", fmt.Errorf("connection %q is not running", connID)
+	}
+	session := proc.session
+	cfgName := proc.cfg.Name
+
+	// Find the tool's parameter schema to generate sensible defaults.
+	var toolInfo *schema.ToolInfo
+	for _, bt := range proc.tools {
+		info, err := bt.Info(context.Background())
+		if err != nil {
+			continue
+		}
+		if info.Name == toolName {
+			toolInfo = info
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	args := buildDefaultArgs(toolInfo)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = toolName
+	req.Params.Arguments = args
+
+	result, err := session.CallTool(ctx, req)
+	if err != nil {
+		logutil.Error("mcp: test tool call error",
+			zap.String("conn", cfgName),
+			zap.String("tool", toolName),
+			zap.Error(err),
+		)
+		console.Feed("mcp error: test tool %q on %q: %v", toolName, cfgName, err)
+		return "", fmt.Errorf("call %q: %w", toolName, err)
+	}
+	if result.IsError {
+		var msgs []string
+		for _, block := range result.Content {
+			if tb, ok := block.(mcp.TextContent); ok {
+				msgs = append(msgs, tb.Text)
+			}
+		}
+		errMsg := strings.Join(msgs, "; ")
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("tool %q returned error with no message", toolName)
+		}
+		logutil.Error("mcp: test tool returned error",
+			zap.String("conn", cfgName),
+			zap.String("tool", toolName),
+			zap.String("error", errMsg),
+		)
+		console.Feed("mcp error: test tool %q on %q failed: %s", toolName, cfgName, errMsg)
+		return "", fmt.Errorf("%s", errMsg)
+	}
+
+	// Collect text output.
+	var parts []string
+	for _, block := range result.Content {
+		switch b := block.(type) {
+		case mcp.TextContent:
+			parts = append(parts, b.Text)
+		default:
+			parts = append(parts, fmt.Sprintf("[%T]", block))
+		}
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+// buildDefaultArgs generates sensible default arguments for a tool based on
+// its JSON Schema. Returns an empty map if the tool has no required params.
+func buildDefaultArgs(toolInfo *schema.ToolInfo) map[string]any {
+	if toolInfo == nil || toolInfo.ParamsOneOf == nil {
+		return map[string]any{}
+	}
+
+	js, err := toolInfo.ParamsOneOf.ToJSONSchema()
+	if err != nil || js == nil || js.Properties == nil {
+		return map[string]any{}
+	}
+
+	args := make(map[string]any, len(js.Required))
+	for _, name := range js.Required {
+		prop, ok := js.Properties.Get(name)
+		if !ok || prop == nil {
+			args[name] = "test_" + name
+			continue
+		}
+		args[name] = defaultValue(name, prop.Type)
+	}
+	return args
+}
+
+// defaultValue maps a JSON Schema type + parameter name to a sensible test value.
+func defaultValue(name, typ string) any {
+	switch typ {
+	case "integer", "number":
+		return 0
+	case "boolean":
+		return false
+	case "array":
+		return []any{}
+	case "object":
+		return map[string]any{}
+	default: // "string" or empty
+		return inferStringDefault(name)
+	}
+}
+
+// inferStringDefault picks a plausible string value based on the parameter name.
+func inferStringDefault(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case lower == "host" || lower == "hostname":
+		return "127.0.0.1"
+	case lower == "port":
+		return "6379"
+	case lower == "password" || lower == "pass" || lower == "pwd":
+		return ""
+	case strings.Contains(lower, "key"):
+		return "test_key"
+	case strings.Contains(lower, "value"):
+		return "test_value"
+	case strings.Contains(lower, "field") || strings.Contains(lower, "name"):
+		return "test"
+	case strings.Contains(lower, "db") || strings.Contains(lower, "database"):
+		return "0"
+	case strings.Contains(lower, "index"):
+		return "0"
+	case strings.Contains(lower, "timeout"):
+		return "1000"
+	case strings.Contains(lower, "count") || strings.Contains(lower, "limit"):
+		return "10"
+	default:
+		return "test_" + name
+	}
+}
+
 // Test attempts a temporary connection to verify the config works.
 // It does not persist or affect running processes.
 func (m *Manager) Test(cfg ConnectionConfig) error {
@@ -384,7 +548,7 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, _, closer, err := Connect(ctx, mcpCfg)
+	_, _, closer, _, err := Connect(ctx, mcpCfg)
 	if err != nil {
 		return fmt.Errorf("test connect: %w", err)
 	}
@@ -450,35 +614,27 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 
-		session, tools, closer, err := Connect(ctx, mcpCfg)
+		session, tools, closer, exitCh, err := Connect(ctx, mcpCfg)
 		cancel()
 
 		if err == nil {
 			m.processes[cfg.ID] = &managedProcess{
-				cfg:    cfg,
-				closer: closer,
-				tools:  tools,
+				cfg:     cfg,
+				session: session,
+				closer:  closer,
+				tools:   tools,
+				exitCh:  exitCh,
 			}
 			logutil.Info("mcp: started",
 				zap.String("id", cfg.ID),
 				zap.Int("tools", len(tools)),
 			)
 
-			// 连接建立后主动验证后端服务确实可达。
-			if verifyErr := Verify(context.Background(), session, tools); verifyErr != nil {
-				closer()
-				delete(m.processes, cfg.ID)
-				logutil.Error("mcp: verify failed",
-					zap.String("id", cfg.ID),
-					zap.Error(verifyErr),
-				)
-				lastErr = verifyErr
-				if attempt < maxRetries {
-					time.Sleep(2 * time.Second)
-					continue
-				}
-				return fmt.Errorf("verify (%d attempts): %w", maxRetries, verifyErr)
+			// 后台监控子进程退出：当 exitCh 关闭时，更新状态并通知前端。
+			if exitCh != nil {
+				go m.monitorExit(cfg.ID, exitCh)
 			}
+
 			return nil
 		}
 
@@ -495,6 +651,53 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 	}
 
 	return fmt.Errorf("connect (%d attempts): %w", maxRetries, lastErr)
+}
+
+// monitorExit 监控子进程退出 channel，退出时更新连接状态。
+func (m *Manager) monitorExit(id string, exitCh <-chan struct{}) {
+	<-exitCh
+
+	// 先复制 session 引用再释放锁，避免在持锁期间进行网络调用。
+	m.mu.Lock()
+	proc, ok := m.processes[id]
+	if !ok {
+		m.mu.Unlock()
+		return // already stopped/removed
+	}
+	session := proc.session
+	m.mu.Unlock()
+
+	// 进程已退出，检查是否还能通信。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "ping"
+	req.Params.Arguments = map[string]any{}
+	_, err := session.CallTool(ctx, req)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 再次检查（可能在等待期间被 stop/remove）。
+	if _, stillThere := m.processes[id]; !stillThere {
+		return
+	}
+
+	if err != nil {
+		logutil.Error("mcp: process exited unexpectedly",
+			zap.String("id", id),
+			zap.Error(err),
+		)
+		console.Feed("mcp error: connection %q exited unexpectedly: %v", id, err)
+		delete(m.processes, id)
+		m.errors[id] = fmt.Sprintf("进程意外退出: %v", err)
+	} else {
+		// 虽然 stderr 管道关闭了，但 session 仍能通信（可能是 stderr 被关闭但进程还在）。
+		// 暂时保留运行状态。
+		logutil.Warn("mcp: stderr closed but session still alive", zap.String("id", id))
+	}
+	m.notifyChangeLocked()
 }
 
 func (m *Manager) stopLocked(id string) {

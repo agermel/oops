@@ -1,6 +1,6 @@
 import React from "react";
-import { Wrench, Plus, Trash2, Edit3, X } from "lucide-react";
-import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo } from "../types";
+import { Wrench, Plus, Trash2, Edit3, X, Play } from "lucide-react";
+import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo, ToolTestResult } from "../types";
 
 // ---- 类型默认值 ----
 const typeDefaults: Record<string, { command: string; args: string[]; env: string[] }> = {
@@ -181,6 +181,8 @@ export function ContainerMCP({
   const [testResult, setTestResult] = React.useState("");
   const [testing, setTesting] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [toolTests, setToolTests] = React.useState<Record<string, ToolTestResult>>({});
+  const [testingTools, setTestingTools] = React.useState<Set<string>>(new Set());
   const [creds, setCreds] = React.useState<Credentials>(emptyCreds());
 
   // 从容器-scoped API 获取绑定的 MCP 连接
@@ -367,6 +369,30 @@ export function ContainerMCP({
     }
   }
 
+  async function testTool(toolName: string) {
+    if (!connection) return;
+    const key = `${connection.id}:${toolName}`;
+    setTestingTools((prev) => new Set(prev).add(key));
+    setToolTests((prev) => ({ ...prev, [key]: { status: "testing" } }));
+    try {
+      const resp = await fetch(`/api/mcp/connections/${encodeURIComponent(connection.id)}/tools/${encodeURIComponent(toolName)}/test`, { method: "POST" });
+      const data = await resp.json();
+      if (data.status === "ok") {
+        setToolTests((prev) => ({ ...prev, [key]: { status: "ok", output: data.output } }));
+      } else {
+        setToolTests((prev) => ({ ...prev, [key]: { status: "error", error: data.error } }));
+      }
+    } catch (err) {
+      setToolTests((prev) => ({ ...prev, [key]: { status: "error", error: err instanceof Error ? err.message : "测试失败" } }));
+    } finally {
+      setTestingTools((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }
+
   const showCredentials = typesWithCredentials.has(editing?.type || "");
 
   // ---- 渲染 ----
@@ -445,6 +471,69 @@ export function ContainerMCP({
             <div className="mcp-status-row">
               <span>工具数</span>
               <strong>{connection.toolCount}</strong>
+            </div>
+          )}
+          {connection.status === "running" && connection.tools && connection.tools.length > 0 && (
+            <div className="mcp-tools-section">
+              <div className="mcp-tools-section-title">工具列表</div>
+              <div className="mcp-tools-list">
+                <table className="mcp-tools-subtable">
+                  <thead>
+                    <tr>
+                      <th className="mcp-tool-col-status">状态</th>
+                      <th className="mcp-tool-col-name">名称</th>
+                      <th className="mcp-tool-col-desc">描述</th>
+                      <th className="mcp-tool-col-test">测试</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {connection.tools.map((t) => {
+                      const tkey = `${connection.id}:${t.name}`;
+                      const tr = toolTests[tkey];
+                      const testing = testingTools.has(tkey);
+                      const showDetail = tr && (tr.status === "ok" || tr.status === "error");
+                      return (
+                        <React.Fragment key={t.name}>
+                          <tr className="mcp-tool-row">
+                            <td>
+                              {testing ? (
+                                <span className="tool-status tool-testing" title="测试中…">⟳</span>
+                              ) : tr?.status === "ok" ? (
+                                <span className="tool-status tool-ok" title="测试通过">✓</span>
+                              ) : tr?.status === "error" ? (
+                                <span className="tool-status tool-err" title="测试失败">✗</span>
+                              ) : (
+                                <span className="tool-status tool-untested" title="未测试">○</span>
+                              )}
+                            </td>
+                            <td><code>{t.name}</code></td>
+                            <td className="mcp-tool-desc">{t.description}</td>
+                            <td>
+                              <button
+                                className="ghost-button small"
+                                disabled={testing}
+                                onClick={() => testTool(t.name)}
+                              >
+                                <Play size={12} />
+                                <span>{testing ? "测试中" : "测试"}</span>
+                              </button>
+                            </td>
+                          </tr>
+                          {showDetail && (
+                            <tr className="tool-test-detail-row">
+                              <td colSpan={4}>
+                                <div className={`tool-test-detail-body ${tr!.status}`}>
+                                  {tr!.status === "error" ? tr!.error : tr!.output}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
           {connection.error && (

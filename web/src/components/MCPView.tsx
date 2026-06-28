@@ -1,6 +1,6 @@
 import React from "react";
-import { Plus, Trash2, Edit3, Wrench, X } from "lucide-react";
-import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill } from "../types";
+import { Plus, Trash2, Edit3, Wrench, X, ChevronRight, ChevronDown, Play } from "lucide-react";
+import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill, ToolTestResult } from "../types";
 
 // ---- 类型默认值 ----
 const typeDefaults: Record<string, { command: string; args: string[]; env: string[] }> = {
@@ -169,6 +169,9 @@ export function MCPView({
   const [testResult, setTestResult] = React.useState("");
   const [testing, setTesting] = React.useState(false);
   const [toggling, setToggling] = React.useState<Set<string>>(new Set());
+  const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set());
+  const [toolTests, setToolTests] = React.useState<Record<string, ToolTestResult>>({});
+  const [testingTools, setTestingTools] = React.useState<Set<string>>(new Set());
 
   // 跟踪当前表单是否由"一键配置 MCP"打开，保存后自动返回
   const fromPrefillRef = React.useRef(false);
@@ -376,6 +379,38 @@ export function MCPView({
     }
   }
 
+  function toggleExpand(id: string) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function testTool(connID: string, toolName: string) {
+    const key = `${connID}:${toolName}`;
+    setTestingTools((prev) => new Set(prev).add(key));
+    setToolTests((prev) => ({ ...prev, [key]: { status: "testing" } }));
+    try {
+      const resp = await fetch(`/api/mcp/connections/${encodeURIComponent(connID)}/tools/${encodeURIComponent(toolName)}/test`, { method: "POST" });
+      const data = await resp.json();
+      if (data.status === "ok") {
+        setToolTests((prev) => ({ ...prev, [key]: { status: "ok", output: data.output } }));
+      } else {
+        setToolTests((prev) => ({ ...prev, [key]: { status: "error", error: data.error } }));
+      }
+    } catch (err) {
+      setToolTests((prev) => ({ ...prev, [key]: { status: "error", error: err instanceof Error ? err.message : "测试失败" } }));
+    } finally {
+      setTestingTools((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }
+
   const statusLabel: Record<string, string> = {
     running: "运行中",
     stopped: "已停止",
@@ -430,46 +465,126 @@ export function MCPView({
                 </td>
               </tr>
             ) : (
-              connections.map((item) => (
-                <tr key={item.id}>
-                  <td className="mcp-name-cell">{item.name}</td>
-                  <td>
-                    <span className="type-pill">{item.type}</span>
-                  </td>
-                  <td>
-                    <span className={`status-pill ${item.status}`}>
-                      {statusLabel[item.status] || item.status}
-                    </span>
-                    {item.error && <span className="error-hint">{item.error}</span>}
-                  </td>
-                  <td>{item.toolCount}</td>
-                  <td className="mono">{item.command}</td>
-                  <td className="mcp-toggle-cell">
-                    <label className="tool-toggle">
-                      <input
-                        type="checkbox"
-                        className="toggle-input"
-                        checked={item.enabled}
-                        disabled={toggling.has(item.id)}
-                        onChange={() => handleToggleEnabled(item)}
-                      />
-                      <span className={`toggle-track ${toggling.has(item.id) ? "toggle-busy" : ""}`}>
-                        <span className="toggle-thumb" />
-                      </span>
-                    </label>
-                  </td>
-                  <td className="mcp-actions-cell">
-                    <div className="mcp-actions">
-                      <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
-                        <Edit3 size={14} />
-                      </button>
-                      <button className="ghost-button small danger" aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+              connections.map((item) => {
+                const isExpanded = expandedRows.has(item.id);
+                const hasTools = item.status === "running" && item.tools && item.tools.length > 0;
+                return (
+                  <React.Fragment key={item.id}>
+                    <tr className={isExpanded ? "mcp-row-expanded" : ""}>
+                      <td className="mcp-name-cell">{item.name}</td>
+                      <td>
+                        <span className="type-pill">{item.type}</span>
+                      </td>
+                      <td>
+                        <span className={`status-pill ${item.status}`}>
+                          {statusLabel[item.status] || item.status}
+                        </span>
+                        {item.error && <span className="error-hint">{item.error}</span>}
+                      </td>
+                      <td className="mcp-count-cell">
+                        <button
+                          className={`mcp-expand-btn ${hasTools ? "" : "disabled"}`}
+                          disabled={!hasTools}
+                          onClick={() => hasTools && toggleExpand(item.id)}
+                          title={hasTools ? "展开/折叠工具列表" : "无运行中工具"}
+                        >
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          <span>{item.toolCount}</span>
+                        </button>
+                      </td>
+                      <td className="mono">{item.command}</td>
+                      <td className="mcp-toggle-cell">
+                        <label className="tool-toggle">
+                          <input
+                            type="checkbox"
+                            className="toggle-input"
+                            checked={item.enabled}
+                            disabled={toggling.has(item.id)}
+                            onChange={() => handleToggleEnabled(item)}
+                          />
+                          <span className={`toggle-track ${toggling.has(item.id) ? "toggle-busy" : ""}`}>
+                            <span className="toggle-thumb" />
+                          </span>
+                        </label>
+                      </td>
+                      <td className="mcp-actions-cell">
+                        <div className="mcp-actions">
+                          <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
+                            <Edit3 size={14} />
+                          </button>
+                          <button className="ghost-button small danger" aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && hasTools && (
+                      <tr className="mcp-tools-row">
+                        <td colSpan={7}>
+                          <div className="mcp-tools-list">
+                            <table className="mcp-tools-subtable">
+                              <thead>
+                                <tr>
+                                  <th className="mcp-tool-col-status">状态</th>
+                                  <th className="mcp-tool-col-name">工具名称</th>
+                                  <th className="mcp-tool-col-desc">描述</th>
+                                  <th className="mcp-tool-col-test">测试</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {item.tools!.map((t) => {
+                                  const tkey = `${item.id}:${t.name}`;
+                                  const tr = toolTests[tkey];
+                                  const testing = testingTools.has(tkey);
+                                  const showDetail = tr && (tr.status === "ok" || tr.status === "error");
+                                  return (
+                                    <React.Fragment key={t.name}>
+                                      <tr className="mcp-tool-row">
+                                        <td>
+                                          {testing ? (
+                                            <span className="tool-status tool-testing" title="测试中…">⟳</span>
+                                          ) : tr?.status === "ok" ? (
+                                            <span className="tool-status tool-ok" title="测试通过">✓</span>
+                                          ) : tr?.status === "error" ? (
+                                            <span className="tool-status tool-err" title="测试失败">✗</span>
+                                          ) : (
+                                            <span className="tool-status tool-untested" title="未测试">○</span>
+                                          )}
+                                        </td>
+                                        <td><code>{t.name}</code></td>
+                                        <td className="mcp-tool-desc">{t.description}</td>
+                                        <td>
+                                          <button
+                                            className="ghost-button small"
+                                            disabled={testing}
+                                            onClick={() => testTool(item.id, t.name)}
+                                          >
+                                            <Play size={12} />
+                                            <span>{testing ? "测试中" : "测试"}</span>
+                                          </button>
+                                        </td>
+                                      </tr>
+                                      {showDetail && (
+                                        <tr className="tool-test-detail-row">
+                                          <td colSpan={4}>
+                                            <div className={`tool-test-detail-body ${tr!.status}`}>
+                                              {tr!.status === "error" ? tr!.error : tr!.output}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
