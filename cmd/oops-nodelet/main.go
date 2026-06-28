@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"oops/internal/common"
 	"oops/internal/docker"
@@ -23,6 +24,14 @@ func main() {
 
 	server := nodelet.NewServerWithToken(dockerClient, token)
 
+	httpServer := &http.Server{
+		Addr:         addr,
+		Handler:      server.Routes(),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	log.Printf("oops nodelet listening on http://localhost%s", addr)
-	log.Fatal(http.ListenAndServe(addr, server.Routes()))
+	log.Fatal(httpServer.ListenAndServe())
 }

@@ -29,26 +29,34 @@ export function ProjectsView({
   const [showForm, setShowForm] = React.useState(false);
   const [editing, setEditing] = React.useState<Project | null>(null);
   const [isNew, setIsNew] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [formError, setFormError] = React.useState("");
 
   function openAdd() {
     setIsNew(true);
     setEditing(emptyProject());
+    setFormError("");
     setShowForm(true);
   }
 
   function openEdit(p: Project) {
     setIsNew(false);
     setEditing({ ...p });
+    setFormError("");
     setShowForm(true);
   }
 
   function closeForm() {
+    if (saving) return;
     setShowForm(false);
     setEditing(null);
+    setFormError("");
   }
 
   async function handleSave() {
-    if (!editing) return;
+    if (!editing || saving) return;
+    setSaving(true);
+    setFormError("");
     const url = isNew ? "/api/projects" : `/api/projects/${encodeURIComponent(editing.id)}`;
     const method = isNew ? "POST" : "PUT";
 
@@ -65,7 +73,9 @@ export function ProjectsView({
       closeForm();
       onRefresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "保存失败");
+      setFormError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -79,7 +89,7 @@ export function ProjectsView({
       }
       onRefresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "删除失败");
+      setFormError(err instanceof Error ? err.message : "删除失败");
     }
   }
 
@@ -111,10 +121,10 @@ export function ProjectsView({
               <ChevronRight size={20} className="project-card-arrow" />
             </div>
             <div className="project-card-actions">
-              <button className="ghost-button small" onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
+              <button className="ghost-button small" aria-label="编辑项目" onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
                 <Edit3 size={14} />
               </button>
-              <button className="ghost-button small danger" onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
+              <button className="ghost-button small danger" aria-label="删除项目" onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
                 <Trash2 size={14} />
               </button>
             </div>
@@ -127,29 +137,32 @@ export function ProjectsView({
 
       {/* Modal */}
       {showForm && editing && (
-        <div className="modal-overlay" onClick={closeForm}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={closeForm} onKeyDown={(e) => { if (e.key === "Escape") closeForm(); }}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="project-form-title" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h2>{editing.id ? "编辑项目" : "新建项目"}</h2>
+              <h2 id="project-form-title">{editing.id ? "编辑项目" : "新建项目"}</h2>
               <button className="ghost-button" onClick={closeForm}><X size={18} /></button>
             </div>
             <div className="modal-body">
-              <label>名称</label>
+              <label htmlFor="project-name">名称</label>
               <input
+                id="project-name"
                 value={editing.name}
                 onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || e.target.value.toLowerCase().replace(/\s+/g, "-") })}
                 placeholder="例如: CCNU Box"
               />
-              <label>描述</label>
+              <label htmlFor="project-desc">描述</label>
               <input
+                id="project-desc"
                 value={editing.description || ""}
                 onChange={(e) => setEditing({ ...editing, description: e.target.value })}
                 placeholder="项目简介（可选）"
               />
+              {formError && <div className="error-line">{formError}</div>}
             </div>
             <div className="modal-foot">
-              <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim()}>
-                保存
+              <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim() || saving}>
+                {saving ? "保存中..." : "保存"}
               </button>
             </div>
           </div>

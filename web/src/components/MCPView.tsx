@@ -1,6 +1,6 @@
 import React from "react";
 import { Plus, Trash2, Edit3, Wrench, X } from "lucide-react";
-import type { MCPConnectionConfig, MCPConnectionStatus } from "../types";
+import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill } from "../types";
 
 // ---- 类型默认值 ----
 const typeDefaults: Record<string, { command: string; args: string[]; env: string[] }> = {
@@ -55,7 +55,7 @@ function formToConfig(form: MCPConnectionStatus): MCPConnectionConfig {
 }
 
 // ---- MCPView ----
-export function MCPView() {
+export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill | null; onPrefillConsumed?: () => void }) {
   const [connections, setConnections] = React.useState<MCPConnectionStatus[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -64,6 +64,8 @@ export function MCPView() {
   const [showForm, setShowForm] = React.useState(false);
   const [editing, setEditing] = React.useState<MCPConnectionStatus | null>(null);
   const [isNew, setIsNew] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [saveError, setSaveError] = React.useState("");
   const [testResult, setTestResult] = React.useState("");
   const [testing, setTesting] = React.useState(false);
 
@@ -85,11 +87,26 @@ export function MCPView() {
     fetchConnections();
   }, []);
 
+  React.useEffect(() => {
+    if (prefill) {
+      const form = emptyForm(prefill.type || "mysql");
+      form.name = prefill.name;
+      form.env = prefill.env;
+      setEditing(form);
+      setIsNew(true);
+      setShowForm(true);
+      setTestResult("");
+      setSaveError("");
+      onPrefillConsumed?.();
+    }
+  }, [prefill, onPrefillConsumed]);
+
   function openAdd() {
     setIsNew(true);
     setEditing(emptyForm("mysql"));
     setShowForm(true);
     setTestResult("");
+    setSaveError("");
   }
 
   function openEdit(item: MCPConnectionStatus) {
@@ -97,16 +114,21 @@ export function MCPView() {
     setEditing({ ...item });
     setShowForm(true);
     setTestResult("");
+    setSaveError("");
   }
 
   function closeForm() {
+    if (saving) return;
     setShowForm(false);
     setEditing(null);
     setTestResult("");
+    setSaveError("");
   }
 
   async function handleSave() {
-    if (!editing) return;
+    if (!editing || saving) return;
+    setSaving(true);
+    setSaveError("");
     const body = formToConfig(editing);
 
     if (isNew) {
@@ -128,10 +150,15 @@ export function MCPView() {
         const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
         throw new Error(data.error || `HTTP ${resp.status}`);
       }
-      closeForm();
+      setShowForm(false);
+      setEditing(null);
+      setTestResult("");
+      setSaveError("");
       fetchConnections();
     } catch (err) {
-      setTestResult(err instanceof Error ? err.message : "保存失败");
+      setSaveError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -145,7 +172,7 @@ export function MCPView() {
       }
       fetchConnections();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : "删除失败");
     }
   }
 
@@ -229,10 +256,10 @@ export function MCPView() {
                   <td>{item.toolCount}</td>
                   <td className="mono">{item.command}</td>
                   <td className="mcp-actions">
-                    <button className="ghost-button small" onClick={() => openEdit(item)}>
+                    <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
                       <Edit3 size={14} />
                     </button>
-                    <button className="ghost-button small danger" onClick={() => handleDelete(item.id)}>
+                    <button className="ghost-button small danger" aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
                       <Trash2 size={14} />
                     </button>
                   </td>
@@ -245,25 +272,27 @@ export function MCPView() {
 
       {/* 新增 / 编辑模态框 */}
       {showForm && editing && (
-        <div className="modal-overlay" onClick={closeForm}>
-          <div className="modal-card" style={{ maxWidth: "520px" }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={closeForm} onKeyDown={(e) => { if (e.key === "Escape") closeForm(); }}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="mcp-form-title" style={{ maxWidth: "520px" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h2>{isNew ? "新增 MCP 连接" : "编辑 MCP 连接"}</h2>
+              <h2 id="mcp-form-title">{isNew ? "新增 MCP 连接" : "编辑 MCP 连接"}</h2>
               <button className="ghost-button" onClick={closeForm}>
                 <X size={18} />
               </button>
             </div>
 
             <div className="modal-body">
-              <label>名称</label>
+              <label htmlFor="mcp-name">名称</label>
               <input
+                id="mcp-name"
                 value={editing.name}
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                 placeholder="例如: 生产环境 MySQL"
               />
 
-              <label>类型</label>
+              <label htmlFor="mcp-type">类型</label>
               <select
+                id="mcp-type"
                 value={editing.type}
                 onChange={(e) => {
                   const newType = e.target.value;
@@ -283,23 +312,26 @@ export function MCPView() {
                 <option value="other">其他</option>
               </select>
 
-              <label>命令路径</label>
+              <label htmlFor="mcp-command">命令路径</label>
               <input
+                id="mcp-command"
                 value={editing.command}
                 onChange={(e) => setEditing({ ...editing, command: e.target.value })}
                 placeholder="mysql-mcp-server"
               />
 
-              <label>参数（每行一个）</label>
+              <label htmlFor="mcp-args">参数（每行一个）</label>
               <textarea
+                id="mcp-args"
                 rows={3}
                 value={editing.args.join("\n")}
                 onChange={(e) => setEditing({ ...editing, args: e.target.value.split("\n").filter(Boolean) })}
                 placeholder="--read-only"
               />
 
-              <label>环境变量（KEY=VALUE，每行一个）</label>
+              <label htmlFor="mcp-env">环境变量（KEY=VALUE，每行一个）</label>
               <textarea
+                id="mcp-env"
                 rows={4}
                 value={editing.env.join("\n")}
                 onChange={(e) => setEditing({ ...editing, env: e.target.value.split("\n").filter(Boolean) })}
@@ -315,6 +347,8 @@ export function MCPView() {
                 <span>启用</span>
               </label>
 
+              {saveError && <div className="error-line">{saveError}</div>}
+
               {testResult && (
                 <div className={`test-result ${testResult.includes("成功") ? "success" : "fail"}`}>
                   {testResult}
@@ -326,8 +360,8 @@ export function MCPView() {
               <button className="ghost-button" onClick={handleTest} disabled={testing}>
                 {testing ? "测试中..." : "测试连接"}
               </button>
-              <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim()}>
-                保存
+              <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim() || saving}>
+                {saving ? "保存中..." : "保存"}
               </button>
             </div>
           </div>

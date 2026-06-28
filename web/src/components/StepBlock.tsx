@@ -79,7 +79,9 @@ export function StepBlock({ step, animate, hasResult }: { step: StepEvent; anima
           <button className="step-toggle" onClick={() => setExpanded((v) => !v)}>
             {expanded ? "收起" : "展开"} {resultName} 返回
           </button>
-          {expanded && <pre className="step-result">{formatted}</pre>}
+          <div className={`step-result-wrap ${expanded ? "open" : ""}`}>
+            <pre className="step-result">{formatted}</pre>
+          </div>
         </div>
       </div>
     );

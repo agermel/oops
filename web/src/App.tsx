@@ -9,6 +9,7 @@ import type {
   LogEntry,
   StepEvent,
   ChatExchange,
+  MCPPrefill,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { Header } from "./components/Header";
@@ -23,6 +24,7 @@ export function App() {
   const [activeNav, setActiveNav] = React.useState("projects");
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [projectSection, setProjectSection] = React.useState("overview");
+  const [mcpPrefill, setMCPPrefill] = React.useState<MCPPrefill | null>(null);
 
   // ---- 项目状态 ----
   const [projects, setProjects] = React.useState<Project[]>([]);
@@ -50,6 +52,7 @@ export function App() {
   // ---- 日志状态 ----
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
   const [logsLoading, setLogsLoading] = React.useState(false);
+  const [logsError, setLogsError] = React.useState("");
   const [autoScroll, setAutoScroll] = React.useState(true);
   const logEventSource = React.useRef<EventSource | null>(null);
   const logBuffer = React.useRef<LogEntry[]>([]);
@@ -114,6 +117,11 @@ export function App() {
     closeLogStream();
     setLogs([]);
     loadProjectServers(id);
+  }
+
+  function configureMCP(prefill: MCPPrefill) {
+    setMCPPrefill(prefill);
+    setProjectSection("mcp");
   }
 
   function leaveProject() {
@@ -213,6 +221,7 @@ export function App() {
   function loadLogStream(nodeletID: string, containerID: string) {
     closeLogStream();
     setLogsLoading(true);
+    setLogsError("");
     setLogs([]);
 
     const pid = encodeURIComponent(selectedProjectID);
@@ -236,6 +245,7 @@ export function App() {
     };
     source.onerror = () => {
       setLogsLoading(false);
+      setLogsError("日志流连接失败，请检查容器是否在运行");
     };
   }
 
@@ -336,8 +346,19 @@ export function App() {
   // ---- Render ----
   const selectedProject = projects.find((p) => p.id === selectedProjectID);
 
+  React.useEffect(() => {
+    const parts: string[] = [];
+    if (selectedProject) parts.push(selectedProject.name);
+    if (selectedProject && projectSection === "mcp") parts.push("MCP 管理");
+    if (selectedProject && projectSection === "chat") parts.push("助手");
+    document.title = parts.length > 0 ? `${parts.join(" · ")} — Oops` : "Oops";
+  }, [selectedProject, projectSection]);
+
   return (
     <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <a href="#main-content" className="skip-link">
+        跳到主内容
+      </a>
       <Header activeNav={activeNav} onNavChange={setActiveNav} />
       <SideRail
         activeNav={selectedProject ? projectSection : activeNav}
@@ -348,7 +369,7 @@ export function App() {
         onBack={selectedProject ? leaveProject : undefined}
       />
 
-      <main className={`content ${activeNav === "projects" && selectedProject && projectSection === "overview" ? "project-detail-content" : ""}`}>
+      <main id="main-content" className={`content ${activeNav === "projects" && selectedProject && projectSection === "overview" ? "project-detail-content" : ""}`}>
         {activeNav === "projects" && !selectedProject && (
           <section className="workspace-card">
             <div className="workspace-head">
@@ -385,6 +406,7 @@ export function App() {
             expandedServers={expandedServers}
             logs={logs}
             logsLoading={logsLoading}
+            logsError={logsError}
             autoScroll={autoScroll}
             onBack={leaveProject}
             onToggleServer={toggleServer}
@@ -398,6 +420,7 @@ export function App() {
               setLogs([]);
             }}
             logsPanelRef={logsPanel}
+            onConfigureMCP={configureMCP}
           />
         )}
 
@@ -409,7 +432,7 @@ export function App() {
                 <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
               </div>
             </div>
-            <MCPView />
+            <MCPView prefill={mcpPrefill} onPrefillConsumed={() => setMCPPrefill(null)} />
           </section>
         )}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"oops/internal/api"
 	"oops/internal/common"
@@ -23,6 +24,15 @@ func main() {
 	web.MountStatic(mux, "web/dist")
 
 	addr := common.EnvOrDefault("OOPS_ADDR", ":8081")
+
+	httpServer := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	log.Printf("ops plane API listening on http://localhost%s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(httpServer.ListenAndServe())
 }

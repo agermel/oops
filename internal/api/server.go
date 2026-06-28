@@ -155,16 +155,21 @@ func (s *Server) Routes() *http.ServeMux {
 
 // Mount 把中心端 API 路由挂载到指定 mux。
 func (s *Server) Mount(mux *http.ServeMux) {
-	mux.HandleFunc("/api/connections/status", s.handleConnectionStatus)
-	mux.HandleFunc("/api/nodelets", s.handleNodelets)
-	mux.HandleFunc("/api/nodelets/", s.handleNodeletResource)
-	mux.HandleFunc("/api/chat", s.handleChat)
-	mux.HandleFunc("/api/mcp/connections", s.handleMCPConnections)
-	mux.HandleFunc("/api/mcp/connections/", s.handleMCPConnection)
+	// 所有 API 路由统一经过: securityHeaders → authorize → limitBody → handler
+	wrap := func(f http.HandlerFunc) http.HandlerFunc {
+		return securityHeaders(authorize(limitBody(f)))
+	}
+
+	mux.HandleFunc("/api/connections/status", wrap(s.handleConnectionStatus))
+	mux.HandleFunc("/api/nodelets", wrap(s.handleNodelets))
+	mux.HandleFunc("/api/nodelets/", wrap(s.handleNodeletResource))
+	mux.HandleFunc("/api/chat", wrap(s.handleChat))
+	mux.HandleFunc("/api/mcp/connections", wrap(s.handleMCPConnections))
+	mux.HandleFunc("/api/mcp/connections/", wrap(s.handleMCPConnection))
 
 	// 项目与容器详情 API。
-	mux.HandleFunc("/api/projects", s.handleProjects)
-	mux.HandleFunc("/api/projects/", s.handleProjectsRouter)
+	mux.HandleFunc("/api/projects", wrap(s.handleProjects))
+	mux.HandleFunc("/api/projects/", wrap(s.handleProjectsRouter))
 }
 
 // handleConnectionStatus 执行所有连接检查并返回 JSON。
@@ -271,7 +276,7 @@ func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
 
 		containers, err := s.nodeletClient.Containers(ctx, item.Address, item.Token)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			sanitizedError(w, "nodelet containers", err, http.StatusServiceUnavailable)
 			return
 		}
 		writeJSON(w, containers)
@@ -284,7 +289,7 @@ func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
 
 		logs, err := s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			sanitizedError(w, "nodelet logs", err, http.StatusServiceUnavailable)
 			return
 		}
 		writeJSON(w, logs)
@@ -303,7 +308,7 @@ func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNodeletLogsStream(w http.ResponseWriter, r *http.Request, item config.NodeletConfig, containerID string) {
 	stream, err := s.nodeletClient.ContainerLogsStream(r.Context(), item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		sanitizedError(w, "nodelet logs stream", err, http.StatusServiceUnavailable)
 		return
 	}
 	defer stream.Close()
@@ -389,7 +394,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// 返回类型 <-chan，颗粒度是每一步
 	events, err := s.llmClient.Ask(ctx, req.Question)
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		sanitizedError(w, "chat ask", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -421,6 +426,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+}
+
+// handleProjectChat 处理项目级对话请求，提取项目 ID 后复用通用聊天逻辑。
+func (s *Server) handleProjectChat(w http.ResponseWriter, r *http.Request) {
+	// 从 URL 提取项目 ID（/api/projects/:pid/chat）
+	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
+	pid := strings.Split(path, "/")[0]
+	_ = pid // 预留：后续可按项目范围注入上下文
+
+	s.handleChat(w, r)
 }
 
 // ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。
@@ -551,6 +566,12 @@ func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/projects/:pid/chat
+	if parts[1] == "chat" {
+		s.handleProjectChat(w, r)
+		return
+	}
+
 	// /api/projects/:pid/servers
 	// /api/projects/:pid/servers/:sid/containers
 	// /api/projects/:pid/servers/:sid/containers/:cid
@@ -600,7 +621,7 @@ func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.mcpManager.Add(cfg); err != nil {
-			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			sanitizedError(w, "mcp add", err, http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -632,7 +653,7 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.mcpManager.Update(cfg); err != nil {
-			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			sanitizedError(w, "mcp update", err, http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -643,7 +664,7 @@ func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.mcpManager.Remove(id); err != nil {
-			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			sanitizedError(w, "mcp remove", err, http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -669,7 +690,8 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.mcpManager.Test(cfg); err != nil {
-		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
+		log.Printf("api: mcp test: %v", err)
+		writeJSON(w, map[string]string{"status": "failed", "error": "connection test failed"})
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})

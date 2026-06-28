@@ -123,6 +123,13 @@ export type MCPConnectionStatus = MCPConnectionConfig & {
   toolCount: number;
 };
 
+// MCPPrefill 用于从容器 DSN 信息预填 MCP 连接表单。
+export type MCPPrefill = {
+  name: string;
+  type: string;
+  env: string[];
+};
+
 export type ContainerDetail = {
   container: ContainerInspect;
   serviceType: string;

@@ -27,7 +27,7 @@ export function Header({ activeNav, onNavChange }: { activeNav: string; onNavCha
       </nav>
       <label className="global-search">
         <Search size={18} />
-        <input placeholder="搜索 Ops Plane" />
+        <input placeholder="搜索（即将推出）" disabled title="搜索功能即将推出" />
       </label>
       <div className="global-actions">
         <button title="帮助">

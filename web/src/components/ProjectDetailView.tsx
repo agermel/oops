@@ -7,6 +7,7 @@ import type {
   ContainerDetail as ContainerDetailType,
   HealthResult,
   LogEntry,
+  MCPPrefill,
 } from "../types";
 import { ServerTree } from "./ServerTree";
 import { ContainerDetailView } from "./ContainerDetail";
@@ -28,6 +29,7 @@ export function ProjectDetailView({
   expandedServers,
   logs,
   logsLoading,
+  logsError,
   autoScroll,
   onBack,
   onToggleServer,
@@ -37,6 +39,7 @@ export function ProjectDetailView({
   onAutoScrollChange,
   onClearLogs,
   logsPanelRef,
+  onConfigureMCP,
 }: {
   project: Project;
   servers: ServerWithNodelet[];
@@ -54,6 +57,7 @@ export function ProjectDetailView({
   expandedServers: Set<string>;
   logs: LogEntry[];
   logsLoading: boolean;
+  logsError: string;
   autoScroll: boolean;
   onBack: () => void;
   onToggleServer: (id: string) => void;
@@ -63,6 +67,7 @@ export function ProjectDetailView({
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
+  onConfigureMCP: (prefill: MCPPrefill) => void;
 }) {
   return (
     <div className="project-detail">
@@ -101,10 +106,12 @@ export function ProjectDetailView({
           onHealthCheck={onHealthCheck}
           logs={logs}
           logsLoading={logsLoading}
+          logsError={logsError}
           autoScroll={autoScroll}
           onAutoScrollChange={onAutoScrollChange}
           onClearLogs={onClearLogs}
           logsPanelRef={logsPanelRef}
+          onConfigureMCP={onConfigureMCP}
         />
       </div>
     </div>

@@ -199,7 +199,8 @@ func extractRedisDSN(env map[string]string) *DSNInfo {
 	password := firstNonEmpty(env, "REDIS_PASSWORD", "REDIS_PWD")
 
 	if host == "" {
-		addr := firstNonEmpty(env, "REDIS_ADDR", "REDIS_URL")
+		// Try REDIS_URL or REDIS_ADDR as a full address (e.g. "redis://host:port" or "host:port").
+		addr := firstNonEmpty(env, "REDIS_URL", "REDIS_ADDR")
 		if addr != "" {
 			matches := redisAddrPattern.FindStringSubmatch(addr)
 			if len(matches) == 3 {
@@ -208,15 +209,22 @@ func extractRedisDSN(env map[string]string) *DSNInfo {
 			} else {
 				return &DSNInfo{Raw: addr}
 			}
-		} else {
-			return nil
 		}
+		// No explicit connection env vars — still return a DSN so the UI can
+		// offer one-click MCP setup.  Host stays empty; the caller fills the
+		// port from container port mappings (default 6379).
 	}
 
 	portNum, _ := strconv.Atoi(port)
 	raw := fmt.Sprintf("redis://%s:%d", host, portNum)
+	if host == "" {
+		raw = fmt.Sprintf("redis://127.0.0.1:%d", portNum)
+	}
 	if password != "" {
 		raw = fmt.Sprintf("redis://:%s@%s:%d", password, host, portNum)
+		if host == "" {
+			raw = fmt.Sprintf("redis://:%s@127.0.0.1:%d", password, portNum)
+		}
 	}
 
 	return &DSNInfo{

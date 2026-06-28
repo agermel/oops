@@ -78,7 +78,7 @@ export function ServerTree({
       <div className="tree-header">
         <Server size={16} />
         <span>服务器</span>
-        <button className="ghost-button small tree-add-btn" title="添加服务器" onClick={openAddModal}>
+        <button className="ghost-button small tree-add-btn" title="添加服务器" aria-label="添加服务器" onClick={openAddModal}>
           <Plus size={14} />
         </button>
       </div>
@@ -86,11 +86,9 @@ export function ServerTree({
       {serverError && <div className="error-line">{serverError}</div>}
 
       <div className="tree-list">
-        {serversLoading && servers.length === 0 ? (
-          <div className="tree-empty">读取中...</div>
-        ) : servers.length === 0 ? (
-          <div className="tree-empty">暂无服务器</div>
-        ) : (
+        {serversLoading && servers.length > 0 && <div className="tree-loading">刷新中...</div>}
+        {!serversLoading && servers.length === 0 && <div className="tree-empty">暂无服务器</div>}
+        {servers.length > 0 &&
           servers.map((sw) => {
             const isExpanded = expandedServers.has(sw.nodelet.id);
             const conts = containers[sw.nodelet.id] || [];
@@ -111,9 +109,8 @@ export function ServerTree({
 
                 {isExpanded && (
                   <div className="tree-containers">
-                    {containersLoading && conts.length === 0 ? (
-                      <div className="tree-empty">读取容器中...</div>
-                    ) : conts.length === 0 ? (
+                    {containersLoading && conts.length > 0 && <div className="tree-loading">刷新中...</div>}
+                    {!containersLoading && conts.length === 0 ? (
                       <div className="tree-empty">暂无容器</div>
                     ) : (
                       conts.map((c) => {
@@ -136,16 +133,15 @@ export function ServerTree({
                 )}
               </div>
             );
-          })
-        )}
+          })}
       </div>
 
       {/* 添加服务器弹窗 */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setShowAddModal(false)} onKeyDown={(e) => { if (e.key === "Escape") setShowAddModal(false); }}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="server-form-title" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h2>添加服务器</h2>
+              <h2 id="server-form-title">添加服务器</h2>
               <button className="ghost-button" onClick={() => setShowAddModal(false)}><X size={18} /></button>
             </div>
             <div className="modal-body">

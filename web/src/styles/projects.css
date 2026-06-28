@@ -45,6 +45,9 @@
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-card-info p {
@@ -142,7 +145,8 @@
   padding: 12px;
 }
 
-.tree-empty {
+.tree-empty,
+.tree-loading {
   padding: 1.5rem;
   text-align: center;
   color: var(--muted);
@@ -511,6 +515,18 @@
   border: 1px solid var(--border);
 }
 
+.health-status-card.alive {
+  border-left: 4px solid var(--alive);
+}
+
+.health-status-card.dead {
+  border-left: 4px solid var(--dead);
+}
+
+.health-status-card.unknown {
+  border-left: 4px solid var(--unknown);
+}
+
 .health-status-card strong {
   display: block;
   font-size: 0.9rem;
@@ -813,16 +829,14 @@
   margin-top: 3px;
   color: var(--dead);
   font-size: 11px;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-all;
 }
 
 .mono {
   font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", monospace;
   font-size: 0.78rem;
   color: #3f4b5d;
+  word-break: break-all;
 }
 
 .ghost-button {
@@ -860,6 +874,10 @@
 .primary-button.small {
   padding: 0.3rem 0.75rem;
   font-size: 0.78rem;
+}
+
+.mcp-quick-btn {
+  margin-bottom: 12px;
 }
 
 .panel-summary {

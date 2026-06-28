@@ -46,7 +46,7 @@ export function ChatView({
       <div className="chat-header">
         <span><Sparkles size={18} /> 智能助手</span>
       </div>
-      <div className="chat-body">
+      <div className="chat-body" role="log" aria-live="polite">
         {chatExchanges.length === 0 && currentSteps.length === 0 && (
           <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>
         )}
@@ -97,7 +97,7 @@ export function ChatView({
           onKeyDown={(e) => { if (e.key === "Enter") { onSend(); } }}
           disabled={chatLoading}
         />
-        <button onClick={() => onSend()} disabled={chatLoading || !chatInput.trim()} title="发送">
+        <button onClick={() => onSend()} disabled={chatLoading || !chatInput.trim()} title="发送" aria-label="发送消息">
           <Send size={18} />
         </button>
       </div>

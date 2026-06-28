@@ -1,7 +1,29 @@
-import type { ContainerDetail } from "../types";
+import { Wrench } from "lucide-react";
+import type { ContainerDetail, MCPPrefill } from "../types";
 import { serviceTypeIcons, serviceTypeLabels } from "../types";
 
-export function ContainerOverview({ detail }: { detail: ContainerDetail }) {
+export function ContainerOverview({ detail, onConfigureMCP }: { detail: ContainerDetail; onConfigureMCP: (prefill: MCPPrefill) => void }) {
+  function buildMCPPrefill(): MCPPrefill {
+    const env: string[] = [];
+    if (detail.dsn?.raw) {
+      const type = detail.serviceType;
+      if (type === "mysql") env.push(`MYSQL_DSN=${detail.dsn.raw}`);
+      else if (type === "redis") {
+        // Redis MCP server typically accepts REDIS_URL or individual vars.
+        // Push the raw URL first, then individual vars for servers that need them.
+        env.push(`REDIS_URL=${detail.dsn.raw}`);
+        if (detail.dsn.host) env.push(`REDIS_HOST=${detail.dsn.host}`);
+        if (detail.dsn.port) env.push(`REDIS_PORT=${String(detail.dsn.port)}`);
+      } else if (type === "postgres") env.push(`DATABASE_URL=${detail.dsn.raw}`);
+      else if (type === "mongo") env.push(`MONGO_URI=${detail.dsn.raw}`);
+      else env.push(detail.dsn.raw);
+    }
+    return {
+      name: detail.container.name,
+      type: detail.serviceType,
+      env,
+    };
+  }
   const Icon = serviceTypeIcons[detail.serviceType] || serviceTypeIcons.unknown;
   const label = serviceTypeLabels[detail.serviceType] || detail.serviceType;
 
@@ -36,6 +58,10 @@ export function ContainerOverview({ detail }: { detail: ContainerDetail }) {
         {detail.dsn && (
           <div className="overview-card">
             <h3>连接信息 (DSN)</h3>
+            <button className="primary-button small mcp-quick-btn" onClick={() => onConfigureMCP(buildMCPPrefill())}>
+              <Wrench size={14} />
+              <span>一键配置 MCP</span>
+            </button>
             <dl>
               {detail.dsn.host && (
                 <>

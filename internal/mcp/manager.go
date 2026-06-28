@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,43 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 )
+
+// allowedCommands returns the list of MCP stdio commands permitted to execute.
+// Controlled via OOPS_MCP_ALLOWED_COMMANDS (comma-separated). Empty list means
+// no command is allowed.
+func allowedCommands() []string {
+	extra := os.Getenv("OOPS_MCP_ALLOWED_COMMANDS")
+	if extra == "" {
+		return nil
+	}
+	var cmds []string
+	for _, cmd := range strings.Split(extra, ",") {
+		cmd = strings.TrimSpace(cmd)
+		if cmd != "" {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return cmds
+}
+
+// validateCommand checks whether cmd is in the allowed list.
+// If the allowed list is empty, all commands are rejected.
+// Allowed entries may be either a full binary path or a bare name
+// (e.g. "mysql-mcp-server" matches "/usr/local/bin/mysql-mcp-server").
+func validateCommand(cmd string) error {
+	allowed := allowedCommands()
+	if len(allowed) == 0 {
+		return fmt.Errorf("no MCP commands are allowed; set OOPS_MCP_ALLOWED_COMMANDS")
+	}
+
+	base := filepath.Base(cmd)
+	for _, a := range allowed {
+		if cmd == a || base == a || filepath.Base(a) == base {
+			return nil
+		}
+	}
+	return fmt.Errorf("command %q is not in the allowed list", cmd)
+}
 
 // ConnectionConfig defines a single MCP server connection managed by the panel.
 type ConnectionConfig struct {
@@ -119,6 +158,11 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 	if cfg.ID == "" {
 		return fmt.Errorf("id is required")
 	}
+	if cfg.Command != "" {
+		if err := validateCommand(cfg.Command); err != nil {
+			return err
+		}
+	}
 	for _, existing := range m.config.Connections {
 		if existing.ID == cfg.ID {
 			return fmt.Errorf("connection %q already exists", cfg.ID)
@@ -146,6 +190,12 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 func (m *Manager) Update(cfg ConnectionConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if cfg.Command != "" {
+		if err := validateCommand(cfg.Command); err != nil {
+			return err
+		}
+	}
 
 	idx := -1
 	for i, existing := range m.config.Connections {
@@ -207,12 +257,18 @@ func (m *Manager) Remove(id string) error {
 // Test attempts a temporary connection to verify the config works.
 // It does not persist or affect running processes.
 func (m *Manager) Test(cfg ConnectionConfig) error {
+	if cfg.Command != "" {
+		if err := validateCommand(cfg.Command); err != nil {
+			return err
+		}
+	}
+
 	mcpCfg := config.MCPConfig{
 		Enabled:   true,
 		Transport: "stdio",
 		Command:   cfg.Command,
-		Args:      cfg.Args,
-		Env:       cfg.Env,
+		Args:      expandEnvSlice(cfg.Args),
+		Env:       expandEnvSlice(cfg.Env),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -238,6 +294,18 @@ func (m *Manager) Close() {
 
 // --- internal (caller must hold m.mu) ---
 
+// expandEnvSlice 展开字符串切片中的 ${VAR} 环境变量引用。
+func expandEnvSlice(vals []string) []string {
+	if len(vals) == 0 {
+		return vals
+	}
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		out[i] = os.ExpandEnv(v)
+	}
+	return out
+}
+
 func (m *Manager) load() error {
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {
@@ -262,8 +330,8 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 		Enabled:   true,
 		Transport: "stdio",
 		Command:   cfg.Command,
-		Args:      cfg.Args,
-		Env:       cfg.Env,
+		Args:      expandEnvSlice(cfg.Args),
+		Env:       expandEnvSlice(cfg.Env),
 	}
 
 	const maxRetries = 3

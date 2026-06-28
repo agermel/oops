@@ -2,7 +2,8 @@
 config/config.yaml
 web/node_modules/
 web/dist/
-oops
+/oops
+/oops-nodelet
 config/mcp_connections.json
 config/projects.json
 bin/

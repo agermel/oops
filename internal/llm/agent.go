@@ -74,6 +74,7 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, question string) (<-chan StepEvent, error) {
 	opt, future := react.WithMessageFuture()
 
+	// agent 
 	agent, err := newAgent(ctx, chatModel, tools)
 	if err != nil {
 		return nil, err

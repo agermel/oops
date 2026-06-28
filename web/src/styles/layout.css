@@ -220,6 +220,19 @@
   background: #eaf4ff;
 }
 
+.rail-nav button span,
+.rail-menu span {
+  transition: opacity 0.15s ease, max-width 0.15s ease;
+  overflow: hidden;
+  max-width: 160px;
+}
+
+.rail-back button span {
+  transition: opacity 0.15s ease, max-width 0.15s ease;
+  overflow: hidden;
+  max-width: 120px;
+}
+
 .shell.sidebar-collapsed .rail-menu {
   justify-content: center;
   padding: 0;
@@ -227,7 +240,9 @@
 
 .shell.sidebar-collapsed .rail-menu span,
 .shell.sidebar-collapsed .rail-nav button span {
-  display: none;
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
 }
 
 .shell.sidebar-collapsed .rail-nav {
@@ -277,7 +292,9 @@
 }
 
 .shell.sidebar-collapsed .rail-back button span {
-  display: none;
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
 }
 
 /* Content */

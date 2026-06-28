@@ -43,6 +43,20 @@
   display: grid;
   gap: 14px;
   align-content: start;
+
+  /* Overflow gradient indicators — shadows appear at top/bottom when content overflows */
+  background:
+    /* top cover: hides top shadow when at top */
+    linear-gradient(to bottom, #fff 30%, transparent),
+    /* bottom cover: hides bottom shadow when at bottom */
+    linear-gradient(to bottom, transparent, #fff 70%) 0 100%,
+    /* top shadow */
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.08), transparent),
+    /* bottom shadow */
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.08), transparent) 0 100%;
+  background-repeat: no-repeat;
+  background-size: 100% 40px, 100% 40px, 100% 12px, 100% 12px;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .chat-empty {
@@ -311,6 +325,22 @@
   padding: 0;
   font-size: 13px;
   font-weight: 600;
+}
+
+.step-result-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease;
+  overflow: hidden;
+}
+
+.step-result-wrap.open {
+  grid-template-rows: 1fr;
+}
+
+.step-result-wrap .step-result {
+  min-height: 0;
+  overflow: auto;
 }
 
 .step-result {

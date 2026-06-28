@@ -81,7 +81,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 	host, err := s.provider.Host(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
 	writeJSON(w, http.StatusOK, host)
@@ -91,7 +91,7 @@ func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	containers, err := s.provider.Containers(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
 	writeJSON(w, http.StatusOK, containers)
@@ -109,14 +109,14 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	case "inspect":
 		detail, err := s.provider.ContainerInspect(r, containerID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
 		writeJSON(w, http.StatusOK, detail)
 	case "logs":
 		logs, err := s.provider.ContainerLogs(r, containerID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
 		writeJSON(w, http.StatusOK, logs)
@@ -131,7 +131,7 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Request, containerID string) {
 	logs, err := s.provider.ContainerLogsStream(r, containerID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
 
@@ -187,4 +187,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// writeJSONError 写入 JSON 格式的错误响应。
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
