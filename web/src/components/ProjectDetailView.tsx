@@ -7,7 +7,6 @@ import type {
   ContainerDetail as ContainerDetailType,
   HealthResult,
   LogEntry,
-  MCPPrefill,
 } from "../types";
 import { ServerTree } from "./ServerTree";
 import { ContainerDetailView } from "./ContainerDetail";
@@ -39,7 +38,6 @@ export function ProjectDetailView({
   onAutoScrollChange,
   onClearLogs,
   logsPanelRef,
-  onConfigureMCP,
   onMCPChanged,
 }: {
   project: Project;
@@ -68,7 +66,6 @@ export function ProjectDetailView({
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
-  onConfigureMCP: (prefill: MCPPrefill) => void;
   onMCPChanged: () => void;
 }) {
   return (
@@ -113,7 +110,6 @@ export function ProjectDetailView({
           onAutoScrollChange={onAutoScrollChange}
           onClearLogs={onClearLogs}
           logsPanelRef={logsPanelRef}
-          onConfigureMCP={onConfigureMCP}
           nodeletId={selectedNodeletID}
           containerId={selectedContainerID}
           projectId={project.id}

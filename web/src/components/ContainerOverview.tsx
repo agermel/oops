@@ -1,35 +1,7 @@
-import { Wrench } from "lucide-react";
-import type { ContainerDetail, MCPPrefill } from "../types";
+import type { ContainerDetail } from "../types";
 import { serviceTypeIcons, serviceLabel } from "../types";
 
-export function ContainerOverview({ detail, nodeletId, containerId, onConfigureMCP }: { detail: ContainerDetail; nodeletId: string; containerId: string; onConfigureMCP: (prefill: MCPPrefill) => void }) {
-  function buildMCPPrefill(): MCPPrefill {
-    const env: string[] = [];
-    // 把 DSN 中的 host/port/user/database 提出来作为独立字段，密码留空让用户填。
-    // env 里仍然放一个模板，方便高级用户直接修改。
-    if (detail.dsn?.raw) {
-      const type = detail.serviceType;
-      if (type === "mysql") env.push(`MYSQL_DSN=${detail.dsn.raw}`);
-      else if (type === "redis") {
-        env.push(`REDIS_URL=${detail.dsn.raw}`);
-        if (detail.dsn.host) env.push(`REDIS_HOST=${detail.dsn.host}`);
-        if (detail.dsn.port) env.push(`REDIS_PORT=${String(detail.dsn.port)}`);
-      } else if (type === "postgres") env.push(`DATABASE_URL=${detail.dsn.raw}`);
-      else if (type === "mongo") env.push(`MONGO_URI=${detail.dsn.raw}`);
-      else env.push(detail.dsn.raw);
-    }
-    return {
-      name: detail.container.name,
-      type: detail.serviceType,
-      host: detail.dsn?.host,
-      port: detail.dsn?.port,
-      user: detail.dsn?.user,
-      database: detail.dsn?.database,
-      env,
-      containerId,
-      nodeletId,
-    };
-  }
+export function ContainerOverview({ detail }: { detail: ContainerDetail }) {
   const Icon = serviceTypeIcons[detail.serviceType] || serviceTypeIcons.unknown;
   const label = serviceLabel(detail.serviceType);
 
@@ -64,10 +36,6 @@ export function ContainerOverview({ detail, nodeletId, containerId, onConfigureM
         {detail.dsn && (
           <div className="overview-card">
             <h3>连接信息 (DSN)</h3>
-            <button className="primary-button small mcp-quick-btn" onClick={() => onConfigureMCP(buildMCPPrefill())}>
-              <Wrench size={14} />
-              <span>一键配置 MCP</span>
-            </button>
             <dl>
               {detail.dsn.host && (
                 <>

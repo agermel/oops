@@ -1,5 +1,7 @@
 import React from "react";
 import { Cog, RefreshCw } from "lucide-react";
+import { apiRequest, getErrorMessage } from "../lib/api";
+import { ToggleSwitch } from "./ToggleSwitch";
 
 // ---- 类型 ----
 
@@ -28,11 +30,9 @@ export function ToolsView() {
     setLoading(true);
     setError("");
     try {
-      const resp = await fetch("/api/tools");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setData(await resp.json());
+      setData(await apiRequest<ToolsData>("/api/tools"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "读取工具列表失败");
+      setError(getErrorMessage(err, "读取工具列表失败"));
     } finally {
       setLoading(false);
     }
@@ -58,12 +58,11 @@ export function ToolsView() {
     });
 
     try {
-      const resp = await fetch(`/api/tools/${encodeURIComponent(name)}`, {
+      await apiRequest(`/api/tools/${encodeURIComponent(name)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     } catch {
       // 失败时回滚
       fetchTools();
@@ -159,18 +158,11 @@ function ToolRow({
         <code className="tool-name">{tool.name}</code>
         <span className="tool-desc">{tool.description || "—"}</span>
       </div>
-      <label className="tool-toggle">
-        <input
-          type="checkbox"
-          className="toggle-input"
-          checked={tool.enabled}
-          disabled={toggling}
-          onChange={(e) => onToggle(e.target.checked)}
-        />
-        <span className={`toggle-track ${toggling ? "toggle-busy" : ""}`}>
-          <span className="toggle-thumb" />
-        </span>
-      </label>
+      <ToggleSwitch
+        checked={tool.enabled}
+        disabled={toggling}
+        onChange={onToggle}
+      />
     </div>
   );
 }

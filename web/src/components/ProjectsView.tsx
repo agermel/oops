@@ -1,6 +1,8 @@
 import React from "react";
-import { Plus, FolderKanban, Trash2, Edit3, ChevronRight, X } from "lucide-react";
+import { Plus, FolderKanban, Trash2, Edit3, ChevronRight } from "lucide-react";
 import type { Project } from "../types";
+import { apiRequest, getErrorMessage } from "../lib/api";
+import { Modal } from "./Modal";
 
 function emptyProject(): Project {
   return {
@@ -61,19 +63,15 @@ export function ProjectsView({
     const method = isNew ? "POST" : "PUT";
 
     try {
-      const resp = await fetch(url, {
+      await apiRequest(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing),
       });
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        throw new Error(data.error || `HTTP ${resp.status}`);
-      }
       closeForm();
       onRefresh();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "保存失败");
+      setFormError(getErrorMessage(err, "保存失败"));
     } finally {
       setSaving(false);
     }
@@ -82,14 +80,10 @@ export function ProjectsView({
   async function handleDelete(id: string) {
     if (!window.confirm(`确定要删除该项目吗？`)) return;
     try {
-      const resp = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        throw new Error(data.error || `HTTP ${resp.status}`);
-      }
+      await apiRequest(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
       onRefresh();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "删除失败");
+      setFormError(getErrorMessage(err, "删除失败"));
     }
   }
 
@@ -135,38 +129,32 @@ export function ProjectsView({
         )}
       </div>
 
-      {/* Modal */}
       {showForm && editing && (
-        <div className="modal-overlay" onClick={closeForm} onKeyDown={(e) => { if (e.key === "Escape") closeForm(); }}>
-          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="project-form-title" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2 id="project-form-title">{editing.id ? "编辑项目" : "新建项目"}</h2>
-              <button className="ghost-button" onClick={closeForm}><X size={18} /></button>
-            </div>
-            <div className="modal-body">
-              <label htmlFor="project-name">名称</label>
-              <input
-                id="project-name"
-                value={editing.name}
-                onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || e.target.value.toLowerCase().replace(/\s+/g, "-") })}
-                placeholder="例如: CCNU Box"
-              />
-              <label htmlFor="project-desc">描述</label>
-              <input
-                id="project-desc"
-                value={editing.description || ""}
-                onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-                placeholder="项目简介（可选）"
-              />
-              {formError && <div className="error-line">{formError}</div>}
-            </div>
-            <div className="modal-foot">
-              <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim() || saving}>
-                {saving ? "保存中..." : "保存"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title={editing.id ? "编辑项目" : "新建项目"}
+          onClose={closeForm}
+          footer={
+            <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim() || saving}>
+              {saving ? "保存中..." : "保存"}
+            </button>
+          }
+        >
+          <label htmlFor="project-name">名称</label>
+          <input
+            id="project-name"
+            value={editing.name}
+            onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || e.target.value.toLowerCase().replace(/\s+/g, "-") })}
+            placeholder="例如: CCNU Box"
+          />
+          <label htmlFor="project-desc">描述</label>
+          <input
+            id="project-desc"
+            value={editing.description || ""}
+            onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+            placeholder="项目简介（可选）"
+          />
+          {formError && <div className="error-line">{formError}</div>}
+        </Modal>
       )}
     </section>
   );

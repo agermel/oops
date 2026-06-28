@@ -1,7 +1,11 @@
-import { Server, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { Server, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import React from "react";
 import type { ServerWithNodelet, ContainerWithType, NodeletItem } from "../types";
 import { serviceTypeIcons, serviceLabel } from "../types";
+import { apiRequest, getErrorMessage } from "../lib/api";
+import { projectPaths } from "../lib/paths";
+import { Modal } from "./Modal";
+import { StatusDot } from "./StatusPill";
 
 export function ServerTree({
   projectId,
@@ -34,16 +38,16 @@ export function ServerTree({
   const [addError, setAddError] = React.useState("");
   const [addingID, setAddingID] = React.useState("");
 
+  const paths = projectPaths(projectId);
+
   async function openAddModal() {
     setShowAddModal(true);
     setAddError("");
     setNodeletsLoading(true);
     try {
-      const resp = await fetch("/api/nodelets");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setNodelets(await resp.json());
+      setNodelets(await apiRequest<NodeletItem[]>("/api/nodelets"));
     } catch (err) {
-      setAddError(err instanceof Error ? err.message : "读取服务器列表失败");
+      setAddError(getErrorMessage(err, "读取服务器列表失败"));
     } finally {
       setNodeletsLoading(false);
     }
@@ -53,22 +57,22 @@ export function ServerTree({
     setAddingID(nodeletID);
     setAddError("");
     try {
-      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/servers`, {
+      await apiRequest(paths.servers, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nodeletId: nodeletID }),
       });
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        throw new Error(data.error || `HTTP ${resp.status}`);
-      }
       setShowAddModal(false);
       onServersChanged();
     } catch (err) {
-      setAddError(err instanceof Error ? err.message : "添加失败");
+      setAddError(getErrorMessage(err, "添加失败"));
     } finally {
       setAddingID("");
     }
+  }
+
+  function closeAddModal() {
+    setShowAddModal(false);
   }
 
   const existingIDs = new Set(servers.map((s) => s.nodelet.id));
@@ -104,7 +108,7 @@ export function ServerTree({
                     <strong>{sw.nodelet.name || sw.nodelet.id}</strong>
                     <small>{sw.nodelet.address}</small>
                   </div>
-                  <span className={`status-dot ${sw.host?.available ? "alive" : "dead"}`} />
+                  <StatusDot alive={sw.host?.available ?? false} />
                 </button>
 
                 {isExpanded && (
@@ -125,7 +129,7 @@ export function ServerTree({
                             <Icon size={14} />
                             <span className="tree-container-name">{c.name}</span>
                             {label && <span className="tree-container-type">{label}</span>}
-                            <span className={`status-dot ${c.state === "running" ? "alive" : "dead"}`} />
+                            <StatusDot alive={c.state === "running"} />
                           </button>
                         );
                       })
@@ -137,45 +141,36 @@ export function ServerTree({
           })}
       </div>
 
-      {/* 添加服务器弹窗 */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)} onKeyDown={(e) => { if (e.key === "Escape") setShowAddModal(false); }}>
-          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="server-form-title" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2 id="server-form-title">添加服务器</h2>
-              <button className="ghost-button" onClick={() => setShowAddModal(false)}><X size={18} /></button>
-            </div>
-            <div className="modal-body">
-              {addError && <div className="error-line">{addError}</div>}
-              {nodeletsLoading ? (
-                <div className="tree-empty">读取可用服务器中...</div>
-              ) : availableNodelets.length === 0 ? (
-                <div className="tree-empty">{nodelets.length === 0 ? "没有可用的服务器，请先在配置中添加 nodelet" : "所有服务器已添加到项目中"}</div>
-              ) : (
-                <ul className="nodelet-pick-list">
-                  {availableNodelets.map((n) => (
-                    <li key={n.nodelet.id}>
-                      <div className="nodelet-pick-info">
-                        <strong>{n.nodelet.name || n.nodelet.id}</strong>
-                        <small>{n.nodelet.address}</small>
-                        {n.available !== undefined && (
-                          <span className={`status-dot ${n.available ? "alive" : "dead"}`} />
-                        )}
-                      </div>
-                      <button
-                        className="primary-button small"
-                        disabled={addingID === n.nodelet.id}
-                        onClick={() => addServer(n.nodelet.id)}
-                      >
-                        {addingID === n.nodelet.id ? "添加中..." : "添加"}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
+        <Modal title="添加服务器" onClose={closeAddModal}>
+          {addError && <div className="error-line">{addError}</div>}
+          {nodeletsLoading ? (
+            <div className="tree-empty">读取可用服务器中...</div>
+          ) : availableNodelets.length === 0 ? (
+            <div className="tree-empty">{nodelets.length === 0 ? "没有可用的服务器，请先在配置中添加 nodelet" : "所有服务器已添加到项目中"}</div>
+          ) : (
+            <ul className="nodelet-pick-list">
+              {availableNodelets.map((n) => (
+                <li key={n.nodelet.id}>
+                  <div className="nodelet-pick-info">
+                    <strong>{n.nodelet.name || n.nodelet.id}</strong>
+                    <small>{n.nodelet.address}</small>
+                    {n.available !== undefined && (
+                      <StatusDot alive={n.available} />
+                    )}
+                  </div>
+                  <button
+                    className="primary-button small"
+                    disabled={addingID === n.nodelet.id}
+                    onClick={() => addServer(n.nodelet.id)}
+                  >
+                    {addingID === n.nodelet.id ? "添加中..." : "添加"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Modal>
       )}
     </aside>
   );

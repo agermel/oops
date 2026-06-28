@@ -1,6 +1,6 @@
 import React from "react";
 import { Info, Gauge, Wrench, FileText } from "lucide-react";
-import type { ContainerDetail as ContainerDetailType, HealthResult, LogEntry, MCPPrefill } from "../types";
+import type { ContainerDetail as ContainerDetailType, HealthResult, LogEntry } from "../types";
 import { ContainerOverview } from "./ContainerOverview";
 import { ContainerHealth } from "./ContainerHealth";
 import { ContainerMCP } from "./ContainerMCP";
@@ -29,7 +29,6 @@ export function ContainerDetailView({
   onAutoScrollChange,
   onClearLogs,
   logsPanelRef,
-  onConfigureMCP,
   nodeletId,
   containerId,
   projectId,
@@ -48,7 +47,6 @@ export function ContainerDetailView({
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
-  onConfigureMCP: (prefill: MCPPrefill) => void;
   nodeletId: string;
   containerId: string;
   projectId: string;
@@ -85,7 +83,7 @@ export function ContainerDetailView({
         ) : (
           <>
             <div role="tabpanel" hidden={activeTab !== "overview"}>
-              {activeTab === "overview" && <ContainerOverview detail={detail} nodeletId={nodeletId} containerId={containerId} onConfigureMCP={onConfigureMCP} />}
+              {activeTab === "overview" && <ContainerOverview detail={detail} />}
             </div>
             <div role="tabpanel" hidden={activeTab !== "health"}>
               {activeTab === "health" && (

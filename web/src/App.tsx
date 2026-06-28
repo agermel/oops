@@ -9,10 +9,11 @@ import type {
   LogEntry,
   StepEvent,
   ChatExchange,
-  MCPPrefill,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { useHashRouter } from "./hooks/useHashRouter";
+import { apiRequest, getErrorMessage } from "./lib/api";
+import { projectPaths, serverPaths } from "./lib/paths";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
 import { ProjectsView } from "./components/ProjectsView";
@@ -52,11 +53,6 @@ export function App() {
 
   // 侧栏折叠（纯 UI 状态）
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-
-  // MCP 预填（跨视图传递）
-  const [mcpPrefill, setMCPPrefill] = React.useState<MCPPrefill | null>(null);
-  // 保存 MCP 后返回的目标（容器详情页）
-  const mcpReturnRef = React.useRef<{ serverId?: string; containerId?: string }>({});
 
   // ---- 项目状态 ----
   const [projects, setProjects] = React.useState<Project[]>([]);
@@ -128,11 +124,9 @@ export function App() {
     setProjectsLoading(true);
     setProjectsError("");
     try {
-      const resp = await fetch("/api/projects");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setProjects(await resp.json());
+      setProjects(await apiRequest<Project[]>("/api/projects"));
     } catch (err) {
-      setProjectsError(err instanceof Error ? err.message : "读取项目列表失败");
+      setProjectsError(getErrorMessage(err, "读取项目列表失败"));
     } finally {
       setProjectsLoading(false);
     }
@@ -142,12 +136,10 @@ export function App() {
     setServersLoading(true);
     setServerError("");
     try {
-      const resp = await fetch(`/api/projects/${encodeURIComponent(projectID)}/servers`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data: ServerWithNodelet[] = await resp.json();
-      setServers(data);
+      const { servers: url } = projectPaths(projectID);
+      setServers(await apiRequest<ServerWithNodelet[]>(url));
     } catch (err) {
-      setServerError(err instanceof Error ? err.message : "读取服务器列表失败");
+      setServerError(getErrorMessage(err, "读取服务器列表失败"));
     } finally {
       setServersLoading(false);
     }
@@ -156,14 +148,10 @@ export function App() {
   async function loadContainers(projectID: string, nodeletID: string) {
     setContainersLoading(true);
     try {
-      const pid = encodeURIComponent(projectID);
-      const nid = encodeURIComponent(nodeletID);
-      const resp = await fetch(`/api/projects/${pid}/servers/${nid}/containers`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data: ContainerWithType[] = await resp.json();
+      const data = await apiRequest<ContainerWithType[]>(serverPaths(projectID, nodeletID).containers);
       setContainers((prev) => ({ ...prev, [nodeletID]: data }));
     } catch (err) {
-      setServerError(err instanceof Error ? err.message : "读取容器列表失败");
+      setServerError(getErrorMessage(err, "读取容器列表失败"));
     } finally {
       setContainersLoading(false);
     }
@@ -177,17 +165,11 @@ export function App() {
     // 加载容器详情
     setDetailLoading(true);
     try {
-      const pid = encodeURIComponent(projectId);
-      const nid = encodeURIComponent(nodeletID);
-      const cid = encodeURIComponent(containerID);
-      const resp = await fetch(`/api/projects/${pid}/servers/${nid}/containers/${cid}`);
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        throw new Error(data.error || `HTTP ${resp.status}`);
-      }
-      setContainerDetail(await resp.json());
+      setContainerDetail(await apiRequest<ContainerDetailType>(
+        serverPaths(projectId, nodeletID).container(containerID)
+      ));
     } catch (err) {
-      setDetailError(err instanceof Error ? err.message : "读取容器详情失败");
+      setDetailError(getErrorMessage(err, "读取容器详情失败"));
       setContainerDetail(undefined);
     } finally {
       setDetailLoading(false);
@@ -202,10 +184,7 @@ export function App() {
     setLogsLoading(true);
     setLogsError("");
 
-    const pid = encodeURIComponent(projectId);
-    const nid = encodeURIComponent(nodeletID);
-    const cid = encodeURIComponent(containerID);
-    const url = `/api/projects/${pid}/servers/${nid}/containers/${cid}/logs/stream?tail=100`;
+    const url = serverPaths(projectId, nodeletID).containerLogs(containerID);
 
     const source = new EventSource(url);
     logEventSource.current = source;
@@ -232,14 +211,12 @@ export function App() {
     if (!selectedContainerID || !selectedNodeletID) return;
     setHealthLoading(true);
     try {
-      const pid = encodeURIComponent(selectedProjectID);
-      const nid = encodeURIComponent(selectedNodeletID);
-      const cid = encodeURIComponent(selectedContainerID);
-      const resp = await fetch(`/api/projects/${pid}/servers/${nid}/containers/${cid}/check`, { method: "POST" });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setHealth(await resp.json());
+      setHealth(await apiRequest<HealthResult>(
+        serverPaths(selectedProjectID, selectedNodeletID).containerCheck(selectedContainerID),
+        { method: "POST" }
+      ));
     } catch (err) {
-      setHealth({ status: "unknown", message: err instanceof Error ? err.message : "探测失败", latency: 0 });
+      setHealth({ status: "unknown", message: getErrorMessage(err, "探测失败"), latency: 0 });
     } finally {
       setHealthLoading(false);
     }
@@ -259,7 +236,7 @@ export function App() {
 
     try {
       const url = selectedProjectID
-        ? `/api/projects/${encodeURIComponent(selectedProjectID)}/chat`
+        ? projectPaths(selectedProjectID).chat
         : "/api/chat";
       const resp = await fetch(url, {
         method: "POST",
@@ -305,7 +282,7 @@ export function App() {
       setChatLoading(false);
       chatLoadingRef.current = false;
     } catch (err) {
-      setChatError(err instanceof Error ? err.message : "聊天请求失败");
+      setChatError(getErrorMessage(err, "聊天请求失败"));
       setCurrentQuestion("");
       setCurrentSteps([]);
       chatStepsRef.current = [];
@@ -341,28 +318,6 @@ export function App() {
     setChatError("");
   }
 
-
-  function configureMCP(prefill: MCPPrefill) {
-    setMCPPrefill(prefill);
-    // 记住当前容器位置，保存后返回
-    mcpReturnRef.current = { serverId: urlServerId, containerId: urlContainerId };
-    if (selectedProjectID) {
-      navigate({ view: "project-mcp", projectId: selectedProjectID });
-    }
-  }
-
-  function goBackFromMCP() {
-    const { serverId, containerId } = mcpReturnRef.current;
-    mcpReturnRef.current = {};
-    if (selectedProjectID) {
-      replace({
-        view: "project-overview",
-        projectId: selectedProjectID,
-        serverId,
-        containerId,
-      });
-    }
-  }
 
   function selectServerFromUI(nodeletID: string) {
     if (!selectedProjectID) return;
@@ -598,7 +553,6 @@ export function App() {
               setLogs([]);
             }}
             logsPanelRef={logsPanel}
-            onConfigureMCP={configureMCP}
             onMCPChanged={() => {
               if (selectedProjectID && urlServerId && urlContainerId) {
                 selectContainer(selectedProjectID, urlServerId, urlContainerId);
@@ -615,7 +569,7 @@ export function App() {
                 <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
               </div>
             </div>
-            <MCPView prefill={mcpPrefill} onPrefillConsumed={() => setMCPPrefill(null)} onGoBack={goBackFromMCP} />
+            <MCPView />
           </section>
         )}
 
