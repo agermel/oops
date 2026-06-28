@@ -1,5 +1,5 @@
 import React from "react";
-import { Info, Gauge, Wrench, FileText, RefreshCw } from "lucide-react";
+import { Info, Gauge, Wrench, FileText } from "lucide-react";
 import type { ContainerDetail as ContainerDetailType, HealthResult, LogEntry, MCPPrefill } from "../types";
 import { ContainerOverview } from "./ContainerOverview";
 import { ContainerHealth } from "./ContainerHealth";
@@ -30,6 +30,10 @@ export function ContainerDetailView({
   onClearLogs,
   logsPanelRef,
   onConfigureMCP,
+  nodeletId,
+  containerId,
+  projectId,
+  onMCPChanged,
 }: {
   detail?: ContainerDetailType;
   loading: boolean;
@@ -45,6 +49,10 @@ export function ContainerDetailView({
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
   onConfigureMCP: (prefill: MCPPrefill) => void;
+  nodeletId: string;
+  containerId: string;
+  projectId: string;
+  onMCPChanged: () => void;
 }) {
   const [activeTab, setActiveTab] = React.useState<TabID>("overview");
 
@@ -64,7 +72,6 @@ export function ContainerDetailView({
             <span>{tab.label}</span>
           </button>
         ))}
-        {loading && <RefreshCw size={15} className="spin" />}
       </div>
 
       {error && <div className="error-line">{error}</div>}
@@ -78,7 +85,7 @@ export function ContainerDetailView({
         ) : (
           <>
             <div role="tabpanel" hidden={activeTab !== "overview"}>
-              {activeTab === "overview" && <ContainerOverview detail={detail} onConfigureMCP={onConfigureMCP} />}
+              {activeTab === "overview" && <ContainerOverview detail={detail} nodeletId={nodeletId} containerId={containerId} onConfigureMCP={onConfigureMCP} />}
             </div>
             <div role="tabpanel" hidden={activeTab !== "health"}>
               {activeTab === "health" && (
@@ -86,7 +93,18 @@ export function ContainerDetailView({
               )}
             </div>
             <div role="tabpanel" hidden={activeTab !== "mcp"}>
-              {activeTab === "mcp" && <ContainerMCP mcp={detail.mcp} />}
+              {activeTab === "mcp" && (
+                <ContainerMCP
+                  mcp={detail.mcp}
+                  projectId={projectId}
+                  nodeletId={nodeletId}
+                  containerId={containerId}
+                  containerName={detail.container.name}
+                  serviceType={detail.serviceType}
+                  dsn={detail.dsn}
+                  onMCPChanged={onMCPChanged}
+                />
+              )}
             </div>
             <div role="tabpanel" hidden={activeTab !== "logs"}>
               {activeTab === "logs" && (

@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen, ArrowLeft } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { navigation, projectNavigation } from "../types";
 
 export function SideRail({
@@ -7,14 +7,12 @@ export function SideRail({
   variant,
   onCollapsedChange,
   onNavChange,
-  onBack,
 }: {
   activeNav: string;
   collapsed: boolean;
   variant: "global" | "project";
   onCollapsedChange: (collapsed: boolean) => void;
   onNavChange: (id: string) => void;
-  onBack?: () => void;
 }) {
   const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
   const items = variant === "project" ? projectNavigation : navigation;
@@ -45,14 +43,6 @@ export function SideRail({
           </button>
         ))}
       </nav>
-      {variant === "project" && onBack && (
-        <div className="rail-back">
-          <button onClick={onBack} title="返回项目列表">
-            <ArrowLeft size={18} />
-            <span>返回</span>
-          </button>
-        </div>
-      )}
     </aside>
   );
 }

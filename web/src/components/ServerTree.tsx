@@ -1,7 +1,7 @@
 import { Server, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import React from "react";
 import type { ServerWithNodelet, ContainerWithType, NodeletItem } from "../types";
-import { serviceTypeIcons, serviceTypeLabels } from "../types";
+import { serviceTypeIcons, serviceLabel } from "../types";
 
 export function ServerTree({
   projectId,
@@ -115,6 +115,7 @@ export function ServerTree({
                     ) : (
                       conts.map((c) => {
                         const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
+                        const label = serviceLabel(c.serviceType);
                         return (
                           <button
                             key={c.id}
@@ -123,7 +124,7 @@ export function ServerTree({
                           >
                             <Icon size={14} />
                             <span className="tree-container-name">{c.name}</span>
-                            <span className="tree-container-type">{serviceTypeLabels[c.serviceType] || c.serviceType}</span>
+                            {label && <span className="tree-container-type">{label}</span>}
                             <span className={`status-dot ${c.state === "running" ? "alive" : "dead"}`} />
                           </button>
                         );

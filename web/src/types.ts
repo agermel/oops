@@ -105,6 +105,7 @@ export type MCPStatus = {
   connected: boolean;
   toolCount: number;
   error?: string;
+  connectionId?: string;
 };
 
 // MCPConnectionConfig 对应后端 MCP 连接配置。
@@ -116,6 +117,8 @@ export type MCPConnectionConfig = {
   args: string[];
   env: string[];
   enabled: boolean;
+  containerId?: string;
+  nodeletId?: string;
 };
 
 // MCPConnectionStatus 是带运行时状态的 MCP 连接。
@@ -134,6 +137,8 @@ export type MCPPrefill = {
   user?: string;
   database?: string;
   env: string[];
+  containerId?: string;
+  nodeletId?: string;
 };
 
 export type ContainerDetail = {
@@ -209,6 +214,17 @@ export const serviceTypeIcons: Record<string, typeof Database> = {
   elasticsearch: Search,
   kafka: Layers,
   etcd: Layers,
+  clickhouse: Database,
+  minio: Database,
+  consul: Globe,
+  zookeeper: Layers,
+  prometheus: Database,
+  grafana: Search,
+  influxdb: Database,
+  memcached: Layers,
+  cassandra: Database,
+  neo4j: Database,
+  caddy: Globe,
   unknown: Server,
 };
 
@@ -224,8 +240,41 @@ export const serviceTypeLabels: Record<string, string> = {
   jaeger: "Jaeger",
   nacos: "Nacos",
   rabbitmq: "RabbitMQ",
+  clickhouse: "ClickHouse",
+  minio: "MinIO",
+  consul: "Consul",
+  zookeeper: "ZooKeeper",
+  prometheus: "Prometheus",
+  grafana: "Grafana",
+  influxdb: "InfluxDB",
+  memcached: "Memcached",
+  cassandra: "Cassandra",
+  neo4j: "Neo4j",
+  caddy: "Caddy",
   unknown: "未知",
 };
+
+// shortImageName 从完整镜像名中提取可读的简短名称。
+// "ghcr.io/myorg/myapp:latest" → "myapp:latest"
+// "kicbase:v0.0.50@sha256:eb4fec..." → "kicbase:v0.0.50"
+// "mysql:8.0" → "mysql:8.0"
+export function shortImageName(image: string): string {
+  // 去掉 @sha256:... 摘要后缀
+  const atIndex = image.indexOf("@");
+  const cleaned = atIndex >= 0 ? image.slice(0, atIndex) : image;
+  // 去掉 registry 前缀，取最后一个 / 之后的部分
+  const lastSlash = cleaned.lastIndexOf("/");
+  const name = lastSlash >= 0 ? cleaned.slice(lastSlash + 1) : cleaned;
+  return name || image;
+}
+
+// serviceLabel 返回服务类型的中文标签；若无法识别则返回空字符串。
+export function serviceLabel(serviceType: string): string {
+  if (serviceType && serviceType !== "unknown") {
+    return serviceTypeLabels[serviceType] || serviceType;
+  }
+  return "";
+}
 
 // ---- 常量 ----
 

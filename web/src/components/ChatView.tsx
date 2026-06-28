@@ -77,7 +77,7 @@ export function ChatView({
         )}
       </div>
       <div className="chat-body" role="log" aria-live="polite">
-        {chatExchanges.length === 0 && currentSteps.length === 0 && (
+        {chatExchanges.length === 0 && currentSteps.length === 0 && !chatLoading && !currentQuestion && !chatError && (
           <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>
         )}
         {processedExchanges.map((ex, i) => (

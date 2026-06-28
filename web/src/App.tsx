@@ -55,6 +55,8 @@ export function App() {
 
   // MCP 预填（跨视图传递）
   const [mcpPrefill, setMCPPrefill] = React.useState<MCPPrefill | null>(null);
+  // 保存 MCP 后返回的目标（容器详情页）
+  const mcpReturnRef = React.useRef<{ serverId?: string; containerId?: string }>({});
 
   // ---- 项目状态 ----
   const [projects, setProjects] = React.useState<Project[]>([]);
@@ -169,7 +171,6 @@ export function App() {
 
   async function selectContainer(projectId: string, nodeletID: string, containerID: string) {
     closeLogStream();
-    setLogs([]);
     setDetailError("");
     setHealth(undefined);
 
@@ -200,7 +201,6 @@ export function App() {
     closeLogStream();
     setLogsLoading(true);
     setLogsError("");
-    setLogs([]);
 
     const pid = encodeURIComponent(projectId);
     const nid = encodeURIComponent(nodeletID);
@@ -344,8 +344,23 @@ export function App() {
 
   function configureMCP(prefill: MCPPrefill) {
     setMCPPrefill(prefill);
+    // 记住当前容器位置，保存后返回
+    mcpReturnRef.current = { serverId: urlServerId, containerId: urlContainerId };
     if (selectedProjectID) {
       navigate({ view: "project-mcp", projectId: selectedProjectID });
+    }
+  }
+
+  function goBackFromMCP() {
+    const { serverId, containerId } = mcpReturnRef.current;
+    mcpReturnRef.current = {};
+    if (selectedProjectID) {
+      replace({
+        view: "project-overview",
+        projectId: selectedProjectID,
+        serverId,
+        containerId,
+      });
     }
   }
 
@@ -432,7 +447,7 @@ export function App() {
   React.useEffect(() => {
     if (!urlContainerId || !urlServerId) return;
     // 避免重复选中同一个容器
-    if (urlContainerId === selectedContainerID && containerDetail) return;
+    if (containerDetail && containerDetail.container.id === urlContainerId) return;
 
     const serverContainers = containers[urlServerId];
     if (!serverContainers) return; // 容器列表还没加载
@@ -488,14 +503,11 @@ export function App() {
     return () => closeLogStream();
   }, [flushLogs]);
 
-  React.useEffect(() => {
-    if (autoScroll && logsPanel.current) {
-      logsPanel.current.scrollTop = logsPanel.current.scrollHeight;
-    }
-  }, [logs, autoScroll]);
+  // 自动滚动由 ContainerLogs 内部的 IntersectionObserver + MutationObserver 处理
 
   // ---- 标题 ----
   const selectedProject = projects.find((p) => p.id === selectedProjectID);
+  const isProjectRoute = Boolean(selectedProjectID);
 
   React.useEffect(() => {
     const parts: string[] = [];
@@ -515,19 +527,18 @@ export function App() {
       </a>
       <Header activeNav={activeNav} onNavChange={() => {}} />
       <SideRail
-        activeNav={selectedProject ? projectSection : activeNav}
+        activeNav={isProjectRoute ? projectSection : activeNav}
         collapsed={sidebarCollapsed}
-        variant={selectedProject ? "project" : "global"}
+        variant={isProjectRoute ? "project" : "global"}
         onCollapsedChange={setSidebarCollapsed}
         onNavChange={
-          selectedProject
+          isProjectRoute
             ? goToProjectSection
             : (id: string) => {
                 if (id === "console") navigate({ view: "console" });
                 else if (id === "projects") navigate({ view: "projects" });
               }
         }
-        onBack={selectedProject ? goToProjectList : undefined}
       />
 
       <main id="main-content" className="content">
@@ -588,6 +599,11 @@ export function App() {
             }}
             logsPanelRef={logsPanel}
             onConfigureMCP={configureMCP}
+            onMCPChanged={() => {
+              if (selectedProjectID && urlServerId && urlContainerId) {
+                selectContainer(selectedProjectID, urlServerId, urlContainerId);
+              }
+            }}
           />
         )}
 
@@ -599,7 +615,7 @@ export function App() {
                 <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
               </div>
             </div>
-            <MCPView prefill={mcpPrefill} onPrefillConsumed={() => setMCPPrefill(null)} />
+            <MCPView prefill={mcpPrefill} onPrefillConsumed={() => setMCPPrefill(null)} onGoBack={goBackFromMCP} />
           </section>
         )}
 

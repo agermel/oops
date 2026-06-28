@@ -5,14 +5,19 @@ import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill } from "../ty
 // ---- 类型默认值 ----
 const typeDefaults: Record<string, { command: string; args: string[]; env: string[] }> = {
   mysql: {
-    command: "./bin/mysql-mcp-server",
+    command: "./mcp-servers/mysql/mysql-mcp-server",
     args: ["--silent"],
     env: ["MYSQL_DSN=user:pass@tcp(host:3306)/db?charset=utf8mb4"],
   },
   redis: {
-    command: "./bin/redis-mcp-server",
+    command: "./mcp-servers/redis/redis-mcp-server",
     args: [],
     env: ["REDIS_HOST=127.0.0.1", "REDIS_PORT=6379", "REDIS_DB=0", "REDIS_PWD="],
+  },
+  etcd: {
+    command: "./mcp-servers/etcd/etcd-mcp-server",
+    args: [],
+    env: ["ETCD_ENDPOINTS=127.0.0.1:2379"],
   },
   postgres: {
     command: "uvx",
@@ -27,7 +32,7 @@ const typeDefaults: Record<string, { command: string; args: string[]; env: strin
 };
 
 // 哪些类型显示连接参数字段
-const typesWithCredentials = new Set(["mysql", "redis", "postgres"]);
+const typesWithCredentials = new Set(["mysql", "redis", "postgres", "etcd"]);
 
 function emptyForm(type?: string): MCPConnectionStatus {
   const t = type || "mysql";
@@ -54,6 +59,8 @@ function formToConfig(form: MCPConnectionStatus): MCPConnectionConfig {
     args: form.args,
     env: form.env,
     enabled: form.enabled,
+    containerId: form.containerId,
+    nodeletId: form.nodeletId,
   };
 }
 
@@ -98,6 +105,10 @@ function parseCredentials(type: string, env: string[]): Credentials {
       creds.port = m[4] || "";
       creds.database = m[5] || "";
     }
+  } else if (type === "etcd") {
+    creds.host = env.find((e) => e.startsWith("ETCD_ENDPOINTS="))?.slice("ETCD_ENDPOINTS=".length) || "";
+    creds.user = env.find((e) => e.startsWith("ETCD_USERNAME="))?.slice("ETCD_USERNAME=".length) || "";
+    creds.password = env.find((e) => e.startsWith("ETCD_PASSWORD="))?.slice("ETCD_PASSWORD=".length) || "";
   }
   return creds;
 }
@@ -125,11 +136,26 @@ function credentialsToEnv(type: string, creds: Credentials): string[] {
     if (!creds.user && !creds.host) return [];
     return [`DATABASE_URL=${dsn}`];
   }
+  if (type === "etcd") {
+    const env: string[] = [];
+    if (creds.host) env.push(`ETCD_ENDPOINTS=${creds.host}`);
+    if (creds.user) env.push(`ETCD_USERNAME=${creds.user}`);
+    if (creds.password) env.push(`ETCD_PASSWORD=${creds.password}`);
+    return env;
+  }
   return [];
 }
 
 // ---- MCPView ----
-export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill | null; onPrefillConsumed?: () => void }) {
+export function MCPView({
+  prefill,
+  onPrefillConsumed,
+  onGoBack,
+}: {
+  prefill?: MCPPrefill | null;
+  onPrefillConsumed?: () => void;
+  onGoBack?: () => void;
+}) {
   const [connections, setConnections] = React.useState<MCPConnectionStatus[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -142,6 +168,10 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
   const [saveError, setSaveError] = React.useState("");
   const [testResult, setTestResult] = React.useState("");
   const [testing, setTesting] = React.useState(false);
+  const [toggling, setToggling] = React.useState<Set<string>>(new Set());
+
+  // 跟踪当前表单是否由"一键配置 MCP"打开，保存后自动返回
+  const fromPrefillRef = React.useRef(false);
 
   // 连接参数字段（仅 mysql/redis/postgres 使用）
   const [creds, setCreds] = React.useState<Credentials>(emptyCreds());
@@ -171,11 +201,14 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
       form.name = prefill.name;
       // 保留 prefill 带来的 env 模板，但优先用独立字段
       form.env = prefill.env.length > 0 ? prefill.env : form.env;
+      form.containerId = prefill.containerId;
+      form.nodeletId = prefill.nodeletId;
       setEditing(form);
       setIsNew(true);
       setShowForm(true);
       setTestResult("");
       setSaveError("");
+      fromPrefillRef.current = true;
 
       // 填入连接参数
       const c = emptyCreds();
@@ -213,6 +246,7 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
     setEditing(null);
     setTestResult("");
     setSaveError("");
+    fromPrefillRef.current = false;
   }
 
   // 连接参数变化时，自动同步到 env
@@ -261,6 +295,12 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
       setEditing(null);
       setTestResult("");
       setSaveError("");
+      // 如果是从容器"一键配置 MCP"进来的，保存后自动返回容器详情
+      if (fromPrefillRef.current) {
+        fromPrefillRef.current = false;
+        onGoBack?.();
+        return;
+      }
       fetchConnections();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "保存失败");
@@ -306,6 +346,36 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
     }
   }
 
+  async function handleToggleEnabled(item: MCPConnectionStatus) {
+    setToggling((prev) => new Set(prev).add(item.id));
+    const body: MCPConnectionConfig = {
+      id: item.id,
+      name: item.name,
+      type: item.type,
+      command: item.command,
+      args: item.args,
+      env: item.env,
+      enabled: !item.enabled,
+    };
+    try {
+      const resp = await fetch(`/api/mcp/connections/${encodeURIComponent(item.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      fetchConnections();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新失败");
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  }
+
   const statusLabel: Record<string, string> = {
     running: "运行中",
     stopped: "已停止",
@@ -338,6 +408,7 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
             <col className="mcp-col-status" />
             <col className="mcp-col-count" />
             <col className="mcp-col-command" />
+            <col className="mcp-col-toggle" />
             <col className="mcp-col-actions" />
           </colgroup>
           <thead>
@@ -347,13 +418,14 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
               <th>状态</th>
               <th>工具数</th>
               <th>命令</th>
+              <th>启用</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             {connections.length === 0 && !loading ? (
               <tr>
-                <td colSpan={6} className="mcp-table-empty">
+                <td colSpan={7} className="mcp-table-empty">
                   暂无 MCP 连接，点击"新增"创建
                 </td>
               </tr>
@@ -372,6 +444,20 @@ export function MCPView({ prefill, onPrefillConsumed }: { prefill?: MCPPrefill |
                   </td>
                   <td>{item.toolCount}</td>
                   <td className="mono">{item.command}</td>
+                  <td className="mcp-toggle-cell">
+                    <label className="tool-toggle">
+                      <input
+                        type="checkbox"
+                        className="toggle-input"
+                        checked={item.enabled}
+                        disabled={toggling.has(item.id)}
+                        onChange={() => handleToggleEnabled(item)}
+                      />
+                      <span className={`toggle-track ${toggling.has(item.id) ? "toggle-busy" : ""}`}>
+                        <span className="toggle-thumb" />
+                      </span>
+                    </label>
+                  </td>
                   <td className="mcp-actions-cell">
                     <div className="mcp-actions">
                       <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>

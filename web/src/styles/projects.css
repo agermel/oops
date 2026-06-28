@@ -87,7 +87,7 @@
 }
 
 .project-detail {
-  flex: 1;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -109,7 +109,7 @@
 /* ---- 项目详情：左右分栏 ---- */
 .project-split {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 18px;
   flex: 1;
   min-height: 0;
@@ -119,7 +119,6 @@
 .server-tree {
   width: 310px;
   min-width: 280px;
-  max-height: calc(100vh - 130px);
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -322,6 +321,7 @@
 /* ---- 容器详情 ---- */
 .container-detail {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -329,6 +329,7 @@
   border-radius: 8px;
   overflow: hidden;
   min-width: 0;
+  align-self: stretch;
 }
 
 .detail-tabs {
@@ -368,9 +369,26 @@
 
 .detail-body {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 20px 24px 24px;
   background: #fff;
+}
+
+/* tabpanel 在 flex 容器中默认不撑开，内容多时自行滚动 */
+.detail-body > [role="tabpanel"]:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 日志 tabpanel 撑满并交给内部日志面板滚动 */
+.detail-body > [role="tabpanel"]:not([hidden]):has(.container-logs) {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* ---- 容器概览 ---- */
@@ -574,17 +592,149 @@
   color: #3f4b5d;
 }
 
-/* ---- 日志 ---- */
-.container-logs {
+.mcp-status-row code.mono {
+  font-size: 0.78rem;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-env-preview {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-status-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.mcp-config-empty {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  color: #7a8499;
+}
+
+/* 内联表单 (ContainerMCP) */
+.mcp-form-card {
+  gap: 0;
+  padding: 0;
+}
+
+.mcp-form-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-form-head h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1a1f36;
+}
+
+.mcp-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 16px;
+}
+
+.mcp-form-body label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #5a657c;
+}
+
+.mcp-form-body input,
+.mcp-form-body select,
+.mcp-form-body textarea {
+  font-size: 0.85rem;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: #1a1f36;
+  outline: none;
+}
+
+.mcp-form-body input:focus,
+.mcp-form-body select:focus,
+.mcp-form-body textarea:focus {
+  border-color: #6356e5;
+  box-shadow: 0 0 0 2px rgba(99, 86, 229, 0.12);
+}
+
+.mcp-form-body textarea {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.78rem;
+  resize: vertical;
+}
+
+.mcp-form-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: #f9fafc;
+  border-radius: 0 0 8px 8px;
+}
+
+/* 确保 creeds-fieldset 在表单中正确显示 */
+.creds-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 0;
+}
+
+.creds-fieldset legend {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #5a657c;
+  padding: 0 6px;
+}
+
+.creds-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.creds-grid label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #5a657c;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ---- 日志 ---- */
+.container-logs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
 }
 
 .container-logs .logs-panel {
   flex: 1;
-  min-height: 200px;
-  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
   color: #3f4b5d;
   background: #fff;
   border: 1px solid var(--border);
@@ -603,6 +753,37 @@
 
 .container-logs .log-line code {
   color: #3f4b5d;
+}
+
+/* 哨兵元素：1px 透明，永远在日志末尾，IntersectionObserver 用它检测用户是否在底部 */
+.logs-sentinel {
+  height: 1px;
+  width: 100%;
+}
+
+/* 回到底部浮动按钮 */
+.logs-scroll-bottom {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.3);
+  cursor: pointer;
+  z-index: 10;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.logs-scroll-bottom:hover {
+  background: var(--primary-dark);
+  transform: scale(1.08);
 }
 
 /* ---- 日志行结构 (LogRow) ---- */
@@ -959,6 +1140,10 @@
   width: 190px;
 }
 
+.mcp-col-toggle {
+  width: 60px;
+}
+
 .mcp-col-actions {
   width: 96px;
 }
@@ -1000,6 +1185,10 @@
   text-align: center;
   padding: 32px 0;
   color: var(--muted);
+}
+
+.mcp-toggle-cell {
+  text-align: center;
 }
 
 .mcp-actions-cell {

@@ -40,6 +40,7 @@ export function ProjectDetailView({
   onClearLogs,
   logsPanelRef,
   onConfigureMCP,
+  onMCPChanged,
 }: {
   project: Project;
   servers: ServerWithNodelet[];
@@ -68,6 +69,7 @@ export function ProjectDetailView({
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
   onConfigureMCP: (prefill: MCPPrefill) => void;
+  onMCPChanged: () => void;
 }) {
   return (
     <div className="project-detail">
@@ -112,6 +114,10 @@ export function ProjectDetailView({
           onClearLogs={onClearLogs}
           logsPanelRef={logsPanelRef}
           onConfigureMCP={onConfigureMCP}
+          nodeletId={selectedNodeletID}
+          containerId={selectedContainerID}
+          projectId={project.id}
+          onMCPChanged={onMCPChanged}
         />
       </div>
     </div>

@@ -1,8 +1,8 @@
 import { Wrench } from "lucide-react";
 import type { ContainerDetail, MCPPrefill } from "../types";
-import { serviceTypeIcons, serviceTypeLabels } from "../types";
+import { serviceTypeIcons, serviceLabel } from "../types";
 
-export function ContainerOverview({ detail, onConfigureMCP }: { detail: ContainerDetail; onConfigureMCP: (prefill: MCPPrefill) => void }) {
+export function ContainerOverview({ detail, nodeletId, containerId, onConfigureMCP }: { detail: ContainerDetail; nodeletId: string; containerId: string; onConfigureMCP: (prefill: MCPPrefill) => void }) {
   function buildMCPPrefill(): MCPPrefill {
     const env: string[] = [];
     // 把 DSN 中的 host/port/user/database 提出来作为独立字段，密码留空让用户填。
@@ -26,10 +26,12 @@ export function ContainerOverview({ detail, onConfigureMCP }: { detail: Containe
       user: detail.dsn?.user,
       database: detail.dsn?.database,
       env,
+      containerId,
+      nodeletId,
     };
   }
   const Icon = serviceTypeIcons[detail.serviceType] || serviceTypeIcons.unknown;
-  const label = serviceTypeLabels[detail.serviceType] || detail.serviceType;
+  const label = serviceLabel(detail.serviceType);
 
   return (
     <div className="container-overview">
@@ -37,7 +39,7 @@ export function ContainerOverview({ detail, onConfigureMCP }: { detail: Containe
         <Icon size={28} />
         <div>
           <h2>{detail.container.name}</h2>
-          <span className="type-pill">{label}</span>
+          {label && <span className="type-pill">{label}</span>}
           <span className={`status-pill ${detail.container.state === "running" ? "alive" : "dead"}`}>
             {detail.container.state}
           </span>
