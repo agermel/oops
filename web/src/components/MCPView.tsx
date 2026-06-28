@@ -1,17 +1,13 @@
 import React from "react";
 import { Plus, Trash2, Edit3, Wrench, ChevronRight, ChevronDown } from "lucide-react";
 import type { MCPConnectionConfig, MCPConnectionStatus } from "../types";
+import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { MCPFormModal } from "./MCPFormModal";
 import { StatusPill } from "./StatusPill";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { MCPToolList } from "./MCPToolList";
-
-const statusLabel: Record<string, string> = {
-  running: "运行中",
-  stopped: "已停止",
-  error: "异常",
-};
+import { Button } from "./ui/Button";
 
 // ---- MCPView ----
 export function MCPView() {
@@ -105,16 +101,16 @@ export function MCPView() {
       <div className="panel-summary">
         <Wrench size={16} />
         <span>{loading ? "读取中" : `${connections.length} 个 MCP 连接`}</span>
-        <button className="primary-button small" onClick={openAdd}>
+        <Button size="sm" onClick={openAdd}>
           <Plus size={15} />
           <span>新增</span>
-        </button>
-        <button className="ghost-button small" onClick={fetchConnections} disabled={loading}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={fetchConnections} disabled={loading}>
           <span>刷新</span>
-        </button>
+        </Button>
       </div>
 
-      {error && <div className="error-line">{error}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       <div className="mcp-table-wrap">
         <table>
@@ -157,7 +153,7 @@ export function MCPView() {
                         <span className="type-pill">{item.type}</span>
                       </td>
                       <td>
-                        <StatusPill status={item.status} labelMap={statusLabel} />
+                        <StatusPill status={item.status} labelMap={mcpStatusLabel} />
                         {item.error && <span className="error-hint">{item.error}</span>}
                       </td>
                       <td className="mcp-count-cell">
@@ -181,12 +177,12 @@ export function MCPView() {
                       </td>
                       <td className="mcp-actions-cell">
                         <div className="mcp-actions">
-                          <button className="ghost-button small" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
+                          <Button variant="ghost" size="sm" aria-label={`编辑 ${item.name}`} onClick={() => openEdit(item)}>
                             <Edit3 size={14} />
-                          </button>
-                          <button className="ghost-button small danger" aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
+                          </Button>
+                          <Button variant="ghost" size="sm" danger aria-label={`删除 ${item.name}`} onClick={() => handleDelete(item.id)}>
                             <Trash2 size={14} />
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>

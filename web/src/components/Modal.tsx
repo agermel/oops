@@ -1,5 +1,6 @@
 import React from "react";
 import { X } from "lucide-react";
+import { Button } from "./ui/Button";
 
 export function Modal({
   title,
@@ -32,9 +33,9 @@ export function Modal({
       >
         <div className="modal-head">
           <h2 id="modal-title">{title}</h2>
-          <button className="ghost-button" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             <X size={18} />
-          </button>
+          </Button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}

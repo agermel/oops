@@ -2,6 +2,7 @@ import React from "react";
 import { Cog, RefreshCw } from "lucide-react";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { ToggleSwitch } from "./ToggleSwitch";
+import { Button } from "./ui/Button";
 
 // ---- 类型 ----
 
@@ -89,16 +90,16 @@ export function ToolsView() {
               ? `${data.native.length + Object.values(data.mcp).reduce((sum, t) => sum + t.length, 0)} 个工具`
               : "—"}
         </span>
-        <button className="ghost-button small" onClick={fetchTools} disabled={loading}>
+        <Button variant="ghost" size="sm" onClick={fetchTools} disabled={loading}>
           <RefreshCw size={14} className={loading ? "spin" : ""} />
           <span>刷新</span>
-        </button>
+        </Button>
       </div>
 
-      {error && <div className="error-line">{error}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       {!loading && !hasContent && (
-        <div className="empty-card">暂无可用的 LLM 工具</div>
+        <div className="empty-state">暂无可用的 LLM 工具</div>
       )}
 
       {data && (

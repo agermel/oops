@@ -1,5 +1,4 @@
 import React from "react";
-import debounce from "lodash.debounce";
 import type {
   Project,
   ServerWithNodelet,
@@ -33,7 +32,7 @@ export function App() {
   const selectedProjectID =
     route.view === "projects" || route.view === "console"
       ? ""
-      : (route as any).projectId || "";
+      : route.projectId || "";
   const projectSection: string =
     route.view === "project-mcp" ? "mcp" :
     route.view === "project-chat" ? "chat" :
@@ -94,20 +93,40 @@ export function App() {
   const chatStepsRef = React.useRef<StepEvent[]>([]);
 
   // ---- 日志缓冲区 ----
-  const flushLogs = React.useMemo(
-    () =>
-      debounce(
-        () => {
-          if (logBuffer.current.length === 0) return;
-          const nextLogs = logBuffer.current;
-          logBuffer.current = [];
-          setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
-        },
-        LOG_FLUSH_MS,
-        { maxWait: LOG_MAX_WAIT_MS }
-      ),
-    []
-  );
+  const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushFirstRef = React.useRef<number>(0);
+
+  function doFlush() {
+    if (logBuffer.current.length === 0) return;
+    const nextLogs = logBuffer.current;
+    logBuffer.current = [];
+    setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
+  }
+
+  const flushLogs = React.useMemo(() => {
+    const fn = () => {
+      const now = Date.now();
+      if (flushFirstRef.current === 0) flushFirstRef.current = now;
+      // 达到 maxWait 时强制刷新
+      if (now - flushFirstRef.current >= LOG_MAX_WAIT_MS) {
+        if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+        flushFirstRef.current = 0;
+        doFlush();
+        return;
+      }
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = setTimeout(() => {
+        flushTimerRef.current = null;
+        flushFirstRef.current = 0;
+        doFlush();
+      }, LOG_FLUSH_MS);
+    };
+    fn.cancel = () => {
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+      flushFirstRef.current = 0;
+    };
+    return fn;
+  }, []);
 
   function closeLogStream() {
     if (logEventSource.current) {
@@ -480,7 +499,10 @@ export function App() {
       <a href="#main-content" className="skip-link">
         跳到主内容
       </a>
-      <Header activeNav={activeNav} onNavChange={() => {}} />
+      <Header activeNav={activeNav} onNavChange={(id: string) => {
+        if (id === "console") navigate({ view: "console" });
+        else navigate({ view: "projects" });
+      }} />
       <SideRail
         activeNav={isProjectRoute ? projectSection : activeNav}
         collapsed={sidebarCollapsed}

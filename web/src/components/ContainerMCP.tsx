@@ -1,17 +1,13 @@
 import React from "react";
 import { Wrench, Plus, Trash2, Edit3 } from "lucide-react";
 import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo, MCPPrefill } from "../types";
+import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { serverPaths } from "../lib/paths";
 import { MCPFormModal } from "./MCPFormModal";
 import { StatusPill } from "./StatusPill";
 import { MCPToolList } from "./MCPToolList";
-
-const statusLabel: Record<string, string> = {
-  running: "运行中",
-  stopped: "已停止",
-  error: "异常",
-};
+import { Button } from "./ui/Button";
 
 export function ContainerMCP({
   mcp,
@@ -139,25 +135,25 @@ export function ContainerMCP({
 
   return (
     <div className="container-mcp">
-      <div className="section-title">
+      <div className="section-header">
         <Wrench size={18} />
         <h2>MCP 连接</h2>
       </div>
 
-      {error && <div className="error-line">{error}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       {/* 加载中 */}
-      {loading && <div className="empty-card">正在加载 MCP 配置</div>}
+      {loading && <div className="empty-state">正在加载 MCP 配置</div>}
 
       {/* 无连接 - 显示空状态 */}
       {!loading && !connection && !showForm && (
         <div className="mcp-status-card">
           <div className="mcp-config-empty">
             <p>MCP 连接未配置</p>
-            <button className="primary-button small" onClick={openAdd}>
+            <Button size="sm" onClick={openAdd}>
               <Plus size={14} />
               <span>一键配置 MCP</span>
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -167,7 +163,7 @@ export function ContainerMCP({
         <div className="mcp-status-card">
           <div className="mcp-status-row">
             <span>状态</span>
-            <StatusPill status={connection.status} labelMap={statusLabel} />
+            <StatusPill status={connection.status} labelMap={mcpStatusLabel} />
           </div>
           <div className="mcp-status-row">
             <span>名称</span>
@@ -226,14 +222,14 @@ export function ContainerMCP({
             </div>
           )}
           <div className="mcp-status-actions">
-            <button className="ghost-button small" onClick={openEdit}>
+            <Button variant="ghost" size="sm" onClick={openEdit}>
               <Edit3 size={14} />
               <span>编辑</span>
-            </button>
-            <button className="ghost-button small danger" onClick={handleDelete} disabled={deleting}>
+            </Button>
+            <Button variant="ghost" size="sm" danger onClick={handleDelete} disabled={deleting}>
               <Trash2 size={14} />
               <span>{deleting ? "删除中..." : "删除"}</span>
-            </button>
+            </Button>
           </div>
         </div>
       )}

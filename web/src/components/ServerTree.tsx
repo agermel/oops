@@ -6,6 +6,7 @@ import { apiRequest, getErrorMessage } from "../lib/api";
 import { projectPaths } from "../lib/paths";
 import { Modal } from "./Modal";
 import { StatusDot } from "./StatusPill";
+import { Button } from "./ui/Button";
 
 export function ServerTree({
   projectId,
@@ -82,12 +83,12 @@ export function ServerTree({
       <div className="tree-header">
         <Server size={16} />
         <span>服务器</span>
-        <button className="ghost-button small tree-add-btn" title="添加服务器" aria-label="添加服务器" onClick={openAddModal}>
+        <Button variant="ghost" size="sm" className="tree-add-btn" title="添加服务器" aria-label="添加服务器" onClick={openAddModal}>
           <Plus size={14} />
-        </button>
+        </Button>
       </div>
 
-      {serverError && <div className="error-line">{serverError}</div>}
+      {serverError && <div className="error-banner">{serverError}</div>}
 
       <div className="tree-list">
         {serversLoading && servers.length > 0 && <div className="tree-loading">刷新中...</div>}
@@ -143,7 +144,7 @@ export function ServerTree({
 
       {showAddModal && (
         <Modal title="添加服务器" onClose={closeAddModal}>
-          {addError && <div className="error-line">{addError}</div>}
+          {addError && <div className="error-banner">{addError}</div>}
           {nodeletsLoading ? (
             <div className="tree-empty">读取可用服务器中...</div>
           ) : availableNodelets.length === 0 ? (
@@ -159,13 +160,13 @@ export function ServerTree({
                       <StatusDot alive={n.available} />
                     )}
                   </div>
-                  <button
-                    className="primary-button small"
+                  <Button
+                    size="sm"
                     disabled={addingID === n.nodelet.id}
                     onClick={() => addServer(n.nodelet.id)}
                   >
                     {addingID === n.nodelet.id ? "添加中..." : "添加"}
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>

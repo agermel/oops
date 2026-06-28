@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import { ServerTree } from "./ServerTree";
 import { ContainerDetailView } from "./ContainerDetail";
+import { Button } from "./ui/Button";
 
 export function ProjectDetailView({
   project,
@@ -72,10 +73,10 @@ export function ProjectDetailView({
     <div className="project-detail">
       {/* 面包屑 */}
       <div className="project-breadcrumb">
-        <button className="ghost-button" onClick={onBack}>
+        <Button variant="ghost" onClick={onBack}>
           <ArrowLeft size={16} />
           <span>项目列表</span>
-        </button>
+        </Button>
         <span className="breadcrumb-sep">/</span>
         <strong>{project.name}</strong>
       </div>

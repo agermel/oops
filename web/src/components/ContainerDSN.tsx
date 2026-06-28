@@ -4,6 +4,8 @@ import type { DSNConfig, DSNInfo } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { serverPaths } from "../lib/paths";
 import { DSNInfoCard } from "./DSNInfoCard";
+import { Button } from "./ui/Button";
+import { FormInput } from "./ui/FormInput";
 
 function mergedToDSNInfo(merged: Record<string, string>, detected: Record<string, string>): DSNInfo {
   return {
@@ -150,16 +152,16 @@ export function ContainerDSN({
 
   return (
     <div className="container-dsn">
-      <div className="section-title">
+      <div className="section-header">
         <Settings size={18} />
         <h2>DSN 配置</h2>
       </div>
 
-      {error && <div className="error-line">{error}</div>}
-      {savedMsg && <div className="success-line">{savedMsg}</div>}
+      {error && <div className="error-banner">{error}</div>}
+      {savedMsg && <div className="success-banner">{savedMsg}</div>}
 
       {loading ? (
-        <div className="empty-card">正在加载 DSN 配置</div>
+        <div className="empty-state">正在加载 DSN 配置</div>
       ) : (
         <>
           {/* 实时预览 */}
@@ -195,7 +197,7 @@ export function ContainerDSN({
                 {rows.map((row) => (
                   <tr key={row.id}>
                     <td>
-                      <input
+                      <FormInput
                         value={row.key}
                         onChange={(e) => updateRow(row.id, "key", e.target.value)}
                         placeholder="host"
@@ -203,7 +205,7 @@ export function ContainerDSN({
                       />
                     </td>
                     <td>
-                      <input
+                      <FormInput
                         value={row.value}
                         onChange={(e) => updateRow(row.id, "value", e.target.value)}
                         placeholder="127.0.0.1"
@@ -211,14 +213,16 @@ export function ContainerDSN({
                       />
                     </td>
                     <td>
-                      <button
-                        className="ghost-button small danger"
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        danger
                         aria-label="删除此键值对"
                         onClick={() => removeRow(row.id)}
                         disabled={rows.length <= 1}
                       >
                         <Trash2 size={14} />
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -227,24 +231,25 @@ export function ContainerDSN({
           </div>
 
           <div className="dsn-kv-actions">
-            <button className="ghost-button small" onClick={addRow}>
+            <Button variant="ghost" size="sm" onClick={addRow}>
               <Plus size={14} />
               <span>添加</span>
-            </button>
+            </Button>
             <div className="dsn-kv-actions-right">
               {dsnConfig?.hasOverrides && (
-                <button className="ghost-button small" onClick={handleRestore} disabled={saving}>
+                <Button variant="ghost" size="sm" onClick={handleRestore} disabled={saving}>
                   <RotateCcw size={14} />
                   <span>恢复检测值</span>
-                </button>
+                </Button>
               )}
-              <button
-                className={`primary-button small ${dirty ? "" : "button-muted"}`}
+              <Button
+                size="sm"
                 onClick={handleSave}
                 disabled={saving}
+                className={dirty ? "" : "button-muted"}
               >
                 {saving ? "保存中..." : "保存"}
-              </button>
+              </Button>
             </div>
           </div>
         </>

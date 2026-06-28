@@ -78,14 +78,14 @@ export function ContainerDetailView({
         ))}
       </div>
 
-      {error && <div className="error-line">{error}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       {/* Tab content */}
       <div className="detail-body">
         {loading && !detail ? (
-          <div className="empty-card">正在加载容器详情</div>
+          <div className="empty-state">正在加载容器详情</div>
         ) : !detail ? (
-          <div className="empty-card">从左侧选择一个容器查看详情</div>
+          <div className="empty-state">从左侧选择一个容器查看详情</div>
         ) : (
           <>
             <div role="tabpanel" hidden={activeTab !== "overview"}>

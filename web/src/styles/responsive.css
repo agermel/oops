@@ -1,3 +1,7 @@
+/* ============================================
+   Responsive — max-width: 900px
+   ============================================ */
+
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 64px minmax(0, 1fr);
@@ -7,7 +11,7 @@
   .global-header {
     height: 54px;
     grid-template-columns: auto 1fr auto;
-    gap: 12px;
+    gap: var(--space-3);
     padding: 0 10px;
   }
 
@@ -17,7 +21,7 @@
   }
 
   .elastic-brand {
-    font-size: 18px;
+    font-size: var(--text-lg);
   }
 
   .global-actions button:not(.avatar) {
@@ -40,7 +44,7 @@
   }
 
   .rail-nav {
-    padding: 12px 8px;
+    padding: var(--space-3) var(--space-2);
   }
 
   .rail-nav button {
@@ -50,15 +54,11 @@
   }
 
   .content {
-    padding: 14px;
-  }
-
-  .project-detail-content {
-    padding: 14px;
+    padding: var(--space-3);
   }
 
   .workspace-card {
-    padding: 20px;
+    padding: var(--space-5);
   }
 
   .workspace-head {
@@ -66,7 +66,7 @@
   }
 
   h1 {
-    font-size: 34px;
+    font-size: var(--text-2xl);
   }
 
   .project-split {

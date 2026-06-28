@@ -2,6 +2,7 @@ import React from "react";
 import { Play } from "lucide-react";
 import type { ToolInfo, ToolTestResult } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { Button } from "./ui/Button";
 
 export function MCPToolList({
   connectionId,
@@ -74,14 +75,15 @@ export function MCPToolList({
                 <td><code>{t.name}</code></td>
                 <td className="mcp-tool-desc">{t.description}</td>
                 <td>
-                  <button
-                    className="ghost-button small"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     disabled={testing}
                     onClick={() => testTool(t.name)}
                   >
                     <Play size={12} />
                     <span>{testing ? "测试中" : "测试"}</span>
-                  </button>
+                  </Button>
                 </td>
               </tr>
               {showDetail && (

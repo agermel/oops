@@ -2,6 +2,8 @@ import React from "react";
 import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { Modal } from "./Modal";
+import { Button } from "./ui/Button";
+import { FormInput } from "./ui/FormInput";
 
 // ---- 类型默认值 ----
 const typeDefaults: Record<string, { command: string; args: string[]; env: string[] }> = {
@@ -277,17 +279,17 @@ export function MCPFormModal({
       maxWidth="560px"
       footer={
         <>
-          <button className="ghost-button" onClick={handleTest} disabled={testing}>
+          <Button variant="ghost" onClick={handleTest} disabled={testing}>
             {testing ? "测试中..." : "测试连接"}
-          </button>
-          <button className="primary-button" onClick={handleSave} disabled={!editing?.name.trim() || saving}>
+          </Button>
+          <Button onClick={handleSave} disabled={!editing?.name.trim() || saving}>
             {saving ? "保存中..." : "保存"}
-          </button>
+          </Button>
         </>
       }
     >
       <label htmlFor="mcp-name">名称</label>
-      <input
+      <FormInput
         id="mcp-name"
         value={editing?.name || ""}
         onChange={(e) => setEditing((prev) => prev ? { ...prev, name: e.target.value } : prev)}
@@ -325,7 +327,7 @@ export function MCPFormModal({
           <legend>连接参数</legend>
           <div className="creds-grid">
             <label htmlFor="mcp-creds-host">主机</label>
-            <input
+            <FormInput
               id="mcp-creds-host"
               value={creds.host}
               onChange={(e) => updateCreds({ host: e.target.value })}
@@ -333,7 +335,7 @@ export function MCPFormModal({
             />
 
             <label htmlFor="mcp-creds-port">端口</label>
-            <input
+            <FormInput
               id="mcp-creds-port"
               value={creds.port}
               onChange={(e) => updateCreds({ port: e.target.value })}
@@ -341,17 +343,17 @@ export function MCPFormModal({
             />
 
             <label htmlFor="mcp-creds-user">用户</label>
-            <input
+            <FormInput
               id="mcp-creds-user"
               value={creds.user}
               onChange={(e) => updateCreds({ user: e.target.value })}
               placeholder={editing?.type === "redis" ? "(可选)" : "root"}
-              autoComplete="off"
             />
 
             <label htmlFor="mcp-creds-password">密码</label>
             <input
               id="mcp-creds-password"
+              className="form-input"
               type="password"
               value={creds.password}
               onChange={(e) => updateCreds({ password: e.target.value })}
@@ -360,7 +362,7 @@ export function MCPFormModal({
             />
 
             <label htmlFor="mcp-creds-database">数据库</label>
-            <input
+            <FormInput
               id="mcp-creds-database"
               value={creds.database}
               onChange={(e) => updateCreds({ database: e.target.value })}
@@ -371,7 +373,7 @@ export function MCPFormModal({
       )}
 
       <label htmlFor="mcp-command">命令路径</label>
-      <input
+      <FormInput
         id="mcp-command"
         value={editing?.command || ""}
         onChange={(e) => setEditing((prev) => prev ? { ...prev, command: e.target.value } : prev)}
@@ -379,18 +381,20 @@ export function MCPFormModal({
       />
 
       <label htmlFor="mcp-args">参数（每行一个）</label>
-      <textarea
+      <FormInput
         id="mcp-args"
-        rows={3}
+        multiline
+        monospace
         value={editing?.args.join("\n") || ""}
         onChange={(e) => setEditing((prev) => prev ? { ...prev, args: e.target.value.split("\n").filter(Boolean) } : prev)}
         placeholder="--read-only"
       />
 
       <label htmlFor="mcp-env">环境变量（KEY=VALUE，每行一个）</label>
-      <textarea
+      <FormInput
         id="mcp-env"
-        rows={4}
+        multiline
+        monospace
         value={editing?.env.join("\n") || ""}
         onChange={(e) => setEditing((prev) => prev ? { ...prev, env: e.target.value.split("\n").filter(Boolean) } : prev)}
         placeholder="MYSQL_DSN=user:pass@tcp(host:3306)/db?charset=utf8mb4"
@@ -406,10 +410,10 @@ export function MCPFormModal({
         <span>启用</span>
       </label>
 
-      {saveError && <div className="error-line">{saveError}</div>}
+      {saveError && <div className="error-banner">{saveError}</div>}
 
       {testResult && (
-        <div className={`test-result ${testResult.includes("成功") ? "success" : "fail"}`}>
+        <div className={testResult.includes("成功") ? "success-banner" : "error-banner"}>
           {testResult}
         </div>
       )}

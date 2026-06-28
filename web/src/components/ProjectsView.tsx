@@ -3,6 +3,8 @@ import { Plus, FolderKanban, Trash2, Edit3, ChevronRight } from "lucide-react";
 import type { Project } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { Modal } from "./Modal";
+import { Button } from "./ui/Button";
+import { FormInput } from "./ui/FormInput";
 
 function emptyProject(): Project {
   return {
@@ -83,7 +85,7 @@ export function ProjectsView({
       await apiRequest(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
       onRefresh();
     } catch (err) {
-      setFormError(getErrorMessage(err, "删除失败"));
+      alert(getErrorMessage(err, "删除失败"));
     }
   }
 
@@ -92,13 +94,13 @@ export function ProjectsView({
       <div className="panel-summary">
         <FolderKanban size={16} />
         <span>{loading ? "读取中" : `${projects.length} 个项目`}</span>
-        <button className="primary-button small" onClick={openAdd}>
+        <Button size="sm" onClick={openAdd}>
           <Plus size={15} />
           <span>新建项目</span>
-        </button>
+        </Button>
       </div>
 
-      {error && <div className="error-line">{error}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       <div className="project-grid">
         {projects.map((p) => (
@@ -115,17 +117,17 @@ export function ProjectsView({
               <ChevronRight size={20} className="project-card-arrow" />
             </div>
             <div className="project-card-actions">
-              <button className="ghost-button small" aria-label="编辑项目" onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
+              <Button variant="ghost" size="sm" aria-label="编辑项目" onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
                 <Edit3 size={14} />
-              </button>
-              <button className="ghost-button small danger" aria-label="删除项目" onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
+              </Button>
+              <Button variant="ghost" size="sm" danger aria-label="删除项目" onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
                 <Trash2 size={14} />
-              </button>
+              </Button>
             </div>
           </div>
         ))}
         {!loading && projects.length === 0 && (
-          <div className="empty-card">暂无项目，点击"新建项目"开始</div>
+          <div className="empty-state">暂无项目，点击"新建项目"开始</div>
         )}
       </div>
 
@@ -134,26 +136,26 @@ export function ProjectsView({
           title={editing.id ? "编辑项目" : "新建项目"}
           onClose={closeForm}
           footer={
-            <button className="primary-button" onClick={handleSave} disabled={!editing.name.trim() || saving}>
+            <Button onClick={handleSave} disabled={!editing.name.trim() || saving}>
               {saving ? "保存中..." : "保存"}
-            </button>
+            </Button>
           }
         >
           <label htmlFor="project-name">名称</label>
-          <input
+          <FormInput
             id="project-name"
             value={editing.name}
             onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || e.target.value.toLowerCase().replace(/\s+/g, "-") })}
             placeholder="例如: CCNU Box"
           />
           <label htmlFor="project-desc">描述</label>
-          <input
+          <FormInput
             id="project-desc"
             value={editing.description || ""}
             onChange={(e) => setEditing({ ...editing, description: e.target.value })}
             placeholder="项目简介（可选）"
           />
-          {formError && <div className="error-line">{formError}</div>}
+          {formError && <div className="error-banner">{formError}</div>}
         </Modal>
       )}
     </section>

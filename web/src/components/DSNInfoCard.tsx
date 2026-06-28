@@ -1,6 +1,7 @@
 import React from "react";
 import { Edit3 } from "lucide-react";
 import type { DSNInfo } from "../types";
+import { Button } from "./ui/Button";
 
 function monoClass(override: boolean): string {
   return `mono${override ? " dsn-overridden" : ""}`;
@@ -25,10 +26,10 @@ export function DSNInfoCard({
       <div className="overview-card">
         <div className="overview-card-head">
           <h3>连接信息 (DSN)</h3>
-          <button className="ghost-button small" onClick={() => onEdit?.()}>
+          <Button variant="ghost" size="sm" onClick={() => onEdit?.()}>
             <Edit3 size={13} />
             <span>编辑</span>
-          </button>
+          </Button>
         </div>
         <dl>
           {(dsn?.host || overrideKeys.has("host")) && (
@@ -82,10 +83,10 @@ export function DSNInfoCard({
     <div className="overview-card">
       <div className="overview-card-head">
         <h3>连接信息</h3>
-        <button className="ghost-button small" onClick={() => onEdit?.()}>
+        <Button variant="ghost" size="sm" onClick={() => onEdit?.()}>
           <Edit3 size={13} />
           <span>配置</span>
-        </button>
+        </Button>
       </div>
       <p className="dsn-config-hint">此容器未自动检测到 DSN 信息，您可以手动添加连接参数。</p>
     </div>

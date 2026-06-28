@@ -95,8 +95,8 @@ export function ContainerLogs({
 
   return (
     <div className="container-logs">
-      <div className="section-title logs-title">
-        <span>
+      <div className="section-header section-header-spread">
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
           <FileText size={18} />
           <h2>日志</h2>
         </span>
@@ -113,9 +113,9 @@ export function ContainerLogs({
 
       <div className="logs-panel" ref={panelRef} role="log" aria-live="polite">
         {error ? (
-          <div className="error-line">{error}</div>
+          <div className="error-banner">{error}</div>
         ) : logs.length === 0 ? (
-          <div className="empty-card">{loading ? "正在连接日志流" : "等待实时日志"}</div>
+          <div className="empty-state">{loading ? "正在连接日志流" : "等待实时日志"}</div>
         ) : (
           logs.map((entry, index) => <LogRow key={`${entry.timestamp}-${index}`} entry={entry} />)
         )}

@@ -311,3 +311,9 @@ export const ansiConvertor = new AnsiConvertor({
   fg: "#f5f7fa",
   bg: "#1f2430",
 });
+
+export const mcpStatusLabel: Record<string, string> = {
+  running: "运行中",
+  stopped: "已停止",
+  error: "异常",
+};

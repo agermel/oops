@@ -1,4 +1,6 @@
-/* Chat Panel */
+/* ============================================
+   Chat Panel
+   ============================================ */
 
 .chat-workspace {
   padding: 0;
@@ -7,8 +9,8 @@
 .chat-panel {
   height: 100%;
   border: 0;
-  border-radius: 4px;
-  background: #fff;
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
   overflow: hidden;
 }
 
@@ -16,17 +18,17 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
-  background: #f7f8fb;
+  background: var(--surface-subtle);
 }
 
 .chat-header span {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 15px;
+  gap: var(--space-2);
+  font-weight: var(--font-bold);
+  font-size: var(--text-md);
 }
 
 .chat-header button {
@@ -43,20 +45,16 @@
   min-height: 200px;
   max-height: 400px;
   overflow-y: auto;
-  padding: 16px;
+  padding: var(--space-4);
   display: grid;
-  gap: 14px;
+  gap: var(--space-3);
   align-content: start;
 
-  /* Overflow gradient indicators — shadows appear at top/bottom when content overflows */
+  /* Overflow gradient indicators */
   background:
-    /* top cover: hides top shadow when at top */
-    linear-gradient(to bottom, #fff 30%, transparent),
-    /* bottom cover: hides bottom shadow when at bottom */
-    linear-gradient(to bottom, transparent, #fff 70%) 0 100%,
-    /* top shadow */
+    linear-gradient(to bottom, var(--surface-card) 30%, transparent),
+    linear-gradient(to bottom, transparent, var(--surface-card) 70%) 0 100%,
     radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.08), transparent),
-    /* bottom shadow */
     radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.08), transparent) 0 100%;
   background-repeat: no-repeat;
   background-size: 100% 40px, 100% 40px, 100% 12px, 100% 12px;
@@ -66,17 +64,17 @@
 .chat-empty {
   color: var(--muted);
   text-align: center;
-  padding: 40px 16px;
-  font-size: 14px;
+  padding: 40px var(--space-4);
+  font-size: var(--text-base);
 }
 
-/* Chat Messages */
+/* ---- Chat Messages ---- */
 
 .chat-msg {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   gap: 10px;
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.55;
 }
 
@@ -86,7 +84,7 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  color: #fff;
+  color: var(--surface-card);
   flex-shrink: 0;
 }
 
@@ -107,6 +105,8 @@
   white-space: pre-wrap;
 }
 
+/* ---- Streamdown Markdown ---- */
+
 .stream-markdown {
   white-space: normal;
   overflow-wrap: anywhere;
@@ -121,52 +121,52 @@
 }
 
 .stream-markdown p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 
 .stream-markdown ul,
 .stream-markdown ol {
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   padding-left: 22px;
 }
 
 .stream-markdown table {
   width: 100%;
   min-width: 0;
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   border-collapse: collapse;
   table-layout: auto;
 }
 
 .stream-markdown th,
 .stream-markdown td {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .stream-markdown th {
-  font-weight: 700;
+  font-weight: var(--font-bold);
 }
 
 .stream-markdown code {
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
   border-radius: 3px;
-  background: #eef1f6;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  background: var(--gray-100);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
 }
 
 .stream-markdown pre {
   max-width: 100%;
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   padding: 10px;
   overflow: auto;
-  color: #d8dee9;
-  background: #1f2430;
-  border-radius: 4px;
+  color: var(--gray-300);
+  background: var(--gray-800);
+  border-radius: var(--radius-sm);
   white-space: pre;
 }
 
@@ -174,15 +174,15 @@
   padding: 0;
   color: inherit;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
-/* Thinking Shimmer */
+/* ---- Thinking Shimmer ---- */
 
 .chat-thinking {
   color: var(--muted);
-  font-size: 14px;
-  background: linear-gradient(90deg, var(--muted) 0%, #c8ccd3 50%, var(--muted) 100%);
+  font-size: var(--text-base);
+  background: linear-gradient(90deg, var(--muted) 0%, var(--gray-300) 50%, var(--muted) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -196,39 +196,28 @@
 }
 
 .chat-error {
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   color: var(--dead);
-  border: 1px solid #f5b7b1;
-  background: #fff4f2;
-  border-radius: 4px;
-  font-size: 13px;
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
 }
 
-/* Chat Footer */
+/* ---- Chat Footer ---- */
 
 .chat-footer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 48px;
   gap: 10px;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
-  background: #fbfcfd;
+  background: var(--surface-subtle);
 }
 
-.chat-footer input {
+.chat-footer .form-input {
   height: 40px;
-  padding: 0 12px;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 14px;
-  outline: 0;
-  background: #fff;
-}
-
-.chat-footer input:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(0, 107, 180, 0.15);
+  font-size: var(--text-base);
 }
 
 .chat-footer button {
@@ -236,9 +225,9 @@
   height: 40px;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--surface-card);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--primary);
 }
 
@@ -251,7 +240,7 @@
   color: var(--alive) !important;
 }
 
-/* Chat Exchange & Steps */
+/* ---- Chat Exchange & Steps ---- */
 
 .chat-exchange {
   display: grid;
@@ -261,10 +250,10 @@
 .step-block {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 13px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -275,24 +264,24 @@
 }
 
 .step-thinking {
-  background: #f7f8fb;
-  border-left: 3px solid #d3dae6;
+  background: var(--surface-subtle);
+  border-left: 3px solid var(--gray-300);
   color: var(--muted);
 }
 
 .step-tool-call {
-  background: #eef6fc;
+  background: var(--blue-50);
   border-left: 3px solid var(--primary);
   color: var(--text);
 }
 
 .step-tool-name {
-  font-weight: 600;
+  font-weight: var(--font-semibold);
 }
 
 .step-tool-args {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   margin-left: 6px;
 }
 
@@ -317,7 +306,7 @@
 }
 
 .step-tool-result {
-  background: #f0faf7;
+  background: var(--success-bg);
   border-left: 3px solid var(--alive);
 }
 
@@ -327,8 +316,8 @@
   background: transparent;
   cursor: pointer;
   padding: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
 }
 
 .step-result-wrap {
@@ -349,15 +338,15 @@
 
 .step-result {
   margin: 6px 0 0;
-  padding: 8px 10px;
-  background: #1f2430;
-  color: #d8dee9;
-  border-radius: 4px;
-  font-size: 11px;
+  padding: var(--space-2) 10px;
+  background: var(--gray-800);
+  color: var(--gray-300);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 300px;
   overflow: auto;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
 }

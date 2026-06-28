@@ -3,6 +3,8 @@ import { Sparkles, Send, Bot, User, Trash2 } from "lucide-react";
 import type { ChatExchange, StepEvent } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
+import { FormInput } from "./ui/FormInput";
+import { Button } from "./ui/Button";
 
 function withToolNames(steps: StepEvent[]): StepEvent[] {
   const names = new Map<string, string>();
@@ -134,11 +136,11 @@ export function ChatView({
         {chatError && <div className="chat-error">{chatError}</div>}
       </div>
       <div className="chat-footer">
-        <input
+        <FormInput
           placeholder="输入问题，按 Enter 发送"
           value={chatInput}
           onChange={(e) => onInputChange(e.target.value)}
-          onKeyDown={(e) => {
+          onKeyDown={(e: React.KeyboardEvent) => {
             if (e.key === "Enter" && !e.nativeEvent.isComposing) {
               e.preventDefault();
               onSend();
@@ -146,15 +148,14 @@ export function ChatView({
           }}
           disabled={chatLoading}
         />
-        <button
-          type="button"
+        <Button
           onClick={() => onSend()}
           disabled={chatLoading || !chatInput.trim()}
           title="发送"
           aria-label="发送消息"
         >
           <Send size={18} />
-        </button>
+        </Button>
       </div>
     </section>
   );

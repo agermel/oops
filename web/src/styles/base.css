@@ -1,25 +1,121 @@
+/* ============================================
+   Design Tokens
+   ============================================ */
+
 :root {
-  --header: #ffffff;
-  --page: #f6f7fb;
-  --surface: #ffffff;
-  --border: #e5e7eb;
+  /* ---- Spacing (4px base) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ---- Border Radius ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
+
+  /* ---- Type Scale ---- */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+
+  /* ---- Font Weight ---- */
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+  --font-extrabold: 800;
+
+  /* ---- Font Family ---- */
+  --font-sans: "MiSans", "HarmonyOS Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", monospace;
+
+  /* ---- Gray Scale ---- */
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-800: #1f2937;
+  --gray-900: #111827;
+
+  /* ---- Blue / Accent Scale ---- */
+  --blue-50: #eff6ff;
+  --blue-100: #dbeafe;
+  --blue-200: #bfdbfe;
+  --blue-500: #1677ff;
+  --blue-600: #0958d9;
+
+  /* ---- Surface Colors ---- */
+  --surface-page: #f6f7fb;
+  --surface-card: #ffffff;
+  --surface-hover: #f3f7ff;
+  --surface-subtle: #f8fafc;
+
+  /* ---- Semantic: Success ---- */
+  --success-text: #389e0d;
+  --success-bg: #f6ffed;
+  --success-border: #b7eb8f;
+  --success-light: #e6f7f5;
+  --success-light-text: #007d75;
+  --success-light-border: #9adfd9;
+
+  /* ---- Semantic: Error ---- */
+  --error-text: #cf1322;
+  --error-bg: #fff2f0;
+  --error-border: #ffccc7;
+
+  /* ---- Semantic: Warning ---- */
+  --warning-text: #d4890a;
+  --warning-bg: #fffbe6;
+  --warning-border: #ffe58f;
+
+  /* ---- Backward-compatible aliases (preserve existing variable names) ---- */
+  --header: var(--surface-card);
+  --page: var(--surface-page);
+  --surface: var(--surface-card);
+  --border: var(--gray-200);
   --border-soft: #edf0f5;
-  --text: #1f2937;
-  --muted: #7a8190;
-  --link: #1677ff;
-  --primary: #1677ff;
-  --primary-dark: #0958d9;
+  --text: var(--gray-800);
+  --muted: var(--gray-500);
+  --link: var(--blue-500);
+  --primary: var(--blue-500);
+  --primary-dark: var(--blue-600);
+  --bg: var(--surface-card);
+  --fg: var(--gray-800);
+  --fg-dim: var(--gray-500);
+  --accent: var(--blue-500);
+  --accent-dim: var(--blue-50);
+  --hover: var(--surface-hover);
+  --card-bg: var(--surface-card);
+
+  /* ---- Legacy status colors (keep for StatusDot, StatusPill) ---- */
   --alive: #52c41a;
   --dead: #ff4d4f;
   --unknown: #faad14;
-  --card-bg: #ffffff;
-  --bg: #ffffff;
-  --fg: #1f2937;
-  --fg-dim: #7a8190;
-  --accent: #1677ff;
-  --accent-dim: #e6f4ff;
-  --hover: #f3f7ff;
+
+  /* ---- Previously-undefined variables (now properly defined) ---- */
+  --text-muted: var(--gray-500);
+  --bg-muted: var(--gray-100);
+  --accent-bg: var(--blue-50);
+  --bg-success: var(--success-bg);
+  --text-success: var(--success-text);
 }
+
+/* ============================================
+   Global Reset
+   ============================================ */
 
 html,
 body,
@@ -38,19 +134,14 @@ body {
   overflow: hidden;
   color: var(--text);
   background: var(--page);
-  font-family:
-    "MiSans",
-    "HarmonyOS Sans SC",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    "PingFang SC",
-    sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: 0;
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -58,12 +149,25 @@ button {
   cursor: pointer;
 }
 
+/* ============================================
+   Unified Focus Ring
+   ============================================ */
+
 :focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
-/* Skip-to-content — visually hidden until focused */
+/* narrow elements keep focus ring tight */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
+}
+
+/* ============================================
+   Skip-to-content
+   ============================================ */
 
 .skip-link {
   position: fixed;
@@ -76,7 +180,7 @@ button {
   font-size: 0.875rem;
   font-weight: 600;
   text-decoration: none;
-  border-radius: 0 0 6px 0;
+  border-radius: 0 0 var(--radius-md) 0;
   transform: translateY(-100%);
   transition: transform 0.15s;
 }
@@ -85,7 +189,9 @@ button {
   transform: translateY(0);
 }
 
-/* Shared animations */
+/* ============================================
+   Shared Animations
+   ============================================ */
 
 .spin {
   animation: spin 0.9s linear infinite;
@@ -125,18 +231,4 @@ button {
     animation: none;
     opacity: 1;
   }
-}
-
-/* Shared empty states */
-
-.empty-card {
-  min-height: 86px;
-  display: grid;
-  place-items: center;
-  padding: 2rem;
-  color: var(--muted);
-  font-size: 0.85rem;
-  border: 1px dashed #d8e3f4;
-  border-radius: 8px;
-  background: #fbfdff;
 }
