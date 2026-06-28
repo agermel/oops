@@ -3,9 +3,10 @@ package llm
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"oops/internal/config"
-	"oops/internal/errutil"
 	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -17,6 +18,19 @@ import (
 
 	"go.uber.org/zap"
 )
+
+var pydanticTraceRe = regexp.MustCompile(`\n For further information visit https?://[^\s]+`)
+
+// sanitizeError 清洗工具/MCP 层的错误信息。
+func sanitizeError(raw string) string {
+	s := pydanticTraceRe.ReplaceAllString(raw, "")
+	s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return raw
+	}
+	return s
+}
 
 // systemPrompt 是 Agent 的系统提示词。
 const systemPrompt = `你是一个基础设施运维助手，负责回答当前监控环境中的问题。
@@ -78,7 +92,6 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, question string) (<-chan StepEvent, error) {
 	opt, future := react.WithMessageFuture()
 
-	// agent
 	agent, err := newAgent(ctx, chatModel, tools)
 	if err != nil {
 		logutil.Error("llm: create agent", zap.Error(err))
@@ -113,7 +126,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			msg, ok, err := iter.Next()
 			if err != nil {
 				logutil.Error("llm: iter", zap.Error(err))
-				sendEvent(ctx, events, StepEvent{Type: "error", Content: errutil.Sanitize(err.Error())})
+				sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(err.Error())})
 				iterAborted = true
 				return
 			}
@@ -126,14 +139,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 				case "tool_call":
 					logutil.Infof("llm: tool call → %s(%s)", evt.ToolName, evt.ToolArgs)
 				case "tool_result":
-					if errutil.ContainsError(evt.Content) {
-						logutil.Error("llm: tool result",
-							zap.String("tool", evt.ToolName),
-							zap.String("error", errutil.Sanitize(evt.Content)),
-						)
-					} else {
-						logutil.Infof("llm: tool %q ok (%d bytes)", evt.ToolName, len(evt.Content))
-					}
+					logutil.Infof("llm: tool %q result (%d bytes)", evt.ToolName, len(evt.Content))
 				}
 				if !sendEvent(ctx, events, evt) {
 					return
@@ -149,7 +155,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 		}
 		if result.err != nil {
 			logutil.Error("llm: generate", zap.Error(result.err))
-			sendEvent(ctx, events, StepEvent{Type: "error", Content: errutil.Sanitize(result.err.Error())})
+			sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(result.err.Error())})
 			return
 		}
 
