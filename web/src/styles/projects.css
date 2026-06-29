@@ -1110,6 +1110,52 @@
   word-break: normal;
 }
 
+/* ---- Nodelet 管理表 ---- */
+.nodelet-table-wrap table {
+  min-width: 620px;
+}
+
+.nodelet-col-name { width: 26%; }
+.nodelet-col-address { width: auto; }
+.nodelet-col-status { width: 76px; }
+.nodelet-col-actions { width: 118px; }
+
+.nodelet-table-wrap th:nth-child(3),
+.nodelet-table-wrap td:nth-child(3) {
+  text-align: center;
+}
+
+.nodelet-table-wrap th:nth-child(4),
+.nodelet-table-wrap td:nth-child(4) {
+  text-align: right;
+}
+
+.nodelet-address-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nodelet-status-cell {
+  text-align: center;
+}
+
+.nodelet-actions-cell {
+  padding-right: var(--space-3);
+}
+
+.nodelet-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.nodelet-actions .btn-icon {
+  width: 26px;
+  height: 26px;
+}
+
 /* ---- MCP 表单 ---- */
 .checkbox-label {
   display: flex !important;

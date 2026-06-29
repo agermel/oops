@@ -31,6 +31,7 @@ export type NodeletConfig = {
   name: string;
   address: string;
   token?: string;
+  hasToken?: boolean;
 };
 
 export type NodeletHostSummary = {
@@ -44,6 +45,26 @@ export type NodeletHostSummary = {
 export type ServerWithNodelet = {
   nodelet: NodeletConfig;
   host: NodeletHostSummary;
+  error?: string;
+};
+
+export type ProbeStatus = "unknown" | "probing" | "healthy" | "unhealthy" | "dead";
+
+export type ProbeResult = {
+  nodeletId: string;
+  status: ProbeStatus;
+  consecutiveFails: number;
+  lastProbeAt: string;
+  lastError?: string;
+  latencyMs: number;
+};
+
+export type NodeletStatusItem = {
+  nodelet: NodeletConfig;
+  status: ProbeStatus;
+  available: boolean;
+  lastProbeAt: string;
+  latencyMs: number;
   error?: string;
 };
 

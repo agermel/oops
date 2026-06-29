@@ -12,12 +12,13 @@ import (
 
 // NodeletConfig 保存一台 oops-nodelet 的访问信息。
 // Token 在 JSON API 响应中永远不暴露（json:"-"），
-// 但在内部及 JSON 文件中完整保留。
+// 但通过 HasToken 告知前端是否已设置 token。
 type NodeletConfig struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Token   string `json:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+	Token    string `json:"-"`
+	HasToken bool   `json:"hasToken"`
 }
 
 // persistedNodelet 是 nodelets.json 的磁盘格式 —— 包含 token。
@@ -29,7 +30,7 @@ type persistedNodelet struct {
 }
 
 func (p persistedNodelet) toConfig() NodeletConfig {
-	return NodeletConfig{ID: p.ID, Name: p.Name, Address: p.Address, Token: p.Token}
+	return NodeletConfig{ID: p.ID, Name: p.Name, Address: p.Address, Token: p.Token, HasToken: p.Token != ""}
 }
 
 func toPersisted(cfg NodeletConfig) persistedNodelet {

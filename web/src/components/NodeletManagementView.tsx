@@ -1,14 +1,15 @@
 import React from "react";
-import { Plus, Trash2, Edit3, Server } from "lucide-react";
-import type { NodeletConfig } from "../types";
+import { Plus, Trash2, Edit3, Server, RefreshCw } from "lucide-react";
+import type { NodeletConfig, NodeletStatusItem, ProbeStatus } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { NodeletFormModal } from "./NodeletFormModal";
 import { Button } from "./ui/Button";
 import { StatusDot } from "./StatusPill";
 
 type NodeletRow = NodeletConfig & {
-  status?: "ok" | "failed" | "checking";
+  status?: ProbeStatus;
   statusError?: string;
+  latencyMs?: number;
 };
 
 // ---- NodeletManagementView ----
@@ -20,16 +21,50 @@ export function NodeletManagementView() {
   const [showForm, setShowForm] = React.useState(false);
   const [editItem, setEditItem] = React.useState<NodeletConfig | null>(null);
 
+  async function fetchStatus() {
+    try {
+      const items = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
+      setNodelets((prev) => {
+        const statusMap = new Map(items.map((s) => [s.nodelet.id, s]));
+        // 如果当前列表为空（首次加载），从 status 响应创建
+        if (prev.length === 0) {
+          return items.map((s) => ({
+            ...s.nodelet,
+            status: s.status,
+            statusError: s.error,
+            latencyMs: s.latencyMs,
+          }));
+        }
+        // 增量更新状态
+        return prev.map((n) => {
+          const si = statusMap.get(n.id);
+          if (!si) return n;
+          return { ...n, status: si.status, statusError: si.error, latencyMs: si.latencyMs };
+        });
+      });
+    } catch (err) {
+      // 静默处理轮询错误
+    }
+  }
+
   async function fetchNodelets() {
     setLoading(true);
     setError("");
     try {
       const configs = await apiRequest<NodeletConfig[]>("/api/nodelets");
-      setNodelets(configs.map((c) => ({ ...c, status: "checking" })));
-      // 异步检测每个 nodelet 连通性
-      for (const c of configs) {
-        checkStatus(c);
-      }
+      const statusItems = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
+      const statusMap = new Map(statusItems.map((s) => [s.nodelet.id, s]));
+      setNodelets(
+        configs.map((c) => {
+          const si = statusMap.get(c.id);
+          return {
+            ...c,
+            status: si?.status ?? ("unknown" as ProbeStatus),
+            statusError: si?.error,
+            latencyMs: si?.latencyMs,
+          };
+        }),
+      );
     } catch (err) {
       setError(getErrorMessage(err, "读取服务器列表失败"));
     } finally {
@@ -37,44 +72,31 @@ export function NodeletManagementView() {
     }
   }
 
-  async function checkStatus(cfg: NodeletConfig) {
-    setNodelets((prev) =>
-      prev.map((n) => (n.id === cfg.id ? { ...n, status: "checking" } : n)),
-    );
+  // 15s 轮询读取 Prober 缓存（极快，无阻塞）
+  React.useEffect(() => {
+    fetchNodelets();
+    const timer = setInterval(fetchStatus, 15_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  async function handleRefresh() {
+    setError("");
     try {
-      const resp = await apiRequest<{ status: string; error?: string }>(
-        "/api/nodelets/test",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: cfg.id, name: cfg.name, address: cfg.address }),
-        },
-      );
-      setNodelets((prev) =>
-        prev.map((n) =>
-          n.id === cfg.id
-            ? { ...n, status: resp.status === "ok" ? "ok" : "failed", statusError: resp.error }
-            : n,
-        ),
-      );
-    } catch {
-      setNodelets((prev) =>
-        prev.map((n) => (n.id === cfg.id ? { ...n, status: "failed", statusError: "unreachable" } : n)),
-      );
+      await apiRequest("/api/nodelets/probe-all", { method: "POST" });
+      await fetchStatus();
+    } catch (err) {
+      setError(getErrorMessage(err, "刷新状态失败"));
     }
   }
 
-  const nodeletsRef = React.useRef(nodelets);
-  nodeletsRef.current = nodelets;
-
-  // 首次加载 + 每 30s keepalive 检测连通性。
-  React.useEffect(() => {
-    fetchNodelets();
-    const timer = setInterval(() => {
-      for (const n of nodeletsRef.current) checkStatus(n);
-    }, 600_000);
-    return () => clearInterval(timer);
-  }, []);
+  async function handleRetrySingle(id: string) {
+    try {
+      await apiRequest(`/api/nodelets/${encodeURIComponent(id)}/probe`, { method: "POST" });
+      await fetchStatus();
+    } catch (err) {
+      setError(getErrorMessage(err, "探测失败"));
+    }
+  }
 
   function openAdd() {
     setEditItem(null);
@@ -102,6 +124,21 @@ export function NodeletManagementView() {
     fetchNodelets();
   }
 
+  function statusDotProps(status: ProbeStatus | undefined) {
+    switch (status) {
+      case "healthy":
+        return { alive: true };
+      case "dead":
+        return { alive: false };
+      case "unhealthy":
+        return { alive: false, unknown: true };
+      case "probing":
+        return { alive: false, loading: true };
+      default:
+        return { alive: false, unknown: true };
+    }
+  }
+
   return (
     <section className="panel">
       <div className="panel-summary">
@@ -117,7 +154,7 @@ export function NodeletManagementView() {
             <Button size="sm" onClick={openAdd}>
               <Plus size={14} /> Add Server
             </Button>
-            <Button size="sm" variant="ghost" onClick={fetchNodelets} disabled={loading}>
+            <Button size="sm" variant="ghost" onClick={handleRefresh} disabled={loading}>
               Refresh
             </Button>
           </div>
@@ -136,14 +173,20 @@ export function NodeletManagementView() {
           </p>
         </div>
       ) : (
-        <div className="mcp-table-wrap">
+        <div className="mcp-table-wrap nodelet-table-wrap">
           <table>
+            <colgroup>
+              <col className="nodelet-col-name" />
+              <col className="nodelet-col-address" />
+              <col className="nodelet-col-status" />
+              <col className="nodelet-col-actions" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Address</th>
-                <th style={{ width: 80 }}>Status</th>
-                <th style={{ width: 120 }}>Actions</th>
+                <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -152,26 +195,38 @@ export function NodeletManagementView() {
                   <td>
                     <span style={{ fontWeight: 500 }}>{n.name || n.id}</span>
                   </td>
-                  <td style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 12 }}>
+                  <td className="mono nodelet-address-cell">
                     {n.address}
                   </td>
-                  <td>
-                    {n.status === "checking" ? (
-                      <StatusDot alive={false} loading />
-                    ) : n.status === "ok" ? (
-                      <StatusDot alive />
-                    ) : n.status === "failed" ? (
-                      <StatusDot alive={false} title={n.statusError || "unreachable"} />
-                    ) : (
-                      <StatusDot alive={false} unknown />
-                    )}
+                  <td className="nodelet-status-cell">
+                    <StatusDot
+                      {...statusDotProps(n.status)}
+                      title={
+                        n.statusError
+                          ? n.statusError
+                          : n.status === "healthy" && n.latencyMs
+                            ? `${n.latencyMs}ms`
+                            : undefined
+                      }
+                    />
+                    {n.statusError && <span className="error-hint">{n.statusError}</span>}
                   </td>
-                  <td>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <Button size="xs" variant="ghost" onClick={() => openEdit(n)}>
+                  <td className="nodelet-actions-cell">
+                    <div className="nodelet-actions">
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        iconOnly
+                        onClick={() => handleRetrySingle(n.id)}
+                        title="Re-probe"
+                        aria-label={`Re-probe ${n.name || n.id}`}
+                      >
+                        <RefreshCw size={12} />
+                      </Button>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => openEdit(n)} aria-label={`Edit ${n.name || n.id}`}>
                         <Edit3 size={12} />
                       </Button>
-                      <Button size="xs" variant="ghost" onClick={() => handleDelete(n.id)}>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => handleDelete(n.id)} aria-label={`Delete ${n.name || n.id}`}>
                         <Trash2 size={12} />
                       </Button>
                     </div>

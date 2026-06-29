@@ -2,6 +2,7 @@ import React from "react";
 import type {
   Project,
   ServerWithNodelet,
+  NodeletStatusItem,
   ContainerWithType,
   ContainerDetail as ContainerDetailType,
   HealthResult,
@@ -247,13 +248,46 @@ export function App() {
     setServerError("");
     try {
       const { servers: url } = projectPaths(projectID);
-      setServers(await apiRequest<ServerWithNodelet[]>(url));
+      const svrs = await apiRequest<ServerWithNodelet[]>(url);
+      // 合并 Prober 缓存的状态（错误信息、available 等）
+      await mergeProberStatus(svrs);
+      setServers(svrs);
     } catch (err) {
       setServerError(getErrorMessage(err, "读取服务器列表失败"));
     } finally {
       setServersLoading(false);
     }
   }
+
+  // mergeProberStatus 从 Prober 缓存同步状态到服务器列表。
+  async function mergeProberStatus(svrs?: ServerWithNodelet[]) {
+    const targets = svrs ?? servers;
+    if (targets.length === 0) return;
+    try {
+      const statusItems = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
+      const statusMap = new Map(statusItems.map((s) => [s.nodelet.id, s]));
+      setServers((prev) =>
+        prev.map((sw) => {
+          const si = statusMap.get(sw.nodelet.id);
+          if (!si) return sw;
+          return {
+            ...sw,
+            host: { ...sw.host, available: si.status === "healthy" },
+            error: si.error || sw.error,
+          };
+        }),
+      );
+    } catch {
+      // 静默处理轮询错误
+    }
+  }
+
+  // 项目视图下 30s 刷新一次 Prober 状态，错误信息可及时更新到 ServerTree。
+  React.useEffect(() => {
+    if (!route.view.startsWith("project-") || !selectedProjectID) return;
+    const timer = setInterval(() => mergeProberStatus(), 30_000);
+    return () => clearInterval(timer);
+  }, [route.view, selectedProjectID]);
 
   async function loadContainers(projectID: string, nodeletID: string) {
     setContainersLoading((prev) => new Set(prev).add(nodeletID));
@@ -266,6 +300,8 @@ export function App() {
           : sw
       )));
     } catch (err) {
+      // 触发后端即时探测，让 Prober 感知失败
+      apiRequest(`/api/nodelets/${encodeURIComponent(nodeletID)}/probe`, { method: "POST" }).catch(() => {});
       const message = getErrorMessage(err, "读取容器列表失败");
       setContainers((prev) => ({ ...prev, [nodeletID]: [] }));
       setServers((prev) => prev.map((sw) => (
@@ -503,7 +539,8 @@ export function App() {
         setSelectedContainerID("");
       }
     } else {
-      // 展开并选中
+      // 展开并选中：触发即时探测获取最新连通状态
+      apiRequest(`/api/nodelets/${encodeURIComponent(nodeletID)}/probe`, { method: "POST" }).catch(() => {});
       setExpandedServers((prev) => new Set(prev).add(nodeletID));
       if (!containers[nodeletID]) {
         loadContainers(selectedProjectID, nodeletID);

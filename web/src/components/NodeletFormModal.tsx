@@ -17,7 +17,8 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
   const [id, setId] = React.useState(editItem?.id ?? "");
   const [name, setName] = React.useState(editItem?.name ?? "");
   const [address, setAddress] = React.useState(editItem?.address ?? "http://:8686");
-  const [token, setToken] = React.useState(editItem?.token ?? "");
+  const hasExistingToken = editItem?.hasToken === true;
+  const [token, setToken] = React.useState("");
 
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState("");
@@ -137,7 +138,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
             type="password"
             value={token}
             onChange={(e) => setToken(e.target.value)}
-            placeholder="Nodelet 启动时打印的配对 token"
+            placeholder={hasExistingToken ? "•••••••• (unchanged if left empty)" : "Nodelet 启动时打印的配对 token"}
           />
         </label>
       </div>

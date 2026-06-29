@@ -145,6 +145,16 @@ func (s *Server) listProjectServers(w http.ResponseWriter, r *http.Request, proj
 		}
 		if ok {
 			sw.Nodelet = item
+			// 从 Prober 缓存获取连通性状态
+			if s.nodeletProber != nil {
+				pr := s.nodeletProber.StatusByID(nid)
+				if pr != nil {
+					sw.Host.Available = pr.Status == nodelet.StatusHealthy
+					if pr.LastError != "" {
+						sw.Error = pr.LastError
+					}
+				}
+			}
 		} else {
 			sw.Error = "nodelet not found in config"
 		}

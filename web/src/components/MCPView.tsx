@@ -34,8 +34,18 @@ export function MCPView() {
     }
   }
 
+  async function pollConnections() {
+    try {
+      setConnections(await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections"));
+    } catch (_err) {
+      // 轮询静默失败，不覆盖已有数据和错误展示
+    }
+  }
+
   React.useEffect(() => {
     fetchConnections();
+    const interval = setInterval(pollConnections, 30_000);
+    return () => { clearInterval(interval); };
   }, []);
 
   function openAdd() {

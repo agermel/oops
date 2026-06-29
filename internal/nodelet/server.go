@@ -88,7 +88,11 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := extractIP(r)
-		if !s.limiter.allow(ip, 50, 100) {
+			if !s.limiter.allow(ip, 50, 100) {
+				logutil.Warn("nodelet: rate limited",
+					zap.String("ip", ip),
+					zap.String("path", r.URL.Path),
+				)
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return

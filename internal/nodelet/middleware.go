@@ -6,6 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"oops/internal/logutil"
+
+	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 )
 
@@ -88,5 +91,36 @@ func extractIP(r *http.Request) string {
 		return addr[:idx]
 	}
 	return addr
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the response status code.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// requestLogger logs every HTTP request with method, path, status, latency, and remote IP.
+func requestLogger(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ip := extractIP(r)
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+		next(rec, r)
+
+		latency := time.Since(start).Milliseconds()
+		logutil.Info("nodelet: request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", rec.status),
+			zap.Int64("latencyMs", latency),
+			zap.String("ip", ip),
+		)
+	}
 }
 

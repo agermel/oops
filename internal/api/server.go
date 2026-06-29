@@ -61,6 +61,7 @@ type Options struct {
 type Server struct {
 	connections    []connection.Connection
 	nodeletManager *nodelet.NodeletManager
+	nodeletProber  *nodelet.NodeletProber
 	nodeletClient  NodeletClient
 	registry       *connection.Registry
 	llmClient      *llm.Client
@@ -96,6 +97,10 @@ func NewFromConfig(cfg config.Config) *Server {
 		nm, _ = nodelet.NewNodeletManager("/dev/null") // fallback: empty
 	}
 
+	// 后台保活探测器。
+	prober := nodelet.NewNodeletProber(nm)
+	prober.Start()
+
 	s := New(Options{
 		Connections:    cfg.Connections(),
 		NodeletManager: nm,
@@ -104,6 +109,7 @@ func NewFromConfig(cfg config.Config) *Server {
 		LLMEnabled:    cfg.LLM.Enabled,
 		LLMConfig:     cfg.LLM,
 	})
+	s.nodeletProber = prober
 
 	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
 	mgr, err := mcp.NewManager("config/mcp_connections.json", func(mcpBaseTools []tool.BaseTool) {
@@ -113,6 +119,7 @@ func NewFromConfig(cfg config.Config) *Server {
 		logutil.Error("mcp: manager", zap.Error(err))
 	} else {
 		s.mcpManager = mgr
+		mgr.StartKeepalive(5 * time.Minute)
 	}
 
 	// 项目存储。
@@ -222,6 +229,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/nodelets/{id}", authed(s.handleNodeletUpdate))
 	mux.HandleFunc("DELETE /api/nodelets/{id}", authed(s.handleNodeletRemove))
 	mux.HandleFunc("POST /api/nodelets/test", authed(s.handleNodeletTest))
+	mux.HandleFunc("POST /api/nodelets/{id}/probe", authed(s.handleNodeletProbe))
+	mux.HandleFunc("POST /api/nodelets/probe-all", authed(s.handleNodeletProbeAll))
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers", authed(s.handleNodeletContainers))
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs", authed(s.handleNodeletLogs))
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs/stream", authed(s.handleNodeletLogsStreamRoute))
@@ -399,43 +408,43 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, items)
 }
 
-// handleNodelets 返回中心端配置的 Nodelet 机器列表。
+// handleNodelets 返回中心端配置的 Nodelet 状态（读 Prober 缓存，即时响应）。
 func (s *Server) handleNodelets(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
+	if s.nodeletProber == nil {
+		writeJSON(w, []nodeletStatusItem{})
+		return
+	}
 
 	nodelets := s.nodeletManager.List()
-	results := make([]nodeletItem, len(nodelets))
-	var wg sync.WaitGroup
-	for index, item := range nodelets {
-		wg.Add(1)
-		go func(index int, item nodelet.NodeletConfig) {
-			defer wg.Done()
-
-			checkCtx, checkCancel := context.WithTimeout(ctx, 6*time.Second)
-			defer checkCancel()
-
-			host, err := s.nodeletClient.Host(checkCtx, item.Address, item.Token)
-			result := nodeletItem{
-				Nodelet:   item,
-				Host:      host,
-				Available: err == nil,
-			}
-			if err != nil {
-				result.Error = err.Error()
-				result.Host = nodelet.Host{
-					ID:        item.ID,
-					Name:      item.Name,
-					Address:   item.Address,
-					Available: false,
-				}
-			}
-			results[index] = result
-		}(index, item)
+	results := make([]nodeletStatusItem, 0, len(nodelets))
+	for _, item := range nodelets {
+		pr := s.nodeletProber.StatusByID(item.ID)
+		nsi := nodeletStatusItem{
+			Nodelet:   item,
+			Available: pr != nil && pr.Status == nodelet.StatusHealthy,
+		}
+		if pr != nil {
+			nsi.Status = pr.Status
+			nsi.LastProbe = pr.LastProbeAt
+			nsi.LatencyMs = pr.LatencyMs
+			nsi.Error = pr.LastError
+		} else {
+			nsi.Status = nodelet.StatusUnknown
+		}
+		results = append(results, nsi)
 	}
-	wg.Wait()
 
 	writeJSON(w, results)
+}
+
+// nodeletStatusItem 是 GET /api/nodelets/status 的响应项。
+type nodeletStatusItem struct {
+	Nodelet   nodelet.NodeletConfig `json:"nodelet"`
+	Status    nodelet.ProbeStatus   `json:"status"`
+	Available bool                  `json:"available"`
+	LastProbe time.Time             `json:"lastProbeAt"`
+	LatencyMs int64                 `json:"latencyMs"`
+	Error     string                `json:"error,omitempty"`
 }
 
 // handleNodeletContainers handles GET /api/nodelets/{nodeletID}/containers.
@@ -639,6 +648,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 }
 
 // ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。
+// 先读 Prober 缓存判断可用性，仅对健康节点实时获取 Docker 详情。
 func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error) {
 	nodelets := s.nodeletManager.List()
 	results := make([]llm.NodeletSummary, len(nodelets))
@@ -648,18 +658,32 @@ func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error)
 		go func(index int, item nodelet.NodeletConfig) {
 			defer wg.Done()
 
-			checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
-			defer cancel()
-
 			summary := llm.NodeletSummary{
 				ID:      item.ID,
 				Name:    item.Name,
 				Address: item.Address,
 			}
 
+			// 从 Prober 缓存获取可用性
+			if s.nodeletProber != nil {
+				pr := s.nodeletProber.StatusByID(item.ID)
+				if pr != nil && pr.Status == nodelet.StatusHealthy {
+					summary.Available = true
+				} else if pr != nil {
+					summary.Error = pr.LastError
+					results[index] = summary
+					return
+				}
+			}
+
+			// 仅健康节点实时获取 Docker 详情
+			checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+			defer cancel()
+
 			host, err := s.nodeletClient.Host(checkCtx, item.Address, item.Token)
 			if err != nil {
 				summary.Error = err.Error()
+				summary.Available = false
 			} else {
 				summary.Available = true
 				summary.DockerVersion = host.DockerVersion
@@ -990,11 +1014,17 @@ func (s *Server) handleNodeletList(w http.ResponseWriter, r *http.Request) {
 
 // handleNodeletAdd handles POST /api/nodelets.
 func (s *Server) handleNodeletAdd(w http.ResponseWriter, r *http.Request) {
-	var cfg nodelet.NodeletConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	var req struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Address string `json:"address"`
+		Token   string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	cfg := nodelet.NodeletConfig{ID: req.ID, Name: req.Name, Address: req.Address, Token: req.Token}
 	if s.nodeletManager == nil {
 		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
 		return
@@ -1004,6 +1034,10 @@ func (s *Server) handleNodeletAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err.Error(), mcpErrorStatus(err))
 		return
 	}
+	if s.nodeletProber != nil {
+		s.nodeletProber.OnConfigChange()
+		go s.nodeletProber.ProbeNow(cfg.ID)
+	}
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -1011,20 +1045,35 @@ func (s *Server) handleNodeletAdd(w http.ResponseWriter, r *http.Request) {
 // handleNodeletUpdate handles PUT /api/nodelets/{id}.
 func (s *Server) handleNodeletUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var cfg nodelet.NodeletConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	var req struct {
+		Name    string `json:"name"`
+		Address string `json:"address"`
+		Token   string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	cfg.ID = id
 	if s.nodeletManager == nil {
 		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
+	// 若未提交新 token，保留旧值
+	token := req.Token
+	if token == "" {
+		if old, ok := s.nodeletManager.Find(id); ok {
+			token = old.Token
+		}
+	}
+	cfg := nodelet.NodeletConfig{ID: id, Name: req.Name, Address: req.Address, Token: token}
 	if err := s.nodeletManager.Update(cfg); err != nil {
 		logutil.Error("api: nodelet update", zap.Error(err))
 		writeJSONError(w, err.Error(), mcpErrorStatus(err))
 		return
+	}
+	if s.nodeletProber != nil {
+		s.nodeletProber.OnConfigChange()
+		go s.nodeletProber.ProbeNow(cfg.ID)
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -1053,6 +1102,9 @@ func (s *Server) handleNodeletRemove(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if s.nodeletProber != nil {
+		s.nodeletProber.OnConfigChange()
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -1071,22 +1123,49 @@ func (s *Server) handleProjectServersRemove(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// handleNodeletTest handles POST /api/nodelets/test.
+// handleNodeletTest handles POST /api/nodelets/test（兼容旧前端，内部改为走 Prober）。
 func (s *Server) handleNodeletTest(w http.ResponseWriter, r *http.Request) {
-	var cfg nodelet.NodeletConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	var req struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Address string `json:"address"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if s.nodeletManager == nil {
+	if s.nodeletProber == nil {
 		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.nodeletManager.Test(cfg); err != nil {
-		logutil.Error("api: nodelet test", zap.Error(err))
-		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
+	result := s.nodeletProber.ProbeNow(req.ID)
+	if result.Status == nodelet.StatusHealthy {
+		writeJSON(w, map[string]string{"status": "ok"})
+	} else {
+		writeJSON(w, map[string]string{"status": "failed", "error": result.LastError})
+	}
+}
+
+// handleNodeletProbe handles POST /api/nodelets/{id}/probe — 强制探测单个 Nodelet。
+func (s *Server) handleNodeletProbe(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("id")
+	if s.nodeletProber == nil {
+		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
+	logutil.Info("api: probe requested", zap.String("nodeletID", nodeletID))
+	result := s.nodeletProber.ProbeNow(nodeletID)
+	writeJSON(w, result)
+}
+
+// handleNodeletProbeAll handles POST /api/nodelets/probe-all — 强制探测全部 Nodelet。
+func (s *Server) handleNodeletProbeAll(w http.ResponseWriter, r *http.Request) {
+	if s.nodeletProber == nil {
+		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	logutil.Info("api: probe-all requested")
+	s.nodeletProber.ProbeAll()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
