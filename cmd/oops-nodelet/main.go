@@ -16,7 +16,8 @@ import (
 
 // 子服务器的 nodelet 进程
 func main() {
-	logutil.Init(false, nil) // 生产模式: Info 级别，不接入 web 控制台
+	logPath := common.EnvOrDefault("OOPS_NODELET_LOG_PATH", "/var/log/oops/nodelet.log")
+	logutil.Init(false, nil, logPath)
 
 	addr := common.EnvOrDefault("OOPS_NODELET_ADDR", ":8686")
 	publicAddress := common.EnvOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)

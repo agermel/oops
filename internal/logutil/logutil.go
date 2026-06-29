@@ -9,14 +9,18 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var logger *zap.Logger
 
-// Init initializes the global logger. hubSync is an optional
-// zapcore.WriteSyncer wrapping the console hub — pass nil to skip
-// web-streaming. In development mode timestamps are human-readable.
-func Init(development bool, hubSync zapcore.WriteSyncer) {
+// Init initializes the global logger.
+//
+//   - development: DebugLevel + colorized output
+//   - hubSync: optional web console writer (nil to skip)
+//   - logPath: optional rotated log file path (empty to skip); backed by lumberjack
+//     with 100 MB rotation, 3 backups, 7-day retention, gzip compression.
+func Init(development bool, hubSync zapcore.WriteSyncer, logPath string) {
 	level := zapcore.InfoLevel
 	if development {
 		level = zapcore.DebugLevel
@@ -41,6 +45,18 @@ func Init(development bool, hubSync zapcore.WriteSyncer) {
 	cores := []zapcore.Core{
 		zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stderr), level),
 	}
+
+	if logPath != "" {
+		fileSyncer := zapcore.AddSync(&lumberjack.Logger{
+			Filename:   logPath,
+			MaxSize:    100, // MB
+			MaxBackups: 3,
+			MaxAge:     7, // days
+			Compress:   true,
+		})
+		cores = append(cores, zapcore.NewCore(consoleEncoder, fileSyncer, level))
+	}
+
 	if hubSync != nil {
 		// Web console: plain level (no colors), same encoder otherwise.
 		webCfg := encoderCfg

@@ -2,7 +2,6 @@ package docker
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"io"
 	"regexp"
@@ -17,32 +16,33 @@ import (
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
-// parseLogs 把 Docker 原始日志转换成 Nodelet 日志结构。
-func parseLogs(containerID string, data []byte) []nodelet.LogEntry {
-	if len(data) == 0 {
-		return nil
-	}
+// parseLogs 把 Docker 原始日志流转换成 Nodelet 日志结构。
+// 通过 peek 前 8 字节判断 multiplexed 帧还是 TTY 纯文本，只读一遍。
+func parseLogs(containerID string, r io.Reader) []nodelet.LogEntry {
+	buf := bufio.NewReader(r)
 
 	entries := make([]nodelet.LogEntry, 0)
-	stdout := newLogCollector(containerID, "stdout", func(entry nodelet.LogEntry) {
-		entries = append(entries, entry)
-	})
-	stderr := newLogCollector(containerID, "stderr", func(entry nodelet.LogEntry) {
-		entries = append(entries, entry)
-	})
-	if _, err := stdcopy.StdCopy(stdout, stderr, bytes.NewReader(data)); err == nil {
+
+	if looksLikeDockerFrame(buf) {
+		stdout := newLogCollector(containerID, "stdout", func(entry nodelet.LogEntry) {
+			entries = append(entries, entry)
+		})
+		stderr := newLogCollector(containerID, "stderr", func(entry nodelet.LogEntry) {
+			entries = append(entries, entry)
+		})
+		_, _ = stdcopy.StdCopy(stdout, stderr, buf)
 		stdout.flush()
 		stderr.flush()
 		return entries
 	}
 
-	rawEntries := make([]nodelet.LogEntry, 0)
+	// TTY 模式：纯文本，全部视为 stdout。
 	collector := newLogCollector(containerID, "stdout", func(entry nodelet.LogEntry) {
-		rawEntries = append(rawEntries, entry)
+		entries = append(entries, entry)
 	})
-	_, _ = collector.Write(data)
+	_, _ = io.Copy(collector, buf)
 	collector.flush()
-	return rawEntries
+	return entries
 }
 
 // streamLogs 把 Docker 日志流转换成 Nodelet 日志结构流。
@@ -88,7 +88,7 @@ func looksLikeDockerFrame(reader *bufio.Reader) bool {
 type logCollector struct {
 	containerID string
 	stream      string
-	buffer      bytes.Buffer
+	buffer      strings.Builder
 	emit        func(nodelet.LogEntry)
 }
 

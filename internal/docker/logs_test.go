@@ -10,7 +10,7 @@ import (
 
 // TestParseRawLogs 验证 TTY 格式日志解析。
 func TestParseRawLogs(t *testing.T) {
-	logs := parseLogs("container-1", []byte("2026-06-27T08:00:00Z info app started\n"))
+	logs := parseLogs("container-1", bytes.NewReader([]byte("2026-06-27T08:00:00Z info app started\n")))
 
 	if len(logs) != 1 {
 		t.Fatalf("len(logs) = %d, want %d", len(logs), 1)
@@ -35,7 +35,7 @@ func TestParseMultiplexedLogs(t *testing.T) {
 	writeFrame(&data, stdcopy.Stdout, "2026-06-27T08:00:00Z out\n")
 	writeFrame(&data, stdcopy.Stderr, "2026-06-27T08:00:01Z err\n")
 
-	logs := parseLogs("container-1", data.Bytes())
+	logs := parseLogs("container-1", bytes.NewReader(data.Bytes()))
 
 	if len(logs) != 2 {
 		t.Fatalf("len(logs) = %d, want %d", len(logs), 2)

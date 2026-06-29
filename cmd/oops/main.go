@@ -32,7 +32,7 @@ func main() {
 		return
 	}
 	// 初始化结构化日志：同时输出到 stderr 和 web 控制台 hub。
-	logutil.Init(true, zapcore.AddSync(console.Default()))
+	logutil.Init(true, zapcore.AddSync(console.Default()), "")
 
 	cfg, err := config.LoadRuntime()
 	if err != nil {

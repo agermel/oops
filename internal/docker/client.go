@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -133,7 +134,7 @@ func (c *Client) ContainerLogs(r *http.Request, containerID string) ([]nodelet.L
 	if err != nil {
 		return nil, err
 	}
-	return parseLogs(containerID, data), nil
+	return parseLogs(containerID, bytes.NewReader(data)), nil
 }
 
 // ContainerLogsStream 返回指定容器的实时日志流。
