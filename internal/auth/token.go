@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -21,11 +22,18 @@ type TokenService struct {
 	ttl    time.Duration
 }
 
-// NewTokenService 创建 TokenService。密钥从所有用户的密码 hash 派生（照抄 Dozzle）。
+// NewTokenService 创建 TokenService。密钥从所有用户的密码 hash 派生
+// 对用户名排序后再迭代，保证 map 遍历顺序确定，避免重启后密钥变化导致所有 JWT 失效。
 func NewTokenService(users map[string]*User, ttl time.Duration) *TokenService {
+	names := make([]string, 0, len(users))
+	for name := range users {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	h := sha256.New()
-	for _, u := range users {
-		h.Write([]byte(u.Password))
+	for _, name := range names {
+		h.Write([]byte(users[name].Password))
 	}
 	return &TokenService{secret: h.Sum(nil), ttl: ttl}
 }

@@ -68,8 +68,8 @@ type Server struct {
 	projectStore  *config.ProjectStore
 	dsnStore      *config.ContainerDSNStore
 	sessionStore  *llm.SessionStore
-	userStore     *auth.Store
-	tokenService  *auth.TokenService
+	UserStore     *auth.Store
+	TokenService  *auth.TokenService
 	tokenTTL      time.Duration
 }
 
@@ -130,8 +130,8 @@ func NewFromConfig(cfg config.Config) *Server {
 	if err != nil {
 		logutil.Error("auth: user store", zap.Error(err))
 	} else {
-		s.userStore = userStore
-		s.tokenService = auth.NewTokenService(userStore.Users, 24*time.Hour)
+		s.UserStore = userStore
+		s.TokenService = auth.NewTokenService(userStore.Users, 24*time.Hour)
 		s.tokenTTL = 24 * time.Hour
 	}
 
@@ -153,8 +153,8 @@ func New(options Options) *Server {
 		nodeletClient: options.NodeletClient,
 		registry:      options.Registry,
 		sessionStore:  llm.NewSessionStore(),
-		userStore:     options.UserStore,
-		tokenService:  options.TokenService,
+		UserStore:     options.UserStore,
+		TokenService:  options.TokenService,
 		tokenTTL:      options.TokenTTL,
 	}
 

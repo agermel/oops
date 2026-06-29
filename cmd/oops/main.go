@@ -43,13 +43,13 @@ func main() {
 	server := api.NewFromConfig(cfg)
 	mux := http.NewServeMux()
 	server.Mount(mux)
-	web.MountStatic(mux, "web/dist")
+	handler := web.MountStatic(mux, "web/dist", server.UserStore, server.TokenService)
 
 	addr := common.EnvOrDefault("OOPS_ADDR", ":8081")
 
 	httpServer := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,

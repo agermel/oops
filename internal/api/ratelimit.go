@@ -98,3 +98,96 @@ func rateLimitWith(next http.HandlerFunc, reqPerSec int, burst int) http.Handler
 		next(w, r)
 	}
 }
+
+// loginLimiter 按账号限制登录失败次数，防止暴力破解。
+// 对每个 username+ip 组合独立限制，5 次/分钟，封锁窗口 15 分钟。
+type loginLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]*loginEntry
+}
+
+type loginEntry struct {
+	failures  int
+	blockedAt time.Time
+	lastFail  time.Time
+}
+
+var defaultLoginLimiter = newLoginLimiter()
+
+func newLoginLimiter() *loginLimiter {
+	ll := &loginLimiter{
+		attempts: make(map[string]*loginEntry),
+	}
+	go ll.cleanup(20 * time.Minute)
+	return ll
+}
+
+// allow 检查是否允许该 key 继续尝试登录。被封锁返回 false。
+func (ll *loginLimiter) allow(key string) bool {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+
+	entry, ok := ll.attempts[key]
+	if !ok {
+		return true
+	}
+
+	// 封锁窗口 15 分钟。
+	if !entry.blockedAt.IsZero() && time.Since(entry.blockedAt) < 15*time.Minute {
+		return false
+	}
+
+	// 封锁窗口过期，重置。
+	if !entry.blockedAt.IsZero() {
+		delete(ll.attempts, key)
+		return true
+	}
+
+	return true
+}
+
+// recordFail 记录一次失败尝试。返回 false 表示已达上限应封锁。
+func (ll *loginLimiter) recordFail(key string) {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+
+	entry, ok := ll.attempts[key]
+	if !ok {
+		entry = &loginEntry{}
+		ll.attempts[key] = entry
+	}
+
+	entry.failures++
+	entry.lastFail = time.Now()
+
+	// 1 分钟内失败 5 次 → 封锁。
+	if entry.failures >= 5 && time.Since(entry.lastFail) < time.Minute {
+		entry.blockedAt = time.Now()
+	}
+}
+
+// recordSuccess 登录成功后重置该 key 的失败计数。
+func (ll *loginLimiter) recordSuccess(key string) {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	delete(ll.attempts, key)
+}
+
+func (ll *loginLimiter) cleanup(ttl time.Duration) {
+	ticker := time.NewTicker(ttl)
+	for range ticker.C {
+		ll.mu.Lock()
+		for key, entry := range ll.attempts {
+			if time.Since(entry.lastFail) > ttl {
+				delete(ll.attempts, key)
+			}
+		}
+		ll.mu.Unlock()
+	}
+}
+
+// loginLimitKey 生成登录限流的唯一标识（username + ip）。
+func loginLimitKey(username string, r *http.Request) string {
+	ip := extractIP(r)
+	return ip + ":" + username
+}

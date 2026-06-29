@@ -12,7 +12,8 @@ import type {
   SessionDetail,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
-import { useHashRouter } from "./hooks/useHashRouter";
+import { usePathRouter } from "./hooks/usePathRouter";
+import { pageConfig } from "./lib/config";
 import { apiRequest, getErrorMessage } from "./lib/api";
 import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
 import { Header } from "./components/Header";
@@ -27,26 +28,26 @@ import { LoginPage } from "./components/LoginPage";
 import "./styles.css";
 
 export function App() {
+  // ===================================================================
+  // 所有 Hooks 必须在顶层调用（React 规则），条件 return 放在最后。
+  // ===================================================================
+
   // ---- 登录状态 ----
-  const [authChecked, setAuthChecked] = React.useState(false);
-  const [authenticated, setAuthenticated] = React.useState(false);
+  const hasInjectedUser = pageConfig.authProvider !== "none" && !!pageConfig.user;
+  const [authenticated, setAuthenticated] = React.useState(hasInjectedUser);
+  const [authChecked, setAuthChecked] = React.useState(hasInjectedUser);
 
   React.useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => {
-        setAuthenticated(r.ok);
-        setAuthChecked(true);
-      })
-      .catch(() => {
-        setAuthenticated(false);
-        setAuthChecked(true);
-      });
+    if (!hasInjectedUser) {
+      fetch("/api/auth/me")
+        .then((r) => { setAuthenticated(r.ok); setAuthChecked(true); })
+        .catch(() => { setAuthenticated(false); setAuthChecked(true); });
+    }
   }, []);
 
-  // ---- Hash 路由（唯一导航数据源） ----
-  const { route, navigate, replace } = useHashRouter();
+  // ---- 路由（始终调用，即使未登录也解析路径） ----
+  const { route, navigate, replace } = usePathRouter();
 
-  // 从 route 派生所有导航状态
   const activeNav = route.view === "console" ? "console" : "projects";
   const selectedProjectID =
     route.view === "projects" || route.view === "console"
@@ -62,14 +63,12 @@ export function App() {
   const urlServerId = route.view === "project-overview" ? route.serverId : undefined;
   const urlContainerId = route.view === "project-overview" ? route.containerId : undefined;
 
-  // 供旧接口使用的派生值
   const selectedNodeletID = urlServerId || "";
   const selectedContainerID = urlContainerId || "";
 
-  // 跟踪当前已加载的项目，避免重复加载
   const lastLoadedProjectRef = React.useRef("");
 
-  // 侧栏折叠（纯 UI 状态）
+  // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
   // ---- 项目状态 ----
@@ -111,7 +110,6 @@ export function App() {
   const chatLoadingRef = React.useRef(false);
   const chatStepsRef = React.useRef<StepEvent[]>([]);
   const [sessionId, setSessionId] = React.useState<string>(() => {
-    // 从 localStorage 恢复上次的 session ID
     return localStorage.getItem("oops_session_id") || "";
   });
   const [sessionLoaded, setSessionLoaded] = React.useState(false);
@@ -132,7 +130,6 @@ export function App() {
     const fn = () => {
       const now = Date.now();
       if (flushFirstRef.current === 0) flushFirstRef.current = now;
-      // 达到 maxWait 时强制刷新
       if (now - flushFirstRef.current >= LOG_MAX_WAIT_MS) {
         if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
         flushFirstRef.current = 0;
@@ -164,7 +161,7 @@ export function App() {
 
   // ---- 会话加载 ----
   React.useEffect(() => {
-    if (!sessionId || sessionLoaded) return;
+    if (!authenticated || !sessionId || sessionLoaded) return;
     let cancelled = false;
     async function load() {
       try {
@@ -172,15 +169,12 @@ export function App() {
           sessionPaths(sessionId).get + "?include_messages=true"
         );
         if (!cancelled && detail?.id) {
-          // 将后端消息转换为 ChatExchange 展示
           const exchanges: ChatExchange[] = [];
           let currentQuestion = "";
           let currentSteps: StepEvent[] = [];
           for (const msg of detail.messages) {
             if (msg.role === "user") {
-              // 新的一轮开始
               if (currentQuestion) {
-                // 保存上一轮（即使不完整）
                 exchanges.push({ question: currentQuestion, steps: currentSteps });
               }
               currentQuestion = msg.content;
@@ -217,9 +211,9 @@ export function App() {
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, sessionLoaded]);
+  }, [authenticated, sessionId, sessionLoaded]);
 
-  // ---------------- 数据获取（纯函数，不依赖闭包中的导航状态） ----------------
+  // ---------------- 数据获取 ----------------
 
   async function fetchProjects() {
     setProjectsLoading(true);
@@ -263,7 +257,6 @@ export function App() {
     setDetailError("");
     setHealth(undefined);
 
-    // 加载容器详情
     setDetailLoading(true);
     try {
       setContainerDetail(await apiRequest<ContainerDetailType>(
@@ -276,7 +269,6 @@ export function App() {
       setDetailLoading(false);
     }
 
-    // 启动日志流
     loadLogStream(projectId, nodeletID, containerID);
   }
 
@@ -307,7 +299,6 @@ export function App() {
     };
   }
 
-  // ---- 健康检查 ----
   async function checkHealth() {
     if (!selectedContainerID || !selectedNodeletID) return;
     setHealthLoading(true);
@@ -323,7 +314,6 @@ export function App() {
     }
   }
 
-  // ---- 聊天 ----
   async function sendChat(question?: string) {
     const q = (question ?? chatInput).trim();
     if (!q || chatLoadingRef.current) return;
@@ -365,7 +355,6 @@ export function App() {
           if (line.startsWith("data: ")) {
             try {
               const evt: StepEvent = JSON.parse(line.slice(6));
-              // 首条 session 事件：记录 session ID
               if (evt.type === "session" && evt.content) {
                 setSessionId(evt.content);
                 localStorage.setItem("oops_session_id", evt.content);
@@ -378,7 +367,6 @@ export function App() {
         }
       }
 
-      // 从 ref 读取最终步骤列表，避免在 setState updater 内调用另一个 setState
       const steps = chatStepsRef.current;
       const answer = steps.find((s) => s.type === "answer");
       const errStep = steps.find((s) => s.type === "error");
@@ -399,8 +387,6 @@ export function App() {
     }
   }
 
-  // ---------------- URL 写入（替代旧的动作函数） ----------------
-
   function goToProjectList() {
     navigate({ view: "projects" });
   }
@@ -419,7 +405,6 @@ export function App() {
   }
 
   function startNewChat() {
-    // 保留旧 session 在后端，前端切换到新会话
     localStorage.removeItem("oops_session_id");
     setChatExchanges([]);
     setCurrentSteps([]);
@@ -440,7 +425,6 @@ export function App() {
   }
 
   function clearChat() {
-    // 删除后端 session
     if (sessionId) {
       fetch(sessionPaths(sessionId).delete, { method: "DELETE" }).catch(() => {});
       localStorage.removeItem("oops_session_id");
@@ -455,15 +439,13 @@ export function App() {
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
   }
 
-  // 项目切换时重置会话
   React.useEffect(() => {
+    if (!authenticated) return;
     if (sessionId && sessionLoaded) {
-      // 当项目切换时，新建会话（旧会话保留在后端可查）
       startNewChat();
     }
     loadSessions();
-  }, [selectedProjectID]);
-
+  }, [authenticated, selectedProjectID]);
 
   function selectServerFromUI(nodeletID: string) {
     if (!selectedProjectID) return;
@@ -475,13 +457,11 @@ export function App() {
     replace({ view: "project-overview", projectId: selectedProjectID, serverId: nodeletID, containerId: containerID });
   }
 
-  // 切换服务器展开/折叠
   async function toggleServer(nodeletID: string) {
     const next = new Set(expandedServers);
     if (next.has(nodeletID)) {
       next.delete(nodeletID);
       setExpandedServers(next);
-      // 如果折叠的是 URL 中指定的服务器，回到项目概览
       if (urlServerId === nodeletID) {
         replace({ view: "project-overview", projectId: selectedProjectID });
       }
@@ -491,7 +471,6 @@ export function App() {
       if (!containers[nodeletID]) {
         loadContainers(selectedProjectID, nodeletID);
       }
-      // 同步到 URL
       selectServerFromUI(nodeletID);
     }
   }
@@ -500,8 +479,8 @@ export function App() {
 
   // Effect A: 项目进入/离开
   React.useEffect(() => {
+    if (!authenticated) return;
     if (selectedProjectID && selectedProjectID !== lastLoadedProjectRef.current) {
-      // 进入新项目
       lastLoadedProjectRef.current = selectedProjectID;
       setServers([]);
       setContainers({});
@@ -512,7 +491,6 @@ export function App() {
       loadProjectServers(selectedProjectID);
     }
     if (!selectedProjectID && lastLoadedProjectRef.current) {
-      // 离开项目
       lastLoadedProjectRef.current = "";
       setServers([]);
       setContainers({});
@@ -521,15 +499,14 @@ export function App() {
       closeLogStream();
       setLogs([]);
     }
-  }, [selectedProjectID]);
+  }, [authenticated, selectedProjectID]);
 
   // Effect B: URL 中有 server 时，展开并加载容器
   React.useEffect(() => {
-    if (!urlServerId || servers.length === 0) return;
+    if (!authenticated || !urlServerId || servers.length === 0) return;
 
     const server = servers.find((s) => s.nodelet.id === urlServerId);
     if (!server) {
-      // URL 中的 server 不在当前项目里，回退
       replace({ view: "project-overview", projectId: selectedProjectID });
       return;
     }
@@ -542,31 +519,29 @@ export function App() {
     if (!containers[urlServerId]) {
       loadContainers(selectedProjectID, urlServerId);
     }
-  }, [urlServerId, servers, selectedProjectID]);
+  }, [authenticated, urlServerId, servers, selectedProjectID]);
 
   // Effect C: URL 中有 container 时，选中并加载详情+日志
   React.useEffect(() => {
-    if (!urlContainerId || !urlServerId) return;
-    // 避免重复选中同一个容器
+    if (!authenticated || !urlContainerId || !urlServerId) return;
     if (containerDetail && containerDetail.container.id === urlContainerId) return;
 
     const serverContainers = containers[urlServerId];
-    if (!serverContainers) return; // 容器列表还没加载
+    if (!serverContainers) return;
 
     const container = serverContainers.find((c) => c.id === urlContainerId);
     if (!container) {
-      // URL 中的 container 不存在，去掉
       replace({ view: "project-overview", projectId: selectedProjectID, serverId: urlServerId });
       return;
     }
 
     selectContainer(selectedProjectID, urlServerId, urlContainerId);
-  }, [urlContainerId, urlServerId, containers, selectedProjectID]);
+  }, [authenticated, urlContainerId, urlServerId, containers, selectedProjectID]);
 
   // Effect D: 指定了 server 但没有 container → 自动选第一个容器
   React.useEffect(() => {
-    if (!urlServerId || urlContainerId) return;
-    if (selectedContainerID) return; // 已有选中
+    if (!authenticated || !urlServerId || urlContainerId) return;
+    if (selectedContainerID) return;
 
     const serverContainers = containers[urlServerId];
     if (!serverContainers || serverContainers.length === 0) return;
@@ -578,11 +553,11 @@ export function App() {
       serverId: urlServerId,
       containerId: first.id,
     });
-  }, [urlServerId, urlContainerId, containers, selectedProjectID]);
+  }, [authenticated, urlServerId, urlContainerId, containers, selectedProjectID]);
 
   // Effect E: 进入项目概览且无 server → 自动展开首台服务器
   React.useEffect(() => {
-    if (route.view !== "project-overview") return;
+    if (!authenticated || route.view !== "project-overview") return;
     if (urlServerId) return;
     if (servers.length === 0 || serversLoading) return;
 
@@ -592,19 +567,18 @@ export function App() {
       projectId: selectedProjectID,
       serverId: first.nodelet.id,
     });
-  }, [route.view, urlServerId, servers, serversLoading, selectedProjectID]);
+  }, [authenticated, route.view, urlServerId, servers, serversLoading, selectedProjectID]);
 
   // ---------------- 基础 Effects ----------------
 
   React.useEffect(() => {
+    if (!authenticated) return;
     fetchProjects();
-  }, []);
+  }, [authenticated]);
 
   React.useEffect(() => {
     return () => closeLogStream();
   }, [flushLogs]);
-
-  // 自动滚动由 ContainerLogs 内部的 IntersectionObserver + MutationObserver 处理
 
   // ---- 标题 ----
   const selectedProject = projects.find((p) => p.id === selectedProjectID);
@@ -620,17 +594,18 @@ export function App() {
     document.title = parts.length > 0 ? `${parts.join(" · ")} — Oops` : "Oops";
   }, [selectedProject, projectSection]);
 
-  // ---- Render ----
-  // 等待 auth 检查完成
+  // ===================================================================
+  // 条件渲染（必须在所有 Hooks 之后）
+  // ===================================================================
+
   if (!authChecked) {
     return <div className="login-page"><p>加载中...</p></div>;
   }
-
-  // 未登录 → 显示登录页
   if (!authenticated) {
     return <LoginPage />;
   }
 
+  // ---- Render ----
   return (
     <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <a href="#main-content" className="skip-link">

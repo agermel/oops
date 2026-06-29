@@ -2,6 +2,7 @@ package auth
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -12,7 +13,8 @@ import (
 
 // User 表示一个可登录的用户。
 type User struct {
-	Name     string `yaml:"name"`
+	Username string `yaml:"-"`      // 登录用户名（YAML map 的 key），不在 YAML 中序列化
+	Name     string `yaml:"name"`    // 显示名称
 	Password string `yaml:"password"` // bcrypt hash
 }
 
@@ -36,6 +38,13 @@ func NewStore(path string) (*Store, error) {
 	return s, nil
 }
 
+// IsEmpty 返回 store 中是否没有配置任何用户。带读锁保护，可安全跨 goroutine 使用。
+func (s *Store) IsEmpty() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.Users) == 0
+}
+
 // Validate 验证用户名和密码。返回用户信息或错误。
 func (s *Store) Validate(username, password string) (*User, error) {
 	if err := s.reloadIfChanged(); err != nil {
@@ -52,12 +61,15 @@ func (s *Store) Validate(username, password string) (*User, error) {
 	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)); err != nil {
 		return nil, fmt.Errorf("invalid username or password")
 	}
+	u.Username = username // 确保 Username 字段被填充（防御性编程）
 	return u, nil
 }
 
 // Find 按用户名查找用户（不验证密码）。
 func (s *Store) Find(username string) *User {
-	_ = s.reloadIfChanged()
+	if err := s.reloadIfChanged(); err != nil {
+		log.Printf("auth: reload users failed: %v", err)
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -73,7 +85,13 @@ func (s *Store) reloadIfChanged() error {
 		}
 		return err
 	}
-	if !info.ModTime().After(s.modTime) {
+
+	// 读锁保护 s.modTime，避免与 load() 中的写锁并发造成 data race。
+	s.mu.RLock()
+	changed := info.ModTime().After(s.modTime)
+	s.mu.RUnlock()
+
+	if !changed {
 		return nil
 	}
 	return s.load()
@@ -99,6 +117,10 @@ func (s *Store) load() error {
 	s.Users = raw.Users
 	if s.Users == nil {
 		s.Users = make(map[string]*User)
+	}
+	// 填充 Username 字段（YAML map 的 key）。
+	for username, u := range s.Users {
+		u.Username = username
 	}
 	if info != nil {
 		s.modTime = info.ModTime()

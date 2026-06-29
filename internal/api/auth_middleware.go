@@ -15,10 +15,10 @@ const userContextKey contextKey = "user"
 // 不阻断请求 —— 只填充 context。requireAuth 负责阻断。
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.tokenService != nil {
+		if s.TokenService != nil {
 			if cookie, err := r.Cookie("jwt"); err == nil {
-				if claims, err := s.tokenService.VerifyToken(cookie.Value); err == nil {
-					user := &auth.User{Name: claims.Name}
+				if claims, err := s.TokenService.VerifyToken(cookie.Value); err == nil {
+					user := &auth.User{Name: claims.Name, Username: claims.Username}  // 注意：store.User.Username 实际是用户名，Name 是显示名
 					ctx := context.WithValue(r.Context(), userContextKey, user)
 					r = r.WithContext(ctx)
 				}
@@ -32,7 +32,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 // 当 userStore 为 nil 时（未配置用户），允许所有请求（向后兼容）。
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.userStore == nil || len(s.userStore.Users) == 0 {
+		if s.UserStore == nil || s.UserStore.IsEmpty() {
 			next(w, r)
 			return
 		}

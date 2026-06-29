@@ -24,15 +24,17 @@ export function LoginPage() {
       });
 
       if (resp.ok) {
-        // 登录成功 → 跳回之前页面或首页
+        // 登录成功 → 读取 redirectUrl → 整页跳转
         const params = new URLSearchParams(window.location.search);
-        const redirect = params.get("redirectUrl") || "/";
-        window.location.href = redirect;
-      } else {
+        const redirectUrl = params.get("redirectUrl") || "/";
+        window.location.href = redirectUrl;
+      } else if (resp.status === 401) {
         setError("用户名或密码错误");
+      } else {
+        setError(`服务异常 (HTTP ${resp.status})，请稍后重试`);
       }
     } catch {
-      setError("网络错误，请重试");
+      setError("网络错误，请确认服务端已启动");
     } finally {
       setLoading(false);
     }

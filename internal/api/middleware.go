@@ -40,10 +40,13 @@ func authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 
+		// 允许通过 ?token= 查询参数传递 token（供 EventSource 等无法自定义 header 的场景）。
 		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-			return
+			if subtle.ConstantTimeCompare([]byte("Bearer "+r.URL.Query().Get("token")), []byte(expected)) != 1 {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 		next(w, r)
 	}
