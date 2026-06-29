@@ -4,5 +4,6 @@
 @import "./styles/chat.css";
 @import "./styles/projects.css";
 @import "./styles/console.css";
+@import "./styles/login.css";
 @import "./styles/responsive.css";
 @import "../node_modules/streamdown/styles.css";

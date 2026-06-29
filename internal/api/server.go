@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"oops/internal/auth"
 	"oops/internal/config"
 	"oops/internal/connection"
 	"oops/internal/connection/checker"
@@ -51,6 +52,9 @@ type Options struct {
 	Registry      *connection.Registry
 	LLMEnabled    bool
 	LLMConfig     config.LLMConfig
+	UserStore     *auth.Store
+	TokenService  *auth.TokenService
+	TokenTTL      time.Duration
 }
 
 // Server 保存中心端 API 服务运行所需的配置和依赖。
@@ -64,6 +68,9 @@ type Server struct {
 	projectStore  *config.ProjectStore
 	dsnStore      *config.ContainerDSNStore
 	sessionStore  *llm.SessionStore
+	userStore     *auth.Store
+	tokenService  *auth.TokenService
+	tokenTTL      time.Duration
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -118,6 +125,16 @@ func NewFromConfig(cfg config.Config) *Server {
 		s.dsnStore = dsnStore
 	}
 
+	// 用户认证。
+	userStore, err := auth.NewStore("data/users.yml")
+	if err != nil {
+		logutil.Error("auth: user store", zap.Error(err))
+	} else {
+		s.userStore = userStore
+		s.tokenService = auth.NewTokenService(userStore.Users, 24*time.Hour)
+		s.tokenTTL = 24 * time.Hour
+	}
+
 	return s
 }
 
@@ -136,6 +153,9 @@ func New(options Options) *Server {
 		nodeletClient: options.NodeletClient,
 		registry:      options.Registry,
 		sessionStore:  llm.NewSessionStore(),
+		userStore:     options.UserStore,
+		tokenService:  options.TokenService,
+		tokenTTL:      options.TokenTTL,
 	}
 
 	if options.LLMEnabled {
@@ -170,30 +190,44 @@ func (s *Server) Routes() *http.ServeMux {
 // Mount 把中心端 API 路由挂载到指定 mux。
 func (s *Server) Mount(mux *http.ServeMux) {
 	// 所有 API 路由统一经过: securityHeaders → authorize → limitBody → handler
-	wrap := func(f http.HandlerFunc) http.HandlerFunc {
-		return securityHeaders(rateLimit(authorize(limitBody(f))))
+	authed := func(f http.HandlerFunc) http.HandlerFunc {
+		return securityHeaders(rateLimit(s.authMiddleware(s.requireAuth(limitBody(f)))))
 	}
-	wrapChat := func(f http.HandlerFunc) http.HandlerFunc {
-		return securityHeaders(rateLimitChat(authorize(limitBody(f))))
+	authedChat := func(f http.HandlerFunc) http.HandlerFunc {
+		return securityHeaders(rateLimitChat(s.authMiddleware(s.requireAuth(limitBody(f)))))
+	}
+	publicWrap := func(f http.HandlerFunc) http.HandlerFunc {
+		return securityHeaders(rateLimit(s.authMiddleware(f)))
 	}
 
-	mux.HandleFunc("/api/connections/status", wrap(s.handleConnectionStatus))
-	mux.HandleFunc("/api/nodelets", wrap(s.handleNodelets))
-	mux.HandleFunc("/api/nodelets/", wrap(s.handleNodeletResource))
-	mux.HandleFunc("/api/chat", wrapChat(s.handleChat))
-	mux.HandleFunc("/api/sessions", wrap(s.handleSessions))
-	mux.HandleFunc("/api/sessions/", wrap(s.handleSessionByID))
-	mux.HandleFunc("/api/mcp/connections", wrap(s.handleMCPConnections))
-	mux.HandleFunc("/api/mcp/connections/", wrap(s.handleMCPConnection))
-	mux.HandleFunc("/api/tools", wrap(s.handleTools))
-	mux.HandleFunc("/api/tools/", wrap(s.handleToolByID))
+	mux.HandleFunc("/api/token", publicWrap(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			s.handleCreateToken(w, r)
+		case http.MethodDelete:
+			s.handleDeleteToken(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/api/auth/me", authed(s.handleAuthMe))
+	mux.HandleFunc("/api/connections/status", authed(s.handleConnectionStatus))
+	mux.HandleFunc("/api/nodelets", authed(s.handleNodelets))
+	mux.HandleFunc("/api/nodelets/", authed(s.handleNodeletResource))
+	mux.HandleFunc("/api/chat", authedChat(s.handleChat))
+	mux.HandleFunc("/api/sessions", authed(s.handleSessions))
+	mux.HandleFunc("/api/sessions/", authed(s.handleSessionByID))
+	mux.HandleFunc("/api/mcp/connections", authed(s.handleMCPConnections))
+	mux.HandleFunc("/api/mcp/connections/", authed(s.handleMCPConnection))
+	mux.HandleFunc("/api/tools", authed(s.handleTools))
+	mux.HandleFunc("/api/tools/", authed(s.handleToolByID))
 
 	// 实时控制台 SSE。
-	mux.HandleFunc("/api/console/stream", securityHeaders(authorize(console.Default().SSEHandler)))
+	mux.HandleFunc("/api/console/stream", securityHeaders(s.authMiddleware(console.Default().SSEHandler)))
 
 	// 项目与容器详情 API。
-	mux.HandleFunc("/api/projects", wrap(s.handleProjects))
-	mux.HandleFunc("/api/projects/", wrap(s.handleProjectsRouter))
+	mux.HandleFunc("/api/projects", authed(s.handleProjects))
+	mux.HandleFunc("/api/projects/", authed(s.handleProjectsRouter))
 }
 
 // handleSessions 处理 GET /api/sessions — 列出全局或项目会话。

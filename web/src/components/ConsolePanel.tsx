@@ -1,6 +1,5 @@
 import React from "react";
 import { Terminal, Trash2, ChevronUp, ChevronDown } from "lucide-react";
-import { fetchEventSource } from "@microsoft/fetch-event-source";
 
 interface ConsoleEntry {
   timestamp: string;
@@ -15,34 +14,27 @@ export function ConsolePanel() {
   const [autoScroll, setAutoScroll] = React.useState(true);
   const [levelFilter, setLevelFilter] = React.useState<Set<string>>(() => new Set(["info", "warn", "error"]));
   const panelRef = React.useRef<HTMLDivElement>(null);
-  const abortRef = React.useRef<AbortController | null>(null);
+  const sourceRef = React.useRef<EventSource | null>(null);
 
   React.useEffect(() => {
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const source = new EventSource("/api/console/stream");
+    sourceRef.current = source;
 
-    const headers: Record<string, string> = {};
-    const stored = sessionStorage.getItem("oops_token");
-    if (stored) headers["Authorization"] = `Bearer ${stored}`;
+    source.onmessage = (event) => {
+      try {
+        const entry: ConsoleEntry = JSON.parse(event.data);
+        setEntries((prev) => [...prev.slice(-(MAX_ENTRIES - 1)), entry]);
+      } catch {
+        // skip unparsable
+      }
+    };
 
-    fetchEventSource("/api/console/stream", {
-      headers,
-      signal: ctrl.signal,
-      onmessage(event) {
-        try {
-          const entry: ConsoleEntry = JSON.parse(event.data);
-          setEntries((prev) => [...prev.slice(-(MAX_ENTRIES - 1)), entry]);
-        } catch {
-          // skip unparsable
-        }
-      },
-      onerror() {
-        // fetch-event-source 会在可重试错误时自动重连
-      },
-    });
+    source.onerror = () => {
+      // EventSource auto-reconnects
+    };
 
     return () => {
-      ctrl.abort();
+      source.close();
     };
   }, []);
 

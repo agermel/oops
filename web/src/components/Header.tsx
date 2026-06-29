@@ -1,7 +1,11 @@
-import { Search, CircleHelp, Bell, Sparkles } from "lucide-react";
+import { Search, CircleHelp, Bell, Sparkles, LogOut } from "lucide-react";
 import { navigation } from "../types";
 
 export function Header({ activeNav, onNavChange }: { activeNav: string; onNavChange: (id: string) => void }) {
+  async function handleLogout() {
+    await fetch("/api/token", { method: "DELETE" });
+    window.location.reload();
+  }
   return (
     <header className="global-header">
       <div className="elastic-brand" aria-label="Oops Panel">
@@ -39,8 +43,8 @@ export function Header({ activeNav, onNavChange }: { activeNav: string; onNavCha
         <button title="智能助手" onClick={() => onNavChange("chat")} className={activeNav === "chat" ? "chat-active" : ""}>
           <Sparkles size={20} />
         </button>
-        <button className="avatar" title="用户">
-          o
+        <button title="登出" onClick={handleLogout}>
+          <LogOut size={20} />
         </button>
       </div>
     </header>

@@ -14,7 +14,6 @@ import type {
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { useHashRouter } from "./hooks/useHashRouter";
 import { apiRequest, getErrorMessage } from "./lib/api";
-import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
@@ -24,9 +23,26 @@ import { ChatView } from "./components/ChatView";
 import { MCPView } from "./components/MCPView";
 import { ToolsView } from "./components/ToolsView";
 import { ConsolePanel } from "./components/ConsolePanel";
+import { LoginPage } from "./components/LoginPage";
 import "./styles.css";
 
 export function App() {
+  // ---- 登录状态 ----
+  const [authChecked, setAuthChecked] = React.useState(false);
+  const [authenticated, setAuthenticated] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => {
+        setAuthenticated(r.ok);
+        setAuthChecked(true);
+      })
+      .catch(() => {
+        setAuthenticated(false);
+        setAuthChecked(true);
+      });
+  }, []);
+
   // ---- Hash 路由（唯一导航数据源） ----
   const { route, navigate, replace } = useHashRouter();
 
@@ -81,7 +97,7 @@ export function App() {
   const [logsLoading, setLogsLoading] = React.useState(false);
   const [logsError, setLogsError] = React.useState("");
   const [autoScroll, setAutoScroll] = React.useState(true);
-  const logAbortRef = React.useRef<AbortController | null>(null);
+  const logEventSource = React.useRef<EventSource | null>(null);
   const logBuffer = React.useRef<LogEntry[]>([]);
   const logsPanel = React.useRef<HTMLDivElement | null>(null);
 
@@ -138,9 +154,9 @@ export function App() {
   }, []);
 
   function closeLogStream() {
-    if (logAbortRef.current) {
-      logAbortRef.current.abort();
-      logAbortRef.current = null;
+    if (logEventSource.current) {
+      logEventSource.current.close();
+      logEventSource.current = null;
     }
     flushLogs.cancel();
     logBuffer.current = [];
@@ -269,34 +285,26 @@ export function App() {
     setLogsLoading(true);
     setLogsError("");
 
-    const ctrl = new AbortController();
-    logAbortRef.current = ctrl;
-
-    const headers: Record<string, string> = {};
-    const stored = sessionStorage.getItem("oops_token");
-    if (stored) headers["Authorization"] = `Bearer ${stored}`;
-
     const url = serverPaths(projectId, nodeletID).containerLogs(containerID);
 
-    fetchEventSource(url, {
-      headers,
-      signal: ctrl.signal,
-      async onopen() {
-        setLogsLoading(false);
-      },
-      onmessage(event) {
-        try {
-          logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
-          flushLogs();
-        } catch {
-          // 跳过无法解析的日志行
-        }
-      },
-      onerror() {
-        setLogsLoading(false);
-        setLogsError("日志流连接失败，请检查容器是否在运行");
-      },
-    });
+    const source = new EventSource(url);
+    logEventSource.current = source;
+
+    source.onopen = () => {
+      setLogsLoading(false);
+    };
+    source.onmessage = (event) => {
+      try {
+        logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
+        flushLogs();
+      } catch {
+        // 跳过无法解析的日志行
+      }
+    };
+    source.onerror = () => {
+      setLogsLoading(false);
+      setLogsError("日志流连接失败，请检查容器是否在运行");
+    };
   }
 
   // ---- 健康检查 ----
@@ -613,6 +621,16 @@ export function App() {
   }, [selectedProject, projectSection]);
 
   // ---- Render ----
+  // 等待 auth 检查完成
+  if (!authChecked) {
+    return <div className="login-page"><p>加载中...</p></div>;
+  }
+
+  // 未登录 → 显示登录页
+  if (!authenticated) {
+    return <LoginPage />;
+  }
+
   return (
     <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <a href="#main-content" className="skip-link">
