@@ -11,7 +11,8 @@ import (
 )
 
 // NodeletConfig 保存一台 oops-nodelet 的访问信息。
-// Token 在 JSON 响应中永远不暴露。
+// Token 在 JSON API 响应中永远不暴露（json:"-"），
+// 但在内部及 JSON 文件中完整保留。
 type NodeletConfig struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -19,9 +20,25 @@ type NodeletConfig struct {
 	Token   string `json:"-"`
 }
 
+// persistedNodelet 是 nodelets.json 的磁盘格式 —— 包含 token。
+type persistedNodelet struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Token   string `json:"token"`
+}
+
+func (p persistedNodelet) toConfig() NodeletConfig {
+	return NodeletConfig{ID: p.ID, Name: p.Name, Address: p.Address, Token: p.Token}
+}
+
+func toPersisted(cfg NodeletConfig) persistedNodelet {
+	return persistedNodelet{ID: cfg.ID, Name: cfg.Name, Address: cfg.Address, Token: cfg.Token}
+}
+
 // nodeletConfigFile 是 manager 持久化文件的顶层结构。
 type nodeletConfigFile struct {
-	Nodelets []NodeletConfig `json:"nodelets"`
+	Nodelets []persistedNodelet `json:"nodelets"`
 }
 
 // NodeletManager 管理 nodelet 配置的 CRUD，持久化到 JSON 文件。
@@ -36,14 +53,12 @@ type NodeletManager struct {
 func NewNodeletManager(configPath string) (*NodeletManager, error) {
 	m := &NodeletManager{configPath: configPath}
 	if configPath == "" {
-		m.config = nodeletConfigFile{Nodelets: []NodeletConfig{}}
 		return m, nil
 	}
 	if err := m.load(); err != nil {
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("load nodelets: %w", err)
 		}
-		m.config = nodeletConfigFile{Nodelets: []NodeletConfig{}}
 	}
 	return m, nil
 }
@@ -53,7 +68,9 @@ func (m *NodeletManager) List() []NodeletConfig {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]NodeletConfig, len(m.config.Nodelets))
-	copy(out, m.config.Nodelets)
+	for i, n := range m.config.Nodelets {
+		out[i] = n.toConfig()
+	}
 	return out
 }
 
@@ -63,7 +80,7 @@ func (m *NodeletManager) Find(id string) (NodeletConfig, bool) {
 	defer m.mu.Unlock()
 	for _, n := range m.config.Nodelets {
 		if n.ID == id {
-			return n, true
+			return n.toConfig(), true
 		}
 	}
 	return NodeletConfig{}, false
@@ -84,7 +101,7 @@ func (m *NodeletManager) Add(cfg NodeletConfig) error {
 		}
 	}
 
-	m.config.Nodelets = append(m.config.Nodelets, cfg)
+	m.config.Nodelets = append(m.config.Nodelets, toPersisted(cfg))
 	return m.saveLocked()
 }
 
@@ -104,7 +121,7 @@ func (m *NodeletManager) Update(cfg NodeletConfig) error {
 		return fmt.Errorf("nodelet %q not found", cfg.ID)
 	}
 
-	m.config.Nodelets[idx] = cfg
+	m.config.Nodelets[idx] = toPersisted(cfg)
 	return m.saveLocked()
 }
 
@@ -160,7 +177,7 @@ func (m *NodeletManager) load() error {
 
 func (m *NodeletManager) saveLocked() error {
 	if m.configPath == "" {
-		return nil // 纯内存模式
+		return nil
 	}
 	data, err := json.MarshalIndent(m.config, "", "  ")
 	if err != nil {

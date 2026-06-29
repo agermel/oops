@@ -135,7 +135,14 @@ export function MCPView() {
             </tr>
           </thead>
           <tbody>
-            {connections.length === 0 && !loading ? (
+            {connections.length === 0 && loading ? (
+              <tr>
+                <td colSpan={7} className="mcp-table-loading">
+                  <span className="status-dot loading" />
+                  <span>读取状态中</span>
+                </td>
+              </tr>
+            ) : connections.length === 0 ? (
               <tr>
                 <td colSpan={7} className="mcp-table-empty">
                   暂无 MCP 连接，点击"新增"创建

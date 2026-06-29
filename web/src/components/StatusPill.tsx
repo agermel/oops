@@ -5,9 +5,10 @@ export function StatusPill({
   status: string;
   labelMap: Record<string, string>;
 }) {
+  const normalized = status || "unknown";
   return (
-    <span className={`status-pill ${status}`}>
-      {labelMap[status] || status}
+    <span className={`status-pill ${normalized}`}>
+      {labelMap[normalized] || "未知"}
     </span>
   );
 }
