@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,10 +37,11 @@ type dsnExtractor struct {
 
 // dsnExtractors 按服务类型注册 DSN 提取规则。
 var dsnExtractors = map[ServiceType]dsnExtractor{
-	ServiceMySQL:    {parse: extractMySQLDSN},
-	ServiceRedis:    {parse: extractRedisDSN},
-	ServicePostgres: {parse: extractPostgresDSN},
-	ServiceMongo:    {parse: extractMongoDSN},
+	ServiceMySQL:         {parse: extractMySQLDSN},
+	ServiceRedis:         {parse: extractRedisDSN},
+	ServicePostgres:      {parse: extractPostgresDSN},
+	ServiceMongo:         {parse: extractMongoDSN},
+	ServiceElasticsearch: {parse: extractElasticsearchDSN},
 }
 
 // ContainerInspect 对指定容器执行 docker inspect，返回详细元数据。
@@ -146,10 +148,11 @@ func parseEnvList(env []string) map[string]string {
 // findContainerPort 根据服务类型查找容器暴露的端口。
 func findContainerPort(ports []nodelet.PortMapping, stype ServiceType) int {
 	defaultPorts := map[ServiceType]int{
-		ServiceMySQL:    3306,
-		ServiceRedis:    6379,
-		ServicePostgres: 5432,
-		ServiceMongo:    27017,
+		ServiceMySQL:         3306,
+		ServiceRedis:         6379,
+		ServicePostgres:      5432,
+		ServiceMongo:         27017,
+		ServiceElasticsearch: 9200,
 	}
 
 	defaultPort := defaultPorts[stype]
@@ -279,6 +282,33 @@ func extractMongoDSN(env map[string]string) *DSNInfo {
 		return nil
 	}
 	return &DSNInfo{Raw: dsn}
+}
+
+func extractElasticsearchDSN(env map[string]string) *DSNInfo {
+	raw := firstNonEmpty(env, "ELASTICSEARCH_URL", "ES_URL")
+	if raw == "" {
+		return nil
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return &DSNInfo{Raw: raw}
+	}
+
+	host, portStr := splitHostPort(u.Host, "9200")
+	port, _ := strconv.Atoi(portStr)
+
+	user := ""
+	if u.User != nil {
+		user = u.User.Username()
+	}
+
+	return &DSNInfo{
+		Host: host,
+		Port: port,
+		User: user,
+		Raw:  raw,
+	}
 }
 
 // --- generic helpers ---

@@ -73,6 +73,7 @@ export function ContainerMCP({
         if (dsn.port) env.push(`REDIS_PORT=${String(dsn.port)}`);
       } else if (type === "postgres") env.push(`DATABASE_URL=${dsn.raw}`);
       else if (type === "mongo") env.push(`MONGO_URI=${dsn.raw}`);
+      else if (type === "elasticsearch") env.push(`ELASTICSEARCH_URL=${dsn.raw}`);
       else env.push(dsn.raw);
     }
     return {

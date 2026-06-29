@@ -27,6 +27,11 @@ const typeDefaults: Record<string, { command: string; args: string[]; env: strin
     args: ["--from", "mcp-server-postgres@latest", "mcp-server-postgres"],
     env: ["DATABASE_URL=postgres://user:pass@host:5432/db"],
   },
+  elasticsearch: {
+    command: "./mcp-servers/elasticsearch/elasticsearch-mcp-server",
+    args: [],
+    env: ["ELASTICSEARCH_URL=http://127.0.0.1:9200"],
+  },
   other: {
     command: "",
     args: [],
@@ -35,7 +40,7 @@ const typeDefaults: Record<string, { command: string; args: string[]; env: strin
 };
 
 // 哪些类型显示连接参数字段
-const typesWithCredentials = new Set(["mysql", "redis", "postgres", "etcd"]);
+const typesWithCredentials = new Set(["mysql", "redis", "postgres", "etcd", "elasticsearch"]);
 
 // ---- 连接参数 ----
 type Credentials = {
@@ -82,6 +87,18 @@ function parseCredentials(type: string, env: string[]): Credentials {
     creds.host = env.find((e) => e.startsWith("ETCD_ENDPOINTS="))?.slice("ETCD_ENDPOINTS=".length) || "";
     creds.user = env.find((e) => e.startsWith("ETCD_USERNAME="))?.slice("ETCD_USERNAME=".length) || "";
     creds.password = env.find((e) => e.startsWith("ETCD_PASSWORD="))?.slice("ETCD_PASSWORD=".length) || "";
+  } else if (type === "elasticsearch") {
+    const esUrl = env.find((e) => e.startsWith("ELASTICSEARCH_URL="))?.slice("ELASTICSEARCH_URL=".length) || "";
+    const m = esUrl.match(/^(?:https?:\/\/)(?:([^:]+):([^@]+)@)?([^:/]+)(?::(\d+))?/);
+    if (m) {
+      creds.user = m[1] || env.find((e) => e.startsWith("ELASTICSEARCH_USERNAME="))?.slice("ELASTICSEARCH_USERNAME=".length) || "";
+      creds.password = m[2] || env.find((e) => e.startsWith("ELASTICSEARCH_PASSWORD="))?.slice("ELASTICSEARCH_PASSWORD=".length) || "";
+      creds.host = m[3] || "";
+      creds.port = m[4] || "9200";
+    } else {
+      creds.host = esUrl || "";
+      creds.port = "9200";
+    }
   }
   return creds;
 }
@@ -114,6 +131,16 @@ function credentialsToEnv(type: string, creds: Credentials): string[] {
     if (creds.host) env.push(`ETCD_ENDPOINTS=${creds.host}`);
     if (creds.user) env.push(`ETCD_USERNAME=${creds.user}`);
     if (creds.password) env.push(`ETCD_PASSWORD=${creds.password}`);
+    return env;
+  }
+  if (type === "elasticsearch") {
+    const env: string[] = [];
+    if (creds.host) {
+      const port = creds.port !== "9200" ? `:${creds.port}` : ":9200";
+      env.push(`ELASTICSEARCH_URL=http://${creds.host}${port}`);
+    }
+    if (creds.user) env.push(`ELASTICSEARCH_USERNAME=${creds.user}`);
+    if (creds.password) env.push(`ELASTICSEARCH_PASSWORD=${creds.password}`);
     return env;
   }
   return [];
@@ -318,6 +345,7 @@ export function MCPFormModal({
         <option value="redis">Redis</option>
         <option value="postgres">PostgreSQL</option>
         <option value="etcd">Etcd</option>
+        <option value="elasticsearch">Elasticsearch</option>
         <option value="other">其他</option>
       </select>
 

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Elasticsearch MCP Server wrapper
+# Uses the community elasticsearch-mcp-server (Python, Apache 2.0).
+# uvx downloads and caches on first run; subsequent runs are fast.
+# https://pypi.org/project/elasticsearch-mcp-server/
+exec uvx --from elasticsearch-mcp-server elasticsearch-mcp-server "$@"
