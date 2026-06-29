@@ -216,7 +216,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/connections/status", authed(s.handleConnectionStatus))
 
 	// ---- Nodelets ----
-	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodelets))
+	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodeletList))
+	mux.HandleFunc("GET /api/nodelets/status", authed(s.handleNodelets))
 	mux.HandleFunc("POST /api/nodelets", authed(s.handleNodeletAdd))
 	mux.HandleFunc("PUT /api/nodelets/{id}", authed(s.handleNodeletUpdate))
 	mux.HandleFunc("DELETE /api/nodelets/{id}", authed(s.handleNodeletRemove))
@@ -975,6 +976,15 @@ func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok", "output": output})
+}
+
+// handleNodeletList handles GET /api/nodelets — 返回纯配置列表（无 Docker 调用，即时响应）。
+func (s *Server) handleNodeletList(w http.ResponseWriter, r *http.Request) {
+	if s.nodeletManager == nil {
+		writeJSON(w, []nodelet.NodeletConfig{})
+		return
+	}
+	writeJSON(w, s.nodeletManager.List())
 }
 
 // handleNodeletAdd handles POST /api/nodelets.

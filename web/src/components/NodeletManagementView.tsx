@@ -1,13 +1,18 @@
 import React from "react";
-import { Plus, Trash2, Edit3, Server } from "lucide-react";
+import { Plus, Trash2, Edit3, Server, Loader2 } from "lucide-react";
 import type { NodeletConfig } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { NodeletFormModal } from "./NodeletFormModal";
 import { Button } from "./ui/Button";
 
+type NodeletRow = NodeletConfig & {
+  status?: "ok" | "failed" | "checking";
+  statusError?: string;
+};
+
 // ---- NodeletManagementView ----
 export function NodeletManagementView() {
-  const [nodelets, setNodelets] = React.useState<NodeletConfig[]>([]);
+  const [nodelets, setNodelets] = React.useState<NodeletRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -18,11 +23,43 @@ export function NodeletManagementView() {
     setLoading(true);
     setError("");
     try {
-      setNodelets(await apiRequest<NodeletConfig[]>("/api/nodelets"));
+      const configs = await apiRequest<NodeletConfig[]>("/api/nodelets");
+      setNodelets(configs.map((c) => ({ ...c })));
+      // 异步检测每个 nodelet 连通性
+      for (const c of configs) {
+        checkStatus(c);
+      }
     } catch (err) {
       setError(getErrorMessage(err, "读取服务器列表失败"));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function checkStatus(cfg: NodeletConfig) {
+    setNodelets((prev) =>
+      prev.map((n) => (n.id === cfg.id ? { ...n, status: "checking" } : n)),
+    );
+    try {
+      const resp = await apiRequest<{ status: string; error?: string }>(
+        "/api/nodelets/test",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: cfg.id, name: cfg.name, address: cfg.address }),
+        },
+      );
+      setNodelets((prev) =>
+        prev.map((n) =>
+          n.id === cfg.id
+            ? { ...n, status: resp.status === "ok" ? "ok" : "failed", statusError: resp.error }
+            : n,
+        ),
+      );
+    } catch {
+      setNodelets((prev) =>
+        prev.map((n) => (n.id === cfg.id ? { ...n, status: "failed", statusError: "unreachable" } : n)),
+      );
     }
   }
 
@@ -35,7 +72,7 @@ export function NodeletManagementView() {
     setShowForm(true);
   }
 
-  function openEdit(item: NodeletConfig) {
+  function openEdit(item: NodeletRow) {
     setEditItem(item);
     setShowForm(true);
   }
@@ -96,6 +133,7 @@ export function NodeletManagementView() {
               <tr>
                 <th>Name</th>
                 <th>Address</th>
+                <th style={{ width: 80 }}>Status</th>
                 <th style={{ width: 120 }}>Actions</th>
               </tr>
             </thead>
@@ -107,6 +145,17 @@ export function NodeletManagementView() {
                   </td>
                   <td style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 12 }}>
                     {n.address}
+                  </td>
+                  <td>
+                    {n.status === "checking" ? (
+                      <Loader2 size={14} className="spinner-sm" style={{ color: "var(--clr-text-muted)" }} />
+                    ) : n.status === "ok" ? (
+                      <span className="status-dot" style={{ backgroundColor: "var(--clr-success)" }} title="reachable" />
+                    ) : n.status === "failed" ? (
+                      <span className="status-dot" style={{ backgroundColor: "var(--clr-error)", cursor: "help" }} title={n.statusError || "unreachable"} />
+                    ) : (
+                      <span className="status-dot" style={{ backgroundColor: "var(--clr-text-muted)" }} title="unknown" />
+                    )}
                   </td>
                   <td>
                     <div style={{ display: "flex", gap: 4 }}>

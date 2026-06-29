@@ -51,7 +51,7 @@ export function ServerTree({
     } else {
       setNodeletsLoading(true);
       try {
-        const data = await apiRequest<NodeletItem[]>("/api/nodelets");
+        const data = await apiRequest<NodeletItem[]>("/api/nodelets/status");
         nodeletsCacheRef.current = data;
         setNodelets(data);
       } catch (err) {
