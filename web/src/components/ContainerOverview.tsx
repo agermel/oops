@@ -1,7 +1,7 @@
 import type { ContainerDetail } from "../types";
 import { serviceTypeIcons, serviceLabel } from "../types";
 import { DSNInfoCard } from "./DSNInfoCard";
-import { StatusPill } from "./StatusPill";
+import { StatusPill, TypePill } from "./StatusPill";
 
 export function ContainerOverview({ detail, onEditDSN }: { detail: ContainerDetail; onEditDSN?: () => void }) {
   const Icon = serviceTypeIcons[detail.serviceType] || serviceTypeIcons.unknown;
@@ -14,7 +14,7 @@ export function ContainerOverview({ detail, onEditDSN }: { detail: ContainerDeta
         <div className="overview-header-content">
           <h2>{detail.container.name}</h2>
           <div className="overview-header-badges">
-            {label && <span className="type-pill">{label}</span>}
+            {label && <TypePill label={label} />}
             <StatusPill status={detail.container.state} labelMap={{ running: "running", dead: "dead", exited: "exited" }} />
           </div>
         </div>

@@ -17,3 +17,7 @@ export function StatusDot({ alive }: { alive: boolean }) {
     <span className={`status-dot ${alive ? "alive" : "dead"}`} />
   );
 }
+
+export function TypePill({ label }: { label: string }) {
+  return <span className="type-pill">{label}</span>;
+}

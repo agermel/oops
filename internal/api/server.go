@@ -188,6 +188,7 @@ func (s *Server) Routes() *http.ServeMux {
 }
 
 // Mount 把中心端 API 路由挂载到指定 mux。
+// Go 1.22+ 原生支持方法和路径参数匹配，不再需要手工 TrimPrefix+Split 解析。
 func (s *Server) Mount(mux *http.ServeMux) {
 	// 所有 API 路由统一经过: securityHeaders → rateLimit → authMiddleware → requireAuth → limitBody → handler
 	authed := func(f http.HandlerFunc) http.HandlerFunc {
@@ -200,164 +201,149 @@ func (s *Server) Mount(mux *http.ServeMux) {
 		return securityHeaders(rateLimit(s.authMiddleware(f)))
 	}
 
-	mux.HandleFunc("/api/token", publicWrap(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			s.handleCreateToken(w, r)
-		case http.MethodDelete:
-			s.handleDeleteToken(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-	mux.HandleFunc("/api/auth/me", authed(s.handleAuthMe))
-	mux.HandleFunc("/api/connections/status", authed(s.handleConnectionStatus))
-	mux.HandleFunc("/api/nodelets", authed(s.handleNodelets))
-	mux.HandleFunc("/api/nodelets/", authed(s.handleNodeletResource))
-	mux.HandleFunc("/api/chat", authedChat(s.handleChat))
-	mux.HandleFunc("/api/sessions", authed(s.handleSessions))
-	mux.HandleFunc("/api/sessions/", authed(s.handleSessionByID))
-	mux.HandleFunc("/api/mcp/connections", authed(s.handleMCPConnections))
-	mux.HandleFunc("/api/mcp/connections/", authed(s.handleMCPConnection))
-	mux.HandleFunc("/api/tools", authed(s.handleTools))
-	mux.HandleFunc("/api/tools/", authed(s.handleToolByID))
+	// ---- Auth ----
+	mux.HandleFunc("POST /api/token", publicWrap(s.handleCreateToken))
+	mux.HandleFunc("DELETE /api/token", publicWrap(s.handleDeleteToken))
+	mux.HandleFunc("GET /api/auth/me", authed(s.handleAuthMe))
 
-	// 实时控制台 SSE。
-	mux.HandleFunc("/api/console/stream", securityHeaders(s.authMiddleware(console.Default().SSEHandler)))
+	// ---- Connections ----
+	mux.HandleFunc("GET /api/connections/status", authed(s.handleConnectionStatus))
 
-	// 项目与容器详情 API。
-	mux.HandleFunc("/api/projects", authed(s.handleProjects))
-	mux.HandleFunc("/api/projects/", authed(s.handleProjectsRouter))
+	// ---- Nodelets ----
+	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodelets))
+	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers", authed(s.handleNodeletContainers))
+	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs", authed(s.handleNodeletLogs))
+	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs/stream", authed(s.handleNodeletLogsStreamRoute))
+
+	// ---- Chat & Sessions ----
+	mux.HandleFunc("POST /api/chat", authedChat(s.handleChat))
+	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
+	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
+	mux.HandleFunc("DELETE /api/sessions/{id}", authed(s.handleSessionDelete))
+
+	// ---- MCP Connections ----
+	mux.HandleFunc("GET /api/mcp/connections", authed(s.handleMCPList))
+	mux.HandleFunc("POST /api/mcp/connections", authed(s.handleMCPAdd))
+	mux.HandleFunc("PUT /api/mcp/connections/{id}", authed(s.handleMCPUpdate))
+	mux.HandleFunc("DELETE /api/mcp/connections/{id}", authed(s.handleMCPRemove))
+	mux.HandleFunc("POST /api/mcp/connections/{id}/test", authed(s.handleMCPTest))
+	mux.HandleFunc("POST /api/mcp/connections/{id}/tools/{toolName}/test", authed(s.handleMCPToolTestRoute))
+	mux.HandleFunc("POST /api/mcp/connections/test", authed(s.handleMCPTest))
+
+	// ---- Tools ----
+	mux.HandleFunc("GET /api/tools", authed(s.handleTools))
+	mux.HandleFunc("PUT /api/tools/{name}", authed(s.handleToolToggle))
+
+	// ---- Console SSE ----
+	mux.HandleFunc("GET /api/console/stream", securityHeaders(s.authMiddleware(console.Default().SSEHandler)))
+
+	// ---- Projects ----
+	mux.HandleFunc("GET /api/projects", authed(s.handleProjectList))
+	mux.HandleFunc("POST /api/projects", authed(s.handleProjectCreate))
+	mux.HandleFunc("GET /api/projects/{pid}", authed(s.handleProjectGet))
+	mux.HandleFunc("PUT /api/projects/{pid}", authed(s.handleProjectUpdate))
+	mux.HandleFunc("DELETE /api/projects/{pid}", authed(s.handleProjectDelete))
+
+	// ---- Project Chat ----
+	mux.HandleFunc("POST /api/projects/{pid}/chat", authedChat(s.handleProjectChat))
+
+	// ---- Project Sessions ----
+	mux.HandleFunc("GET /api/projects/{pid}/sessions", authed(s.handleProjectSessions))
+	mux.HandleFunc("GET /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionGet))
+	mux.HandleFunc("DELETE /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionDelete))
+
+	// ---- Project Servers ----
+	mux.HandleFunc("GET /api/projects/{pid}/servers", authed(s.handleProjectServersList))
+	mux.HandleFunc("POST /api/projects/{pid}/servers", authed(s.handleProjectServersAdd))
+
+	// ---- Project Containers ----
+	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers", authed(s.handleProjectContainers))
+	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}", authed(s.handleContainerDetail))
+	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/logs/stream", authed(s.handleProjectLogsStream))
+	mux.HandleFunc("POST /api/projects/{pid}/servers/{sid}/containers/{cid}/check", authed(s.handleProjectHealthCheck))
+	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp", authed(s.handleContainerMCPGet))
+	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp", authed(s.handleContainerMCPDelete))
+	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNGet))
+	mux.HandleFunc("PUT /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNPut))
+	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNDelete))
 }
 
-// handleSessions 处理 GET /api/sessions — 列出全局或项目会话。
+// handleSessions handles GET /api/sessions — lists global or project sessions.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// 可通过查询参数 ?project_id=xxx 过滤项目会话。
 	projectID := r.URL.Query().Get("project_id")
 	writeJSON(w, s.sessionStore.List(projectID))
 }
 
-// handleSessionByID 处理 GET/DELETE /api/sessions/:id。
-func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	if id == "" || strings.Contains(id, "/") {
-		http.NotFound(w, r)
+// handleSessionGet handles GET /api/sessions/{id}.
+func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, ok := s.sessionStore.Get(id)
+	if !ok {
+		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-
-	switch r.Method {
-	case http.MethodGet:
-		sess, ok := s.sessionStore.Get(id)
-		if !ok {
-			writeJSONError(w, "session not found", http.StatusNotFound)
-			return
-		}
-		if r.URL.Query().Get("include_messages") == "true" {
-			writeJSON(w, sess.ToDetail())
-		} else {
-			writeJSON(w, llm.SessionInfo{
-				ID:           sess.ID,
-				ProjectID:    sess.ProjectID,
-				MessageCount: len(sess.Messages),
-				CreatedAt:    sess.CreatedAt.UnixMilli(),
-				UpdatedAt:    sess.UpdatedAt.UnixMilli(),
-			})
-		}
-
-	case http.MethodDelete:
-		if !s.sessionStore.Delete(id) {
-			writeJSONError(w, "session not found", http.StatusNotFound)
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	default:
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	if r.URL.Query().Get("include_messages") == "true" {
+		writeJSON(w, sess.ToDetail())
+	} else {
+		writeJSON(w, llm.SessionInfo{
+			ID:           sess.ID,
+			ProjectID:    sess.ProjectID,
+			MessageCount: len(sess.Messages),
+			CreatedAt:    sess.CreatedAt.UnixMilli(),
+			UpdatedAt:    sess.UpdatedAt.UnixMilli(),
+		})
 	}
 }
 
-// handleProjectSessions 处理 GET /api/projects/:pid/sessions — 列出项目会话。
-func (s *Server) handleProjectSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+// handleSessionDelete handles DELETE /api/sessions/{id}.
+func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.sessionStore.Delete(id) {
+		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	pid := extractProjectID(r.URL.Path)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleProjectSessions handles GET /api/projects/{pid}/sessions.
+func (s *Server) handleProjectSessions(w http.ResponseWriter, r *http.Request) {
+	pid := r.PathValue("pid")
 	writeJSON(w, s.sessionStore.List(pid))
 }
 
-// handleProjectSessionByID 处理 GET/DELETE /api/projects/:pid/sessions/:id。
-func (s *Server) handleProjectSessionByID(w http.ResponseWriter, r *http.Request) {
-	pid := extractProjectID(r.URL.Path)
-	id := extractSessionID(r.URL.Path)
-	if id == "" {
-		http.NotFound(w, r)
+// handleProjectSessionGet handles GET /api/projects/{pid}/sessions/{id}.
+func (s *Server) handleProjectSessionGet(w http.ResponseWriter, r *http.Request) {
+	pid := r.PathValue("pid")
+	id := r.PathValue("id")
+	sess, ok := s.sessionStore.Get(id)
+	if !ok || sess.ProjectID != pid {
+		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-
-	switch r.Method {
-	case http.MethodGet:
-		sess, ok := s.sessionStore.Get(id)
-		if !ok || sess.ProjectID != pid {
-			writeJSONError(w, "session not found", http.StatusNotFound)
-			return
-		}
-		if r.URL.Query().Get("include_messages") == "true" {
-			writeJSON(w, sess.ToDetail())
-		} else {
-			writeJSON(w, llm.SessionInfo{
-				ID:           sess.ID,
-				ProjectID:    sess.ProjectID,
-				MessageCount: len(sess.Messages),
-				CreatedAt:    sess.CreatedAt.UnixMilli(),
-				UpdatedAt:    sess.UpdatedAt.UnixMilli(),
-			})
-		}
-
-	case http.MethodDelete:
-		sess, ok := s.sessionStore.Get(id)
-		if !ok || sess.ProjectID != pid {
-			writeJSONError(w, "session not found", http.StatusNotFound)
-			return
-		}
-		s.sessionStore.Delete(id)
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	default:
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	if r.URL.Query().Get("include_messages") == "true" {
+		writeJSON(w, sess.ToDetail())
+	} else {
+		writeJSON(w, llm.SessionInfo{
+			ID:           sess.ID,
+			ProjectID:    sess.ProjectID,
+			MessageCount: len(sess.Messages),
+			CreatedAt:    sess.CreatedAt.UnixMilli(),
+			UpdatedAt:    sess.UpdatedAt.UnixMilli(),
+		})
 	}
 }
 
-// extractProjectID 从 URL 路径提取项目 ID。
-// 路径格式: /api/projects/:pid/...
-func extractProjectID(rawPath string) string {
-	rest := strings.TrimPrefix(rawPath, "/api/projects/")
-	parts := strings.SplitN(rest, "/", 2)
-	if len(parts) > 0 {
-		return parts[0]
+// handleProjectSessionDelete handles DELETE /api/projects/{pid}/sessions/{id}.
+func (s *Server) handleProjectSessionDelete(w http.ResponseWriter, r *http.Request) {
+	pid := r.PathValue("pid")
+	id := r.PathValue("id")
+	sess, ok := s.sessionStore.Get(id)
+	if !ok || sess.ProjectID != pid {
+		writeJSONError(w, "session not found", http.StatusNotFound)
+		return
 	}
-	return ""
-}
-
-// extractSessionID 从 URL 路径提取 session ID。
-// 路径格式: /api/projects/:pid/sessions/:id 或 /api/sessions/:id
-func extractSessionID(rawPath string) string {
-	// 尝试项目路径
-	rest := strings.TrimPrefix(rawPath, "/api/projects/")
-	parts := strings.Split(rest, "/")
-	if len(parts) >= 3 && parts[1] == "sessions" {
-		return parts[2]
-	}
-	// 全局路径
-	rest = strings.TrimPrefix(rawPath, "/api/sessions/")
-	if rest != rawPath && rest != "" && !strings.Contains(rest, "/") {
-		return rest
-	}
-	return ""
+	s.sessionStore.Delete(id)
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // handleConnectionStatus 执行所有连接检查并返回 JSON。
@@ -403,11 +389,6 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 
 // handleNodelets 返回中心端配置的 Nodelet 机器列表。
 func (s *Server) handleNodelets(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/api/nodelets" {
-		http.NotFound(w, r)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -444,52 +425,53 @@ func (s *Server) handleNodelets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, results)
 }
 
-// handleNodeletResource 返回指定 Nodelet 的容器列表或容器日志。
-func (s *Server) handleNodeletResource(w http.ResponseWriter, r *http.Request) {
-	nodeletID, containerID, action, ok := splitNodeletResourcePath(r.URL.Path)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
+// handleNodeletContainers handles GET /api/nodelets/{nodeletID}/containers.
+func (s *Server) handleNodeletContainers(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("nodeletID")
 	item, ok := s.findNodelet(nodeletID)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-
-	if action == "containers" {
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-
-		containers, err := s.nodeletClient.Containers(ctx, item.Address, item.Token)
-		if err != nil {
-			sanitizedError(w, "nodelet containers", err, http.StatusServiceUnavailable)
-			return
-		}
-		writeJSON(w, containers)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	containers, err := s.nodeletClient.Containers(ctx, item.Address, item.Token)
+	if err != nil {
+		sanitizedError(w, "nodelet containers", err, http.StatusServiceUnavailable)
 		return
 	}
+	writeJSON(w, containers)
+}
 
-	if action == "logs" {
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-
-		logs, err := s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
-		if err != nil {
-			sanitizedError(w, "nodelet logs", err, http.StatusServiceUnavailable)
-			return
-		}
-		writeJSON(w, logs)
+// handleNodeletLogs handles GET /api/nodelets/{nodeletID}/containers/{containerID}/logs.
+func (s *Server) handleNodeletLogs(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("nodeletID")
+	containerID := r.PathValue("containerID")
+	item, ok := s.findNodelet(nodeletID)
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-
-	if action == "logs/stream" {
-		s.handleNodeletLogsStream(w, r, item, containerID)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	logs, err := s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
+	if err != nil {
+		sanitizedError(w, "nodelet logs", err, http.StatusServiceUnavailable)
 		return
 	}
+	writeJSON(w, logs)
+}
 
-	http.NotFound(w, r)
+// handleNodeletLogsStreamRoute handles GET /api/nodelets/{nodeletID}/containers/{containerID}/logs/stream.
+func (s *Server) handleNodeletLogsStreamRoute(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("nodeletID")
+	containerID := r.PathValue("containerID")
+	item, ok := s.findNodelet(nodeletID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.handleNodeletLogsStream(w, r, item, containerID)
 }
 
 // handleNodeletLogsStream 透传远端 Nodelet 的容器日志 SSE。
@@ -542,22 +524,6 @@ func (s *Server) findNodelet(id string) (config.NodeletConfig, bool) {
 	return config.NodeletConfig{}, false
 }
 
-// splitNodeletResourcePath 拆分中心端 Nodelet 子资源路径。
-func splitNodeletResourcePath(rawPath string) (string, string, string, bool) {
-	rest := strings.TrimPrefix(rawPath, "/api/nodelets/")
-	parts := strings.Split(rest, "/")
-	if len(parts) == 2 && parts[0] != "" && parts[1] == "containers" {
-		return parts[0], "", "containers", true
-	}
-	if len(parts) == 4 && parts[0] != "" && parts[1] == "containers" && parts[2] != "" && parts[3] == "logs" {
-		return parts[0], parts[2], "logs", true
-	}
-	if len(parts) == 5 && parts[0] != "" && parts[1] == "containers" && parts[2] != "" && parts[3] == "logs" && parts[4] == "stream" {
-		return parts[0], parts[2], "logs/stream", true
-	}
-	return "", "", "", false
-}
-
 // chatRequest 是 POST /api/chat 的请求体。
 type chatRequest struct {
 	SessionID string `json:"session_id"`
@@ -571,10 +537,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.handleChatWithProject(w, r, "")
 }
 
-// handleProjectChat 处理项目级对话请求。
+// handleProjectChat handles POST /api/projects/{pid}/chat.
 func (s *Server) handleProjectChat(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
-	pid := strings.Split(path, "/")[0]
+	pid := r.PathValue("pid")
 	s.handleChatWithProject(w, r, pid)
 }
 
@@ -804,13 +769,8 @@ type toolsResponse struct {
 	MCP    map[string][]toolItem `json:"mcp"`
 }
 
-// handleTools 处理 GET /api/tools — 返回所有工具（内置 + MCP）及其启用状态。
+// handleTools handles GET /api/tools — returns all tools (native + MCP) and their enabled state.
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	resp := toolsResponse{
 		Native: []toolItem{},
 		MCP:    make(map[string][]toolItem),
@@ -868,24 +828,13 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// handleToolByID 处理 PUT /api/tools/{name} — 切换单个工具的启用状态。
-func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/tools/")
-	if name == "" || strings.Contains(name, "/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	if r.Method != http.MethodPut {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// handleToolToggle handles PUT /api/tools/{name}.
+func (s *Server) handleToolToggle(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
 	if s.llmClient == nil {
 		http.Error(w, `{"error":"llm not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
-
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -893,82 +842,8 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-
 	s.llmClient.SetToolEnabled(name, req.Enabled)
 	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-// handleProjectsRouter 根据 URL 路径将请求分发到对应的项目子资源 handler。
-func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
-	parts := strings.Split(path, "/")
-
-	if len(parts) == 0 || parts[0] == "" {
-		// /api/projects/ (trailing slash) → redirect to /api/projects
-		s.handleProjects(w, r)
-		return
-	}
-
-	// /api/projects/:pid
-	if len(parts) == 1 {
-		s.handleProject(w, r)
-		return
-	}
-
-	// /api/projects/:pid/chat
-	if parts[1] == "chat" {
-		s.handleProjectChat(w, r)
-		return
-	}
-
-	// /api/projects/:pid/sessions
-	if parts[1] == "sessions" {
-		if len(parts) == 2 {
-			s.handleProjectSessions(w, r)
-			return
-		}
-		if len(parts) == 3 && parts[2] != "" {
-			s.handleProjectSessionByID(w, r)
-			return
-		}
-		http.NotFound(w, r)
-		return
-	}
-
-	// /api/projects/:pid/servers
-	// /api/projects/:pid/servers/:sid/containers
-	// /api/projects/:pid/servers/:sid/containers/:cid
-	// /api/projects/:pid/servers/:sid/containers/:cid/logs/stream
-	// /api/projects/:pid/servers/:sid/containers/:cid/check
-	if parts[1] == "servers" {
-		if len(parts) == 2 {
-			s.handleProjectServers(w, r)
-			return
-		}
-		if len(parts) >= 4 && parts[3] == "containers" {
-			// 子资源: logs/stream, check, mcp
-			if len(parts) >= 7 && parts[5] == "logs" && parts[6] == "stream" {
-				s.handleProjectLogsStream(w, r)
-				return
-			}
-			if len(parts) >= 6 && parts[5] == "check" {
-				s.handleProjectHealthCheck(w, r)
-				return
-			}
-			if len(parts) >= 6 && parts[5] == "mcp" {
-				s.handleContainerMCPConnection(w, r)
-				return
-			}
-			if len(parts) >= 6 && parts[5] == "dsn" {
-				s.handleContainerDSN(w, r)
-				return
-			}
-			s.handleProjectContainers(w, r)
-			return
-		}
-	}
-
-	http.NotFound(w, r)
 }
 
 // mcpErrorStatus maps MCP manager errors to appropriate HTTP status codes.
@@ -987,108 +862,72 @@ func mcpErrorStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-// handleMCPConnections handles GET (list) and POST (add) on /api/mcp/connections.
-func (s *Server) handleMCPConnections(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		if s.mcpManager == nil {
-			writeJSON(w, []mcp.ConnectionWithStatus{})
-			return
-		}
-		writeJSON(w, s.mcpManager.List())
-
-	case http.MethodPost:
-		var cfg mcp.ConnectionConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			writeJSONError(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		if s.mcpManager == nil {
-			writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
-			return
-		}
-		if err := s.mcpManager.Add(cfg); err != nil {
-			logutil.Error("api: mcp add", zap.Error(err))
-			writeJSONError(w, err.Error(), mcpErrorStatus(err))
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	default:
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+// handleMCPList handles GET /api/mcp/connections.
+func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request) {
+	if s.mcpManager == nil {
+		writeJSON(w, []mcp.ConnectionWithStatus{})
+		return
 	}
+	writeJSON(w, s.mcpManager.List())
 }
 
-// handleMCPConnection handles PUT (update), DELETE (remove), POST test and tool-test
-// on /api/mcp/connections/{id}, /api/mcp/connections/{id}/test,
-// and /api/mcp/connections/{id}/tools/{name}/test.
-func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/api/mcp/connections/")
-	if rest == "" {
-		http.NotFound(w, r)
+// handleMCPAdd handles POST /api/mcp/connections.
+func (s *Server) handleMCPAdd(w http.ResponseWriter, r *http.Request) {
+	var cfg mcp.ConnectionConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-
-	// Parse: {id} or {id}/test or {id}/tools/{name}/test
-	parts := strings.SplitN(rest, "/", 4)
-	id := parts[0]
-
-	// POST /api/mcp/connections/{id}/tools/{name}/test
-	if r.Method == http.MethodPost && len(parts) >= 4 && parts[1] == "tools" && parts[3] == "test" {
-		s.handleMCPToolTest(w, r, id, parts[2])
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-
-	// POST /api/mcp/connections/{id}/test
-	if r.Method == http.MethodPost && len(parts) >= 2 && parts[1] == "test" {
-		s.handleMCPTest(w, r)
+	if err := s.mcpManager.Add(cfg); err != nil {
+		logutil.Error("api: mcp add", zap.Error(err))
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
 		return
 	}
-
-	// For PUT/DELETE, the id must be a simple name (no slashes).
-	if len(parts) > 1 {
-		http.NotFound(w, r)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodPut:
-		var cfg mcp.ConnectionConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			writeJSONError(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		cfg.ID = id
-		if s.mcpManager == nil {
-			writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
-			return
-		}
-		if err := s.mcpManager.Update(cfg); err != nil {
-			logutil.Error("api: mcp update", zap.Error(err))
-			writeJSONError(w, err.Error(), mcpErrorStatus(err))
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	case http.MethodDelete:
-		if s.mcpManager == nil {
-			writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
-			return
-		}
-		if err := s.mcpManager.Remove(id); err != nil {
-			logutil.Error("api: mcp remove", zap.Error(err))
-			writeJSONError(w, err.Error(), mcpErrorStatus(err))
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	default:
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// handleMCPTest tests a provisional MCP connection without saving.
+// handleMCPUpdate handles PUT /api/mcp/connections/{id}.
+func (s *Server) handleMCPUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var cfg mcp.ConnectionConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	cfg.ID = id
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.mcpManager.Update(cfg); err != nil {
+		logutil.Error("api: mcp update", zap.Error(err))
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleMCPRemove handles DELETE /api/mcp/connections/{id}.
+func (s *Server) handleMCPRemove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.mcpManager.Remove(id); err != nil {
+		logutil.Error("api: mcp remove", zap.Error(err))
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleMCPTest handles POST /api/mcp/connections/{id}/test and POST /api/mcp/connections/test.
 func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 	var cfg mcp.ConnectionConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -1107,9 +946,10 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// handleMCPToolTest tests a single tool on a running MCP connection.
-// POST /api/mcp/connections/{connID}/tools/{toolName}/test
-func (s *Server) handleMCPToolTest(w http.ResponseWriter, r *http.Request, connID, toolName string) {
+// handleMCPToolTestRoute handles POST /api/mcp/connections/{id}/tools/{toolName}/test.
+func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) {
+	connID := r.PathValue("id")
+	toolName := r.PathValue("toolName")
 	if s.mcpManager == nil {
 		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 		return

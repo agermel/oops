@@ -60,14 +60,10 @@ export function App() {
     route.view === "project-tools" ? "tools" :
     route.view === "project-overview" ? "overview" :
     "overview";
-  const urlServerId = route.view === "project-overview" ? route.serverId : undefined;
-  const urlContainerId = route.view === "project-overview" ? route.containerId : undefined;
-
-  const selectedNodeletID = urlServerId || "";
-  const selectedContainerID = urlContainerId || "";
+  const [selectedNodeletID, setSelectedNodeletID] = React.useState("");
+  const [selectedContainerID, setSelectedContainerID] = React.useState("");
 
   const lastLoadedProjectRef = React.useRef("");
-  const prevUrlServerIdRef = React.useRef<string | undefined>(undefined);
 
   // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
@@ -263,8 +259,15 @@ export function App() {
     try {
       const data = await apiRequest<ContainerWithType[]>(serverPaths(projectID, nodeletID).containers);
       setContainers((prev) => ({ ...prev, [nodeletID]: data }));
+      setServers((prev) => prev.map((sw) => (
+        sw.nodelet.id === nodeletID ? { ...sw, error: "" } : sw
+      )));
     } catch (err) {
-      setServerError(getErrorMessage(err, "读取容器列表失败"));
+      const message = getErrorMessage(err, "读取容器列表失败");
+      setContainers((prev) => ({ ...prev, [nodeletID]: [] }));
+      setServers((prev) => prev.map((sw) => (
+        sw.nodelet.id === nodeletID ? { ...sw, error: message } : sw
+      )));
     } finally {
       setContainersLoading(false);
     }
@@ -467,29 +470,31 @@ export function App() {
 
   function selectServerFromUI(nodeletID: string) {
     if (!selectedProjectID) return;
-    replace({ view: "project-overview", projectId: selectedProjectID, serverId: nodeletID });
+    setSelectedNodeletID(nodeletID);
+    setSelectedContainerID("");
   }
 
   function selectContainerFromUI(nodeletID: string, containerID: string) {
     if (!selectedProjectID) return;
-    replace({ view: "project-overview", projectId: selectedProjectID, serverId: nodeletID, containerId: containerID });
+    setSelectedNodeletID(nodeletID);
+    setSelectedContainerID(containerID);
   }
 
-  async function toggleServer(nodeletID: string) {
+  function toggleServer(nodeletID: string) {
     if (expandedServers.has(nodeletID)) {
-      // 折叠：URL server 只动 URL，让 Effect B 统一同步 expandedServers
-      //        非 URL server 直接移除（无 URL 竞争）
-      if (urlServerId === nodeletID) {
-        replace({ view: "project-overview", projectId: selectedProjectID });
-      } else {
-        setExpandedServers((prev) => {
-          const next = new Set(prev);
-          next.delete(nodeletID);
-          return next;
-        });
+      // 折叠：直接从 expandedServers 移除
+      setExpandedServers((prev) => {
+        const next = new Set(prev);
+        next.delete(nodeletID);
+        return next;
+      });
+      // 如果折叠的是当前选中的 server，清除选中状态
+      if (selectedNodeletID === nodeletID) {
+        setSelectedNodeletID("");
+        setSelectedContainerID("");
       }
     } else {
-      // 展开：先加到 expandedServers，再设 URL；Effect B 看到已存在就 no-op
+      // 展开并选中
       setExpandedServers((prev) => new Set(prev).add(nodeletID));
       if (!containers[nodeletID]) {
         loadContainers(selectedProjectID, nodeletID);
@@ -498,13 +503,15 @@ export function App() {
     }
   }
 
-  // ---------------- Effect 级联：URL → 数据加载 ----------------
+  // ---------------- Effect 级联：状态 → 数据加载 ----------------
 
   // Effect A: 项目进入/离开
   React.useEffect(() => {
     if (!authenticated) return;
     if (selectedProjectID && selectedProjectID !== lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = selectedProjectID;
+      setSelectedNodeletID("");
+      setSelectedContainerID("");
       setServers([]);
       setContainers({});
       setExpandedServers(new Set());
@@ -515,6 +522,8 @@ export function App() {
     }
     if (!selectedProjectID && lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = "";
+      setSelectedNodeletID("");
+      setSelectedContainerID("");
       setServers([]);
       setContainers({});
       setExpandedServers(new Set());
@@ -524,90 +533,34 @@ export function App() {
     }
   }, [authenticated, selectedProjectID]);
 
-  // Effect B: URL ↔ expandedServers 双向同步
-  //   URL 有 server → 展开；URL 清除 → 折叠（由 toggleServer 通过 replace 触发）
+  // Effect C: 选中 container → 加载详情+日志
   React.useEffect(() => {
-    const prevUrlServerId = prevUrlServerIdRef.current;
-    prevUrlServerIdRef.current = urlServerId;
+    if (!authenticated || !selectedNodeletID || !selectedContainerID) return;
+    if (containerDetail && containerDetail.container.id === selectedContainerID) return;
+    selectContainer(selectedProjectID, selectedNodeletID, selectedContainerID);
+  }, [authenticated, selectedNodeletID, selectedContainerID, selectedProjectID]);
 
-    if (!authenticated || servers.length === 0) return;
-
-    // URL 中的 server 被清除了 → 折叠该 server
-    if (!urlServerId) {
-      if (prevUrlServerId) {
-        setExpandedServers((prev) => {
-          const next = new Set(prev);
-          next.delete(prevUrlServerId);
-          return next;
-        });
-      }
-      return;
-    }
-
-    // URL 中有 server → 展开并加载容器
-    const server = servers.find((s) => s.nodelet.id === urlServerId);
-    if (!server) {
-      replace({ view: "project-overview", projectId: selectedProjectID });
-      return;
-    }
-
-    setExpandedServers((prev) => {
-      if (prev.has(urlServerId)) return prev;
-      return new Set(prev).add(urlServerId);
-    });
-
-    if (!containers[urlServerId]) {
-      loadContainers(selectedProjectID, urlServerId);
-    }
-  }, [authenticated, urlServerId, servers, selectedProjectID]);
-
-  // Effect C: URL 中有 container 时，选中并加载详情+日志
+  // Effect D: 选中了 server 但没有 container → 自动选第一个容器
   React.useEffect(() => {
-    if (!authenticated || !urlContainerId || !urlServerId) return;
-    if (containerDetail && containerDetail.container.id === urlContainerId) return;
+    if (!authenticated || !selectedNodeletID || selectedContainerID) return;
 
-    const serverContainers = containers[urlServerId];
-    if (!serverContainers) return;
-
-    const container = serverContainers.find((c) => c.id === urlContainerId);
-    if (!container) {
-      replace({ view: "project-overview", projectId: selectedProjectID, serverId: urlServerId });
-      return;
-    }
-
-    selectContainer(selectedProjectID, urlServerId, urlContainerId);
-  }, [authenticated, urlContainerId, urlServerId, containers, selectedProjectID]);
-
-  // Effect D: 指定了 server 但没有 container → 自动选第一个容器
-  React.useEffect(() => {
-    if (!authenticated || !urlServerId || urlContainerId) return;
-    if (selectedContainerID) return;
-
-    const serverContainers = containers[urlServerId];
+    const serverContainers = containers[selectedNodeletID];
     if (!serverContainers || serverContainers.length === 0) return;
 
-    const first = serverContainers[0];
-    replace({
-      view: "project-overview",
-      projectId: selectedProjectID,
-      serverId: urlServerId,
-      containerId: first.id,
-    });
-  }, [authenticated, urlServerId, urlContainerId, containers, selectedProjectID]);
+    setSelectedContainerID(serverContainers[0].id);
+  }, [authenticated, selectedNodeletID, selectedContainerID, containers, selectedProjectID]);
 
-  // Effect E: 进入项目概览且无 server → 自动展开首台服务器
+  // Effect E: 进入项目概览且无展开的 server → 自动展开首台服务器并选中
   React.useEffect(() => {
     if (!authenticated || route.view !== "project-overview") return;
-    if (urlServerId) return;
     if (servers.length === 0 || serversLoading) return;
+    if (expandedServers.size > 0) return;
 
     const first = servers[0];
-    replace({
-      view: "project-overview",
-      projectId: selectedProjectID,
-      serverId: first.nodelet.id,
-    });
-  }, [authenticated, route.view, urlServerId, servers, serversLoading, selectedProjectID]);
+    setExpandedServers(new Set([first.nodelet.id]));
+    setSelectedNodeletID(first.nodelet.id);
+    setSelectedContainerID("");
+  }, [authenticated, route.view, servers, serversLoading, expandedServers.size, selectedProjectID]);
 
   // ---------------- 基础 Effects ----------------
 
@@ -730,8 +683,8 @@ export function App() {
             }}
             logsPanelRef={logsPanel}
             onMCPChanged={() => {
-              if (selectedProjectID && urlServerId && urlContainerId) {
-                selectContainer(selectedProjectID, urlServerId, urlContainerId);
+              if (selectedProjectID && selectedNodeletID && selectedContainerID) {
+                selectContainer(selectedProjectID, selectedNodeletID, selectedContainerID);
               }
             }}
           />

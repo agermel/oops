@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"oops/internal/docker"
@@ -139,14 +138,10 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 	return result, nil
 }
 
-// handleContainerDetail 处理容器详情 API 请求。
-// GET /api/projects/:pid/servers/:sid/containers/:cid
+// handleContainerDetail handles GET /api/projects/{pid}/servers/{sid}/containers/{cid}.
 func (s *Server) handleContainerDetail(w http.ResponseWriter, r *http.Request) {
-	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
-	if !ok {
-		writeJSONError(w, "not found", http.StatusNotFound)
-		return
-	}
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
@@ -160,13 +155,10 @@ func (s *Server) handleContainerDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, detail)
 }
 
-// handleProjectLogsStream 处理项目级容器日志 SSE 流。
+// handleProjectLogsStream handles GET /api/projects/{pid}/servers/{sid}/containers/{cid}/logs/stream.
 func (s *Server) handleProjectLogsStream(w http.ResponseWriter, r *http.Request) {
-	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
-	if !ok {
-		writeJSONError(w, "not found", http.StatusNotFound)
-		return
-	}
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
 
 	item, ok := s.findNodelet(nodeletID)
 	if !ok {
@@ -195,18 +187,10 @@ func (s *Server) handleProjectLogsStream(w http.ResponseWriter, r *http.Request)
 	copyAndFlush(w, flusher, stream)
 }
 
-// handleProjectHealthCheck 处理容器健康检查 API 请求。
+// handleProjectHealthCheck handles POST /api/projects/{pid}/servers/{sid}/containers/{cid}/check.
 func (s *Server) handleProjectHealthCheck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-
-	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
-	if !ok {
-		writeJSONError(w, "not found", http.StatusNotFound)
-		return
-	}
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
@@ -260,52 +244,36 @@ func tcpHealthCheck(ctx context.Context, host string, port int) healthResult {
 	}
 }
 
-// splitContainerDetailPath 从路径中提取 nodeletID 和 containerID。
-// 路径格式: /api/projects/:pid/servers/:sid/containers/:cid
-func splitContainerDetailPath(rawPath string) (string, string, string, bool) {
-	rest := strings.TrimPrefix(rawPath, "/api/projects/")
-	parts := strings.Split(rest, "/")
-
-	if len(parts) >= 5 && parts[1] == "servers" && parts[3] == "containers" {
-		return parts[0], parts[2], parts[4], true
-	}
-	return "", "", "", false
-}
-
-// handleContainerMCPConnection 处理容器绑定的 MCP 连接。
-// GET/DELETE /api/projects/:pid/servers/:sid/containers/:cid/mcp
-func (s *Server) handleContainerMCPConnection(w http.ResponseWriter, r *http.Request) {
-	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
-	if !ok {
-		writeJSONError(w, "not found", http.StatusNotFound)
-		return
-	}
-
+// handleContainerMCPGet handles GET /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp.
+func (s *Server) handleContainerMCPGet(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
 	if s.mcpManager == nil {
 		writeJSON(w, nil)
 		return
 	}
+	bound := s.mcpManager.FindByContainer(nodeletID, containerID)
+	writeJSON(w, bound)
+}
 
-	switch r.Method {
-	case http.MethodGet:
-		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
-		writeJSON(w, bound)
-
-	case http.MethodDelete:
-		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
-		if bound == nil {
-			writeJSONError(w, "no connection bound to this container", http.StatusNotFound)
-			return
-		}
-		if err := s.mcpManager.Remove(bound.ID); err != nil {
-			writeJSONError(w, err.Error(), mcpErrorStatus(err))
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	default:
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+// handleContainerMCPDelete handles DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp.
+func (s *Server) handleContainerMCPDelete(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
 	}
+	bound := s.mcpManager.FindByContainer(nodeletID, containerID)
+	if bound == nil {
+		writeJSONError(w, "no connection bound to this container", http.StatusNotFound)
+		return
+	}
+	if err := s.mcpManager.Remove(bound.ID); err != nil {
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // dsnConfigResponse is the JSON shape for the DSN config endpoint.
@@ -357,92 +325,78 @@ func mergeDSN(detected, overrides map[string]string) map[string]string {
 	return merged
 }
 
-// handleContainerDSN handles per-container DSN configuration.
-// GET  /api/projects/:pid/servers/:sid/containers/:cid/dsn
-// PUT  /api/projects/:pid/servers/:sid/containers/:cid/dsn
-// DELETE /api/projects/:pid/servers/:sid/containers/:cid/dsn
-func (s *Server) handleContainerDSN(w http.ResponseWriter, r *http.Request) {
-	_, nodeletID, containerID, ok := splitContainerDetailPath(r.URL.Path)
-	if !ok {
-		writeJSONError(w, "not found", http.StatusNotFound)
-		return
-	}
-
-	// 需要容器详情来获取检测到的 DSN（GET 需要，PUT/DELETE 不需要但用于验证容器存在。
+// handleContainerDSNGet handles GET /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn.
+func (s *Server) handleContainerDSNGet(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
 	item, itemOK := s.findNodelet(nodeletID)
 	if !itemOK {
 		writeJSONError(w, "nodelet not found", http.StatusNotFound)
 		return
 	}
-
-	switch r.Method {
-	case http.MethodGet:
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-
-		detail, err := s.nodeletClient.InspectContainer(ctx, item.Address, item.Token, containerID)
-		if err != nil {
-			writeJSONError(w, "inspect container: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		stype := docker.DetectServiceType(detail.Image)
-		var detected map[string]string
-		if stype.IsDatabase() {
-			dsn := docker.ExtractDSN(stype, detail)
-			detected = dsnInfoToMap(dsn)
-		} else {
-			detected = map[string]string{}
-		}
-
-		var overrides map[string]string
-		if s.dsnStore != nil {
-			overrides = s.dsnStore.Get(nodeletID, containerID)
-		}
-		if overrides == nil {
-			overrides = map[string]string{}
-		}
-
-		writeJSON(w, dsnConfigResponse{
-			Detected:     detected,
-			Overrides:    overrides,
-			Merged:       mergeDSN(detected, overrides),
-			HasOverrides: len(overrides) > 0,
-		})
-
-	case http.MethodPut:
-		if s.dsnStore == nil {
-			writeJSONError(w, "dsn store not available", http.StatusInternalServerError)
-			return
-		}
-
-		var req dsnSaveRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, "invalid json: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		if err := s.dsnStore.Set(nodeletID, containerID, req.Pairs); err != nil {
-			writeJSONError(w, "save dsn: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	case http.MethodDelete:
-		if s.dsnStore == nil {
-			writeJSONError(w, "dsn store not available", http.StatusInternalServerError)
-			return
-		}
-
-		if err := s.dsnStore.Delete(nodeletID, containerID); err != nil {
-			writeJSONError(w, "delete dsn: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-
-	default:
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	detail, err := s.nodeletClient.InspectContainer(ctx, item.Address, item.Token, containerID)
+	if err != nil {
+		writeJSONError(w, "inspect container: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+	stype := docker.DetectServiceType(detail.Image)
+	var detected map[string]string
+	if stype.IsDatabase() {
+		dsn := docker.ExtractDSN(stype, detail)
+		detected = dsnInfoToMap(dsn)
+	} else {
+		detected = map[string]string{}
+	}
+	var overrides map[string]string
+	if s.dsnStore != nil {
+		overrides = s.dsnStore.Get(nodeletID, containerID)
+	}
+	if overrides == nil {
+		overrides = map[string]string{}
+	}
+	writeJSON(w, dsnConfigResponse{
+		Detected:     detected,
+		Overrides:    overrides,
+		Merged:       mergeDSN(detected, overrides),
+		HasOverrides: len(overrides) > 0,
+	})
+}
+
+// handleContainerDSNPut handles PUT /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn.
+func (s *Server) handleContainerDSNPut(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
+	if s.dsnStore == nil {
+		writeJSONError(w, "dsn store not available", http.StatusInternalServerError)
+		return
+	}
+	var req dsnSaveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.dsnStore.Set(nodeletID, containerID, req.Pairs); err != nil {
+		writeJSONError(w, "save dsn: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleContainerDSNDelete handles DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn.
+func (s *Server) handleContainerDSNDelete(w http.ResponseWriter, r *http.Request) {
+	nodeletID := r.PathValue("sid")
+	containerID := r.PathValue("cid")
+	if s.dsnStore == nil {
+		writeJSONError(w, "dsn store not available", http.StatusInternalServerError)
+		return
+	}
+	if err := s.dsnStore.Delete(nodeletID, containerID); err != nil {
+		writeJSONError(w, "delete dsn: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // errNotFound 返回一个标记为 404 的错误。

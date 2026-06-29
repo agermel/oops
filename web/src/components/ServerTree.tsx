@@ -120,10 +120,12 @@ export function ServerTree({
                   <StatusDot alive={sw.host?.available ?? false} />
                 </button>
 
+                {sw.error && <div className="tree-node-error">{sw.error}</div>}
+
                 {isExpanded && (
                   <div className="tree-containers">
                     {containersLoading && conts.length > 0 && <div className="tree-loading">刷新中...</div>}
-                    {!containersLoading && conts.length === 0 ? (
+                    {!containersLoading && conts.length === 0 && !sw.error ? (
                       <div className="tree-empty">暂无容器</div>
                     ) : (
                       conts.map((c) => {

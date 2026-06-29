@@ -4,7 +4,7 @@ import type { MCPConnectionConfig, MCPConnectionStatus } from "../types";
 import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { MCPFormModal } from "./MCPFormModal";
-import { StatusPill } from "./StatusPill";
+import { StatusPill, TypePill } from "./StatusPill";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { MCPToolList } from "./MCPToolList";
 import { Button } from "./ui/Button";
@@ -150,7 +150,7 @@ export function MCPView() {
                     <tr className={isExpanded ? "mcp-row-expanded" : ""}>
                       <td className="mcp-name-cell">{item.name}</td>
                       <td>
-                        <span className="type-pill">{item.type}</span>
+                        <TypePill label={item.type} />
                       </td>
                       <td>
                         <StatusPill status={item.status} labelMap={mcpStatusLabel} />

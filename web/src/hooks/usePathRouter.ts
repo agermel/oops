@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 export type Route =
   | { view: "projects" }
   | { view: "console" }
-  | { view: "project-overview"; projectId: string; serverId?: string; containerId?: string }
+  | { view: "project-overview"; projectId: string }
   | { view: "project-mcp"; projectId: string }
   | { view: "project-chat"; projectId: string }
   | { view: "project-console"; projectId: string }
@@ -59,15 +59,6 @@ export function parsePathRoute(pathname: string): Route {
     return { view: "project-tools", projectId };
   }
 
-  // /projects/:pid/servers/:sid[/containers/:cid]
-  if (segs[2] === "servers" && segs.length >= 4) {
-    const serverId = segs[3];
-    if (segs.length >= 6 && segs[4] === "containers") {
-      return { view: "project-overview", projectId, serverId, containerId: segs[5] };
-    }
-    return { view: "project-overview", projectId, serverId };
-  }
-
   // 其他 /projects/:pid/... 回退到概览
   return { view: "project-overview", projectId };
 }
@@ -78,14 +69,8 @@ export function routeToPath(route: Route): string {
       return "/";
     case "console":
       return "/console";
-    case "project-overview": {
-      let p = `/projects/${encodeURIComponent(route.projectId)}`;
-      if (route.serverId) {
-        p += `/servers/${route.serverId}`;
-        if (route.containerId) p += `/containers/${route.containerId}`;
-      }
-      return p;
-    }
+    case "project-overview":
+      return `/projects/${encodeURIComponent(route.projectId)}`;
     case "project-mcp":
       return `/projects/${encodeURIComponent(route.projectId)}/mcp`;
     case "project-chat":

@@ -44,58 +44,42 @@ func (f *fakeNodeletClient) ContainerLogsStream(_ context.Context, _ string, _ s
 	return io.NopCloser(strings.NewReader("data: {\"message\":\"started\"}\n\n")), nil
 }
 
-// TestSplitNodeletResourcePathContainers 验证中心端容器列表路径解析。
-func TestSplitNodeletResourcePathContainers(t *testing.T) {
-	nodeletID, containerID, action, ok := splitNodeletResourcePath("/api/nodelets/local/containers")
-	if !ok {
-		t.Fatal("ok = false, want true")
+// TestNodeletRoutes 验证 nodelet 子资源路由匹配（Go 1.22+ 模式匹配）。
+func TestNodeletRoutes(t *testing.T) {
+	userStore, tokenService, jwtToken := testAuthSetup(t)
+
+	tests := []struct {
+		path       string
+		wantStatus int
+	}{
+		{"/api/nodelets/local/containers", http.StatusOK},
+		{"/api/nodelets/local/containers/container-1/logs", http.StatusOK},
+		{"/api/nodelets/local/containers/container-1/logs/stream", http.StatusOK},
+		{"/api/nodelets", http.StatusOK},
 	}
-	if nodeletID != "local" {
-		t.Fatalf("nodeletID = %q, want %q", nodeletID, "local")
-	}
-	if containerID != "" {
-		t.Fatalf("containerID = %q, want empty", containerID)
-	}
-	if action != "containers" {
-		t.Fatalf("action = %q, want %q", action, "containers")
+
+	client := &fakeNodeletClient{}
+	server := New(Options{
+		Nodelets:      []config.NodeletConfig{{ID: "local", Address: "http://nodelet", Token: "secret"}},
+		NodeletClient: client,
+		UserStore:     userStore,
+		TokenService:  tokenService,
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			request.AddCookie(&http.Cookie{Name: "jwt", Value: jwtToken})
+			response := httptest.NewRecorder()
+			server.Routes().ServeHTTP(response, request)
+			if response.Code != tt.wantStatus {
+				t.Errorf("GET %s: status = %d, want %d", tt.path, response.Code, tt.wantStatus)
+			}
+		})
 	}
 }
 
-// TestSplitNodeletResourcePathLogs 验证中心端容器日志路径解析。
-func TestSplitNodeletResourcePathLogs(t *testing.T) {
-	nodeletID, containerID, action, ok := splitNodeletResourcePath("/api/nodelets/local/containers/container-1/logs")
-	if !ok {
-		t.Fatal("ok = false, want true")
-	}
-	if nodeletID != "local" {
-		t.Fatalf("nodeletID = %q, want %q", nodeletID, "local")
-	}
-	if containerID != "container-1" {
-		t.Fatalf("containerID = %q, want %q", containerID, "container-1")
-	}
-	if action != "logs" {
-		t.Fatalf("action = %q, want %q", action, "logs")
-	}
-}
-
-// TestSplitNodeletResourcePathLogsStream 验证中心端容器日志流路径解析。
-func TestSplitNodeletResourcePathLogsStream(t *testing.T) {
-	nodeletID, containerID, action, ok := splitNodeletResourcePath("/api/nodelets/local/containers/container-1/logs/stream")
-	if !ok {
-		t.Fatal("ok = false, want true")
-	}
-	if nodeletID != "local" {
-		t.Fatalf("nodeletID = %q, want %q", nodeletID, "local")
-	}
-	if containerID != "container-1" {
-		t.Fatalf("containerID = %q, want %q", containerID, "container-1")
-	}
-	if action != "logs/stream" {
-		t.Fatalf("action = %q, want %q", action, "logs/stream")
-	}
-}
-
-// testAuth setup 创建带有一个测试用户的 UserStore 和 TokenService，
+// testAuthSetup 创建带有一个测试用户的 UserStore 和 TokenService，
 // 返回一个已签发的 JWT，可直接设为请求的 Cookie。
 func testAuthSetup(t *testing.T) (*auth.Store, *auth.TokenService, string) {
 	t.Helper()

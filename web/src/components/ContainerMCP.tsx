@@ -5,7 +5,7 @@ import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { serverPaths } from "../lib/paths";
 import { MCPFormModal } from "./MCPFormModal";
-import { StatusPill } from "./StatusPill";
+import { StatusPill, TypePill } from "./StatusPill";
 import { MCPToolList } from "./MCPToolList";
 import { Button } from "./ui/Button";
 
@@ -172,7 +172,7 @@ export function ContainerMCP({
           </div>
           <div className="mcp-status-row">
             <span>类型</span>
-            <span className="type-pill">{connection.type}</span>
+            <TypePill label={connection.type} />
           </div>
           <div className="mcp-status-row">
             <span>命令</span>

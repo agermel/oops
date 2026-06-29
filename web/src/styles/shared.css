@@ -177,14 +177,17 @@
 
 /* ---- Status Pill ---- */
 
-.status-pill {
+.status-pill,
+.type-pill {
   display: inline-flex;
   align-items: center;
   height: 24px;
   padding: 0 9px;
+  box-sizing: border-box;
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   font-weight: var(--font-extrabold);
+  line-height: 1;
   text-transform: uppercase;
 }
 
@@ -243,20 +246,12 @@
   height: 12px;
 }
 
-/* ---- Type Pill (distinct from status pill — service type badge) ---- */
+/* ---- Type Pill ---- */
 
 .type-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 26px;
-  padding: 0 10px;
   background: var(--blue-50);
   color: var(--primary);
   border: 1px solid var(--blue-200);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  font-weight: var(--font-extrabold);
-  text-transform: uppercase;
 }
 
 /* ---- Mono text ---- */
