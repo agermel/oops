@@ -16,13 +16,14 @@ func main() {
 	addr := common.EnvOrDefault("OOPS_NODELET_ADDR", ":8686")
 	publicAddress := common.EnvOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
 	token := os.Getenv("OOPS_NODELET_TOKEN")
+	requireAuth := os.Getenv("OOPS_NODELET_REQUIRE_AUTH") == "true"
 
 	dockerClient, err := docker.NewClient(publicAddress)
 	if err != nil {
 		logutil.Fatalf("docker client: %v", err)
 	}
 
-	server := nodelet.NewServerWithToken(dockerClient, token)
+	server := nodelet.NewServerWithToken(dockerClient, token, requireAuth)
 
 	httpServer := &http.Server{
 		Addr:         addr,

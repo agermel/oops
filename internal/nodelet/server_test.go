@@ -89,7 +89,7 @@ func TestServerHostWithToken(t *testing.T) {
 		ID:        "host-1",
 		Name:      "prod-api-01",
 		Available: true,
-	}}, "secret")
+	}}, "secret", false)
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
@@ -103,7 +103,7 @@ func TestServerHostWithToken(t *testing.T) {
 
 // TestServerHostUnauthorized 验证 Nodelet 数据接口拒绝错误 Token。
 func TestServerHostUnauthorized(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{}, "secret")
+	server := NewServerWithToken(fakeHostProvider{}, "secret", false)
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	request.Header.Set("Authorization", "Bearer wrong")
 	response := httptest.NewRecorder()
@@ -117,7 +117,7 @@ func TestServerHostUnauthorized(t *testing.T) {
 
 // TestServerHealthWithoutToken 验证 Nodelet 存活接口无需 Token。
 func TestServerHealthWithoutToken(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{}, "secret")
+	server := NewServerWithToken(fakeHostProvider{}, "secret", false)
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
 	response := httptest.NewRecorder()
 
@@ -131,7 +131,7 @@ func TestServerHealthWithoutToken(t *testing.T) {
 // TestServerContainers 验证 Nodelet 容器列表接口。
 func TestServerContainers(t *testing.T) {
 	server := NewServer(fakeHostProvider{containers: []Container{
-		{ID: "container-1", Name: "api"},
+		{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Name: "api"},
 	}})
 	request := httptest.NewRequest(http.MethodGet, ContainersPath, nil)
 	response := httptest.NewRecorder()
@@ -159,9 +159,9 @@ func TestServerContainersUnavailable(t *testing.T) {
 // TestServerContainerLogs 验证 Nodelet 容器日志接口。
 func TestServerContainerLogs(t *testing.T) {
 	server := NewServer(fakeHostProvider{logs: []LogEntry{
-		{ContainerID: "container-1", Stream: "stdout", Message: "started"},
+		{ContainerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Stream: "stdout", Message: "started"},
 	}})
-	request := httptest.NewRequest(http.MethodGet, ContainerLogsPath("container-1"), nil)
+	request := httptest.NewRequest(http.MethodGet, ContainerLogsPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -174,9 +174,9 @@ func TestServerContainerLogs(t *testing.T) {
 // TestServerContainerLogsStream 验证 Nodelet 容器日志 SSE 接口。
 func TestServerContainerLogsStream(t *testing.T) {
 	server := NewServer(fakeHostProvider{streamLogs: []LogEntry{
-		{ContainerID: "container-1", Stream: "stdout", Message: "started"},
+		{ContainerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Stream: "stdout", Message: "started"},
 	}})
-	request := httptest.NewRequest(http.MethodGet, ContainerLogsStreamPath("container-1"), nil)
+	request := httptest.NewRequest(http.MethodGet, ContainerLogsStreamPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -187,7 +187,7 @@ func TestServerContainerLogsStream(t *testing.T) {
 	if response.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want %q", response.Header().Get("Content-Type"), "text/event-stream")
 	}
-	if !strings.Contains(response.Body.String(), `data: {"timestamp":"0001-01-01T00:00:00Z","containerId":"container-1","stream":"stdout","message":"started"}`) {
+	if !strings.Contains(response.Body.String(), `data: {"timestamp":"0001-01-01T00:00:00Z","containerId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stream":"stdout","message":"started"}`) {
 		t.Fatalf("body = %q", response.Body.String())
 	}
 }

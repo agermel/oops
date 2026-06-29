@@ -14,6 +14,7 @@ import type {
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { useHashRouter } from "./hooks/useHashRouter";
 import { apiRequest, getErrorMessage } from "./lib/api";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
@@ -80,7 +81,7 @@ export function App() {
   const [logsLoading, setLogsLoading] = React.useState(false);
   const [logsError, setLogsError] = React.useState("");
   const [autoScroll, setAutoScroll] = React.useState(true);
-  const logEventSource = React.useRef<EventSource | null>(null);
+  const logAbortRef = React.useRef<AbortController | null>(null);
   const logBuffer = React.useRef<LogEntry[]>([]);
   const logsPanel = React.useRef<HTMLDivElement | null>(null);
 
@@ -137,9 +138,9 @@ export function App() {
   }, []);
 
   function closeLogStream() {
-    if (logEventSource.current) {
-      logEventSource.current.close();
-      logEventSource.current = null;
+    if (logAbortRef.current) {
+      logAbortRef.current.abort();
+      logAbortRef.current = null;
     }
     flushLogs.cancel();
     logBuffer.current = [];
@@ -268,26 +269,34 @@ export function App() {
     setLogsLoading(true);
     setLogsError("");
 
+    const ctrl = new AbortController();
+    logAbortRef.current = ctrl;
+
+    const headers: Record<string, string> = {};
+    const stored = sessionStorage.getItem("oops_token");
+    if (stored) headers["Authorization"] = `Bearer ${stored}`;
+
     const url = serverPaths(projectId, nodeletID).containerLogs(containerID);
 
-    const source = new EventSource(url);
-    logEventSource.current = source;
-
-    source.onopen = () => {
-      setLogsLoading(false);
-    };
-    source.onmessage = (event) => {
-      try {
-        logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
-        flushLogs();
-      } catch {
-        // 跳过无法解析的日志行
-      }
-    };
-    source.onerror = () => {
-      setLogsLoading(false);
-      setLogsError("日志流连接失败，请检查容器是否在运行");
-    };
+    fetchEventSource(url, {
+      headers,
+      signal: ctrl.signal,
+      async onopen() {
+        setLogsLoading(false);
+      },
+      onmessage(event) {
+        try {
+          logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
+          flushLogs();
+        } catch {
+          // 跳过无法解析的日志行
+        }
+      },
+      onerror() {
+        setLogsLoading(false);
+        setLogsError("日志流连接失败，请检查容器是否在运行");
+      },
+    });
   }
 
   // ---- 健康检查 ----

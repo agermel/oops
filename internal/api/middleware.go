@@ -22,10 +22,16 @@ func APIToken() string {
 
 // authorize 是所有 API 路由的 Bearer Token 鉴权中间件。
 // 使用 subtle.ConstantTimeCompare 防时序攻击。
-// 同时支持 ?token= 查询参数（供 EventSource/WebSocket 等无法自定义 header 的场景）。
+// 当 OOPS_REQUIRE_AUTH=true 时，若 OOPS_TOKEN 为空则拒绝所有请求。
+// 同时支持 ?token= 查询参数（供 EventSource 等无法自定义 header 的场景）。
 func authorize(next http.HandlerFunc) http.HandlerFunc {
 	token := APIToken()
 	if token == "" {
+		if os.Getenv("OOPS_REQUIRE_AUTH") == "true" {
+			return func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "auth required but OOPS_TOKEN not set", http.StatusServiceUnavailable)
+			}
+		}
 		return next
 	}
 
@@ -33,14 +39,6 @@ func authorize(next http.HandlerFunc) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-
-		// SSE / WebSocket 等客户端无法设置 Authorization header，
-		// 允许通过 ?token= 查询参数传入。
-		if auth == "" {
-			if qt := r.URL.Query().Get("token"); qt != "" {
-				auth = "Bearer " + qt
-			}
-		}
 
 		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
@@ -64,10 +62,33 @@ func limitBody(next http.HandlerFunc) http.HandlerFunc {
 
 // securityHeaders 为所有 HTTP 响应添加安全相关头。
 func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
+	behindProxy := os.Getenv("OOPS_BEHIND_PROXY") == "true"
+	corsOrigin := os.Getenv("OOPS_CORS_ORIGIN")
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'")
+
+		if behindProxy {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+
+		if corsOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+		}
+
+		// CORS 预检请求直接返回
+		if r.Method == http.MethodOptions && corsOrigin != "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		next(w, r)
 	}
 }

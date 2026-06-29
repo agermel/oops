@@ -171,13 +171,16 @@ func (s *Server) Routes() *http.ServeMux {
 func (s *Server) Mount(mux *http.ServeMux) {
 	// 所有 API 路由统一经过: securityHeaders → authorize → limitBody → handler
 	wrap := func(f http.HandlerFunc) http.HandlerFunc {
-		return securityHeaders(authorize(limitBody(f)))
+		return securityHeaders(rateLimit(authorize(limitBody(f))))
+	}
+	wrapChat := func(f http.HandlerFunc) http.HandlerFunc {
+		return securityHeaders(rateLimitChat(authorize(limitBody(f))))
 	}
 
 	mux.HandleFunc("/api/connections/status", wrap(s.handleConnectionStatus))
 	mux.HandleFunc("/api/nodelets", wrap(s.handleNodelets))
 	mux.HandleFunc("/api/nodelets/", wrap(s.handleNodeletResource))
-	mux.HandleFunc("/api/chat", wrap(s.handleChat))
+	mux.HandleFunc("/api/chat", wrapChat(s.handleChat))
 	mux.HandleFunc("/api/sessions", wrap(s.handleSessions))
 	mux.HandleFunc("/api/sessions/", wrap(s.handleSessionByID))
 	mux.HandleFunc("/api/mcp/connections", wrap(s.handleMCPConnections))

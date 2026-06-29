@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -30,18 +31,20 @@ type Provider interface {
 
 // Server 暴露 Nodelet 的 HTTP 协议。
 type Server struct {
-	provider Provider
-	token    string
+	provider    Provider
+	token       string
+	requireAuth bool
 }
 
-// NewServer 创建 Nodelet HTTP 服务。
+// NewServer 创建 Nodelet HTTP 服务（不要求鉴权，向后兼容）。
 func NewServer(provider Provider) *Server {
-	return NewServerWithToken(provider, "")
+	return NewServerWithToken(provider, "", false)
 }
 
 // NewServerWithToken 创建带鉴权的 Nodelet HTTP 服务。
-func NewServerWithToken(provider Provider, token string) *Server {
-	return &Server{provider: provider, token: token}
+// requireAuth 为 true 时，若 token 为空则拒绝所有受保护请求。
+func NewServerWithToken(provider Provider, token string, requireAuth bool) *Server {
+	return &Server{provider: provider, token: token, requireAuth: requireAuth}
 }
 
 // Routes 返回 Nodelet 的 HTTP 路由。
@@ -58,6 +61,10 @@ func (s *Server) Routes() *http.ServeMux {
 func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.token == "" {
+			if s.requireAuth {
+				http.Error(w, "auth required but token not configured", http.StatusServiceUnavailable)
+				return
+			}
 			next(w, r)
 			return
 		}
@@ -164,13 +171,36 @@ func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// containerIDPattern 匹配 Docker 容器 ID（64 字符 hex）。
+var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// isValidContainerID 校验容器 ID 格式，防止路径遍历和非法输入。
+func isValidContainerID(id string) bool {
+	return containerIDPattern.MatchString(id)
+}
+
 // splitContainerPath 拆分 /containers/{id}/{action} 路径。
 func splitContainerPath(path string) (string, string, bool) {
 	rest := strings.TrimPrefix(path, "/containers/")
 	parts := strings.Split(rest, "/")
-	if len(parts) == 2 && parts[0] != "" {
-		containerID, err := url.PathUnescape(parts[0])
+
+	extractID := func(raw string) (string, bool) {
+		if strings.Contains(raw, "..") {
+			return "", false
+		}
+		id, err := url.PathUnescape(raw)
 		if err != nil {
+			return "", false
+		}
+		if !isValidContainerID(id) {
+			return "", false
+		}
+		return id, true
+	}
+
+	if len(parts) == 2 && parts[0] != "" {
+		containerID, ok := extractID(parts[0])
+		if !ok {
 			return "", "", false
 		}
 		action := parts[1]
@@ -179,8 +209,8 @@ func splitContainerPath(path string) (string, string, bool) {
 		}
 	}
 	if len(parts) == 3 && parts[0] != "" && parts[1] == "logs" && parts[2] == "stream" {
-		containerID, err := url.PathUnescape(parts[0])
-		if err != nil {
+		containerID, ok := extractID(parts[0])
+		if !ok {
 			return "", "", false
 		}
 		return containerID, "logs/stream", true
