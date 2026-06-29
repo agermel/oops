@@ -14,7 +14,7 @@ export function FormInput({
   const cls = [
     "form-input",
     multiline && "form-textarea",
-    monospace && "form-textarea",
+    monospace && "form-monospace",
     className,
   ]
     .filter(Boolean)

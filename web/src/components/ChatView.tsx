@@ -130,9 +130,9 @@ export function ChatView({
               <div className="chat-content">{currentQuestion}</div>
             </div>
             {visibleCurrentSteps.map((step, j) => {
-              // 若流中已出现 error，则所有工具调用视为已有结果，停止动画。
+              // 仅当某个 tool_call 已有对应的 tool_result，或该 step 自身是 error 时才停止动画
               const hasResult =
-                streamError ||
+                step.type === "error" ||
                 visibleCurrentSteps.slice(j + 1).some(
                   (s) =>
                     s.type === "tool_result" &&

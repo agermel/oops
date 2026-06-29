@@ -1,10 +1,24 @@
 import React from "react";
 import { Terminal, Trash2, ChevronUp, ChevronDown } from "lucide-react";
+import AnsiConvertor from "ansi-to-html";
 
 interface ConsoleEntry {
   timestamp: string;
   level: "info" | "warn" | "error";
   message: string;
+}
+
+const ansi = new AnsiConvertor({ escapeXML: true, fg: "#f5f7fa", bg: "#1f2430" });
+
+function sanitize(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<object[\s\S]*?<\/object>/gi, "")
+    .replace(/<embed[\s\S]*?>/gi, "")
+    .replace(/\bon\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\bon\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/javascript\s*:/gi, "");
 }
 
 const MAX_ENTRIES = 500;
@@ -121,7 +135,7 @@ export function ConsolePanel() {
             <div key={i} className={`console-line level-${e.level}`}>
               <span className="console-ts">{e.timestamp.slice(11, 19)}</span>
               <span className="console-level-tag">{e.level}</span>
-              <span className="console-msg">{e.message}</span>
+              <span className="console-msg" dangerouslySetInnerHTML={{ __html: sanitize(ansi.toHtml(e.message)) }} />
             </div>
           ))
         )}

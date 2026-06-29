@@ -252,7 +252,9 @@ export function MCPFormModal({
     const body = formToConfig(editing);
 
     if (isNew) {
-      body.id = editing.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || `mcp-${Date.now()}`;
+      // 从名称生成 ID，添加时间戳后缀保证唯一性
+      const base = editing.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || "mcp";
+      body.id = `${base}-${Date.now()}`;
     }
 
     const url = isNew
@@ -330,15 +332,23 @@ export function MCPFormModal({
         onChange={(e) => {
           const newType = e.target.value;
           const defaults = typeDefaults[newType] || typeDefaults.other;
-          const newCreds = parseCredentials(newType, defaults.env);
-          setCreds(newCreds);
-          setEditing((prev) => prev ? {
-            ...prev,
-            type: newType,
-            command: defaults.command,
-            args: [...defaults.args],
-            env: [...defaults.env],
-          } : prev);
+          // 保留用户手动添加的环境变量中不属于新类型默认生成器的键
+          setEditing((prev) => {
+            if (!prev) return prev;
+            const prevTypeDefaults = typeDefaults[prev.type] || typeDefaults.other;
+            const prevDefaultKeys = new Set(prevTypeDefaults.env.map((ev) => ev.split("=")[0]));
+            // 用户手动添加的 env（不在旧类型默认键中）
+            const userEnv = prev.env.filter((ev) => !prevDefaultKeys.has(ev.split("=")[0]));
+            const newCreds = parseCredentials(newType, defaults.env);
+            setCreds(newCreds);
+            return {
+              ...prev,
+              type: newType,
+              command: defaults.command,
+              args: [...defaults.args],
+              env: [...defaults.env, ...userEnv],
+            };
+          });
         }}
       >
         <option value="mysql">MySQL</option>

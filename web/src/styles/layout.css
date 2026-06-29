@@ -21,7 +21,7 @@
   grid-column: 1 / -1;
   height: 54px;
   display: grid;
-  grid-template-columns: 170px auto minmax(260px, 520px) 1fr;
+  grid-template-columns: 170px auto 1fr;
   align-items: center;
   gap: 22px;
   padding: 0 22px;
@@ -137,6 +137,7 @@
 }
 
 .global-actions {
+  justify-self: end;
   display: flex;
   justify-content: flex-end;
   align-items: center;

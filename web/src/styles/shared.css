@@ -116,6 +116,11 @@
   white-space: pre-wrap;
 }
 
+.form-monospace {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
 /* ---- Section Header ---- */
 
 .section-header {

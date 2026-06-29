@@ -7,14 +7,11 @@ import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
 
 function emptyProject(): Project {
-  return {
-    id: "",
-    name: "",
-    description: "",
-    nodeletIds: [],
-    createdAt: "",
-    updatedAt: "",
-  };
+  return { id: "", name: "", description: "", nodeletIds: [], createdAt: "", updatedAt: "" };
+}
+
+function savePayload(project: Project) {
+  return { name: project.name, description: project.description || "" };
 }
 
 export function ProjectsView({
@@ -68,7 +65,7 @@ export function ProjectsView({
       await apiRequest(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editing),
+        body: JSON.stringify(savePayload(editing)),
       });
       closeForm();
       onRefresh();
@@ -145,7 +142,7 @@ export function ProjectsView({
           <FormInput
             id="project-name"
             value={editing.name}
-            onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || e.target.value.toLowerCase().replace(/\s+/g, "-") })}
+            onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || `${e.target.value.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}` })}
             placeholder="例如: CCNU Box"
           />
           <label htmlFor="project-desc">描述</label>

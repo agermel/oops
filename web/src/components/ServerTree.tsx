@@ -38,20 +38,32 @@ export function ServerTree({
   const [nodeletsLoading, setNodeletsLoading] = React.useState(false);
   const [addError, setAddError] = React.useState("");
   const [addingID, setAddingID] = React.useState("");
+  // 缓存 nodelet 列表，避免每次打开弹窗都重新请求
+  const nodeletsCacheRef = React.useRef<NodeletItem[] | null>(null);
 
   const paths = projectPaths(projectId);
 
   async function openAddModal() {
     setShowAddModal(true);
     setAddError("");
-    setNodeletsLoading(true);
-    try {
-      setNodelets(await apiRequest<NodeletItem[]>("/api/nodelets"));
-    } catch (err) {
-      setAddError(getErrorMessage(err, "读取服务器列表失败"));
-    } finally {
-      setNodeletsLoading(false);
+    if (nodeletsCacheRef.current) {
+      setNodelets(nodeletsCacheRef.current);
+    } else {
+      setNodeletsLoading(true);
+      try {
+        const data = await apiRequest<NodeletItem[]>("/api/nodelets");
+        nodeletsCacheRef.current = data;
+        setNodelets(data);
+      } catch (err) {
+        setAddError(getErrorMessage(err, "读取服务器列表失败"));
+      } finally {
+        setNodeletsLoading(false);
+      }
     }
+  }
+
+  function closeAddModal() {
+    setShowAddModal(false);
   }
 
   async function addServer(nodeletID: string) {
@@ -70,10 +82,6 @@ export function ServerTree({
     } finally {
       setAddingID("");
     }
-  }
-
-  function closeAddModal() {
-    setShowAddModal(false);
   }
 
   const existingIDs = new Set(servers.map((s) => s.nodelet.id));
@@ -156,8 +164,8 @@ export function ServerTree({
                   <div className="nodelet-pick-info">
                     <strong>{n.nodelet.name || n.nodelet.id}</strong>
                     <small>{n.nodelet.address}</small>
-                    {n.available !== undefined && (
-                      <StatusDot alive={n.available} />
+                    {n.host?.available !== undefined && (
+                      <StatusDot alive={n.host.available} />
                     )}
                   </div>
                   <Button

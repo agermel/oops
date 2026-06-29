@@ -24,6 +24,8 @@ export function ContainerLogs({
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
   // 是否有新日志在底部之外（用户上翻后）
   const [hasMore, setHasMore] = React.useState(false);
+  // 跟踪用户是否手动关闭了自动滚动（避免 IntersectionObserver 反复切换）
+  const userScrolledUpRef = React.useRef(false);
 
   // ---- IntersectionObserver：哨兵可见 → 用户在底部 ----
   React.useEffect(() => {
@@ -35,10 +37,15 @@ export function ContainerLogs({
       ([entry]) => {
         // 哨兵可见（即使部分可见）→ 用户在底部附近 → 打开自动滚动
         if (entry.isIntersecting) {
+          if (userScrolledUpRef.current) {
+            // 用户之前翻上去，现在回来了 → 恢复自动滚动
+            userScrolledUpRef.current = false;
+          }
           onAutoScrollChange(true);
           setHasMore(false);
         } else {
           // 哨兵完全不可见 → 用户已上翻
+          userScrolledUpRef.current = true;
           onAutoScrollChange(false);
         }
       },
@@ -54,23 +61,25 @@ export function ContainerLogs({
   }, [panelRef, onAutoScrollChange]);
 
   // ---- MutationObserver：新内容追加时，自动滚到底部或显示"回到底部" ----
+  // 使用 ref 持有最新 autoScroll 值，避免 MutationObserver 因 autoScroll 变化而反复重建
+  const autoScrollRef = React.useRef(autoScroll);
+  autoScrollRef.current = autoScroll;
+
   React.useEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
 
     const observer = new MutationObserver(() => {
-      if (autoScroll) {
-        // scrollIntoView 比 scrollTop=scrollHeight 更可靠
+      if (autoScrollRef.current) {
         sentinelRef.current?.scrollIntoView({ behavior: "auto" });
       } else {
-        // 用户在翻阅历史日志，提示有新内容
         setHasMore(true);
       }
     });
 
     observer.observe(panel, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [panelRef, autoScroll]);
+  }, [panelRef]);
 
   // 首次有日志时滚到底部
   const didInitialScroll = React.useRef(false);
@@ -81,10 +90,12 @@ export function ContainerLogs({
     }
   }, [logs.length, panelRef]);
 
-  // 切换容器时重置
+  // 切换容器日志源时重置
   React.useEffect(() => {
     didInitialScroll.current = false;
     setHasMore(false);
+    userScrolledUpRef.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在 logs 引用变化时重置（新容器 = 新数组引用）
   }, [logs]);
 
   function scrollToBottom() {
@@ -117,7 +128,7 @@ export function ContainerLogs({
         ) : logs.length === 0 ? (
           <div className="empty-state">{loading ? "正在连接日志流" : "等待实时日志"}</div>
         ) : (
-          logs.map((entry, index) => <LogRow key={`${entry.timestamp}-${index}`} entry={entry} />)
+          logs.map((entry, index) => <LogRow key={`${entry.timestamp || "0"}-${index}-${entry.containerId || ""}`} entry={entry} />)
         )}
         {/* 哨兵：始终在日志列表末尾，用于检测用户是否在底部 */}
         <div ref={sentinelRef} className="logs-sentinel" />

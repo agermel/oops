@@ -119,36 +119,43 @@ export function App() {
   const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushFirstRef = React.useRef<number>(0);
 
-  function doFlush() {
+  // 使用 ref 持有最新的 doFlush 以避免过期闭包
+  const doFlushRef = React.useRef(() => {
     if (logBuffer.current.length === 0) return;
     const nextLogs = logBuffer.current;
     logBuffer.current = [];
     setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
-  }
+  });
+  doFlushRef.current = () => {
+    if (logBuffer.current.length === 0) return;
+    const nextLogs = logBuffer.current;
+    logBuffer.current = [];
+    setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
+  };
 
-  const flushLogs = React.useMemo(() => {
-    const fn = () => {
-      const now = Date.now();
-      if (flushFirstRef.current === 0) flushFirstRef.current = now;
-      if (now - flushFirstRef.current >= LOG_MAX_WAIT_MS) {
-        if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-        flushFirstRef.current = 0;
-        doFlush();
-        return;
-      }
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-      flushTimerRef.current = setTimeout(() => {
-        flushTimerRef.current = null;
-        flushFirstRef.current = 0;
-        doFlush();
-      }, LOG_FLUSH_MS);
-    };
-    fn.cancel = () => {
+  type FlushFn = (() => void) & { cancel: () => void };
+
+  const flushLogs = React.useCallback(() => {
+    const now = Date.now();
+    if (flushFirstRef.current === 0) flushFirstRef.current = now;
+    if (now - flushFirstRef.current >= LOG_MAX_WAIT_MS) {
       if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
       flushFirstRef.current = 0;
-    };
-    return fn;
-  }, []);
+      doFlushRef.current();
+      return;
+    }
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      flushFirstRef.current = 0;
+      doFlushRef.current();
+    }, LOG_FLUSH_MS);
+  }, []) as FlushFn;
+
+  flushLogs.cancel = () => {
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    flushFirstRef.current = 0;
+  };
 
   function closeLogStream() {
     if (logEventSource.current) {
@@ -181,6 +188,16 @@ export function App() {
               currentSteps = [];
             } else if (msg.role === "assistant") {
               currentSteps.push({ type: "answer", content: msg.content });
+            } else if (msg.role === "thinking") {
+              currentSteps.push({ type: "thinking", content: msg.content });
+            } else if (msg.role === "tool_call") {
+              currentSteps.push({
+                type: "tool_call",
+                content: msg.content,
+                toolCallId: msg.toolCallId,
+                toolName: msg.toolName,
+                toolArgs: msg.toolArgs,
+              });
             } else if (msg.role === "tool") {
               currentSteps.push({
                 type: "tool_result",
@@ -578,7 +595,8 @@ export function App() {
 
   React.useEffect(() => {
     return () => closeLogStream();
-  }, [flushLogs]);
+    // flushLogs is useCallback([], []) — stable across renders
+  }, []);
 
   // ---- 标题 ----
   const selectedProject = projects.find((p) => p.id === selectedProjectID);
@@ -613,6 +631,7 @@ export function App() {
       </a>
       <Header activeNav={activeNav} onNavChange={(id: string) => {
         if (id === "console") navigate({ view: "console" });
+        // 全局视图下的 chat/projects 都导航到项目列表
         else navigate({ view: "projects" });
       }} />
       <SideRail

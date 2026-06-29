@@ -56,11 +56,11 @@ export function ContainerMCP({
     }
   }
 
-  // 首次加载 / connectionId 变化时获取
+  // projectId/nodeletId/containerId/connectionId 变化时重新获取
   React.useEffect(() => {
     fetchConnection();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcp?.connectionId]);
+  }, [projectId, nodeletId, containerId, mcp?.connectionId]);
 
   // 构建一键配置预填
   function buildPrefill(): MCPPrefill {
@@ -115,7 +115,7 @@ export function ContainerMCP({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId]);
+  }, [projectId, nodeletId, containerId]);
 
   async function handleDelete() {
     if (!connection || deleting) return;

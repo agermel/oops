@@ -32,17 +32,6 @@ export type NodeletConfig = {
   address: string;
 };
 
-export type Host = {
-  id: string;
-  name: string;
-  address: string;
-  available: boolean;
-  dockerVersion: string;
-  runtime: string;
-  nCPU: number;
-  memTotal: number;
-};
-
 export type NodeletHostSummary = {
   available: boolean;
   dockerVersion: string;
@@ -212,24 +201,20 @@ export type SessionInfo = {
 };
 
 export type SessionMessage = {
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "thinking" | "tool_call";
   content: string;
   toolCallId?: string;
   toolName?: string;
+  toolArgs?: string;
 };
 
 export type SessionDetail = SessionInfo & {
   messages: SessionMessage[];
 };
 
-// ---- 兼容旧组件 ----
+// ---- Nodelet 选择项 (添加服务器弹窗用) ----
 
-export type NodeletItem = {
-  nodelet: NodeletConfig;
-  host: Host;
-  available: boolean;
-  error?: string;
-};
+export type NodeletItem = ServerWithNodelet;
 
 // ---- 全局导航 ----
 

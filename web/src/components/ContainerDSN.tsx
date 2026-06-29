@@ -19,9 +19,9 @@ function mergedToDSNInfo(merged: Record<string, string>, detected: Record<string
 
 type KVRow = { key: string; value: string; id: number };
 
-let nextID = 0;
+let idCounter = 0;
 function newRow(key?: string, value?: string): KVRow {
-  return { id: ++nextID, key: key || "", value: value || "" };
+  return { id: ++idCounter, key: key || "", value: value || "" };
 }
 
 function pairsToRecord(rows: KVRow[]): Record<string, string> {
@@ -89,11 +89,11 @@ export function ContainerDSN({
     }
   }
 
-  // 挂载时获取 + containerId 变化时重新获取
+  // projectId/nodeletId/containerId 变化时重新获取
   React.useEffect(() => {
     fetchDSN();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId]);
+  }, [projectId, nodeletId, containerId]);
 
   function updateRow(id: number, field: "key" | "value", val: string) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
