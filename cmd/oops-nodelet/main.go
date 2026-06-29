@@ -32,6 +32,7 @@ func main() {
 	}
 
 	server := nodelet.NewServerWithToken(dockerClient, token)
+	defer server.Shutdown()
 
 	httpServer := &http.Server{
 		Addr:         addr,

@@ -25,6 +25,7 @@ func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
 type rateLimiter struct {
 	mu       sync.Mutex
 	visitors map[string]*visitor
+	done     chan struct{}
 }
 
 type visitor struct {
@@ -32,14 +33,11 @@ type visitor struct {
 	lastSeen time.Time
 }
 
-var nodeletLimiter = newRateLimiter()
-
 func newRateLimiter() *rateLimiter {
-	rl := &rateLimiter{
+	return &rateLimiter{
 		visitors: make(map[string]*visitor),
+		done:     make(chan struct{}),
 	}
-	go rl.cleanup(5 * time.Minute)
-	return rl
 }
 
 func (rl *rateLimiter) allow(ip string, reqPerSec int, burst int) bool {
@@ -59,15 +57,25 @@ func (rl *rateLimiter) allow(ip string, reqPerSec int, burst int) bool {
 
 func (rl *rateLimiter) cleanup(ttl time.Duration) {
 	ticker := time.NewTicker(ttl)
-	for range ticker.C {
-		rl.mu.Lock()
-		for ip, v := range rl.visitors {
-			if time.Since(v.lastSeen) > ttl {
-				delete(rl.visitors, ip)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-rl.done:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			for ip, v := range rl.visitors {
+				if time.Since(v.lastSeen) > ttl {
+					delete(rl.visitors, ip)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
+}
+
+func (rl *rateLimiter) shutdown() {
+	close(rl.done)
 }
 
 func extractIP(r *http.Request) string {
@@ -82,15 +90,3 @@ func extractIP(r *http.Request) string {
 	return addr
 }
 
-// rateLimitNodelet Nodelet 接口限流（50 req/s，突发 100）。中心端是已知调用方，比 Web API 更严格。
-func rateLimitNodelet(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ip := extractIP(r)
-		if !nodeletLimiter.allow(ip, 50, 100) {
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
-			return
-		}
-		next(w, r)
-	}
-}

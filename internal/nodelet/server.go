@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"oops/internal/logutil"
 	"go.uber.org/zap"
@@ -35,16 +36,21 @@ type Provider interface {
 type Server struct {
 	provider Provider
 	token    string
+	limiter  *rateLimiter
 }
 
 // NewServer 创建不带鉴权的 Nodelet HTTP 服务（仅用于测试）。
 func NewServer(provider Provider) *Server {
-	return &Server{provider: provider}
+	rl := newRateLimiter()
+	go rl.cleanup(5 * time.Minute)
+	return &Server{provider: provider, limiter: rl}
 }
 
 // NewServerWithToken 创建带强制鉴权的 Nodelet HTTP 服务。token 为空时所有受保护接口返回 503。
 func NewServerWithToken(provider Provider, token string) *Server {
-	return &Server{provider: provider, token: token}
+	rl := newRateLimiter()
+	go rl.cleanup(5 * time.Minute)
+	return &Server{provider: provider, token: token, limiter: rl}
 }
 
 // Routes 返回 Nodelet 的 HTTP 路由。
@@ -52,9 +58,9 @@ func NewServerWithToken(provider Provider, token string) *Server {
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(HealthPath, securityHeaders(s.handleHealth))
-	mux.HandleFunc(HostPath, securityHeaders(rateLimitNodelet(s.authorize(s.handleHost))))
-	mux.HandleFunc(ContainersPath, securityHeaders(rateLimitNodelet(s.authorize(s.handleContainers))))
-	mux.HandleFunc("/containers/", securityHeaders(rateLimitNodelet(s.authorize(s.handleContainer))))
+	mux.HandleFunc(HostPath, securityHeaders(s.rateLimit(s.authorize(s.handleHost))))
+	mux.HandleFunc(ContainersPath, securityHeaders(s.rateLimit(s.authorize(s.handleContainers))))
+	mux.HandleFunc("/containers/", securityHeaders(s.rateLimit(s.authorize(s.handleContainer))))
 	return mux
 }
 
@@ -76,6 +82,24 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// rateLimit Nodelet 接口限流（50 req/s，突发 100）。中心端是已知调用方，比 Web API 更严格。
+func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := extractIP(r)
+		if !s.limiter.allow(ip, 50, 100) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// Shutdown 安全关闭后台 goroutine（限流器清理等）。
+func (s *Server) Shutdown() {
+	s.limiter.shutdown()
 }
 
 // handleHealth 返回 Nodelet 存活状态。
@@ -157,15 +181,23 @@ func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	for entry := range logs {
-		data, err := json.Marshal(entry)
-		if err != nil {
-			continue
-		}
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+	for {
+		select {
+		case <-r.Context().Done():
 			return
+		case entry, ok := <-logs:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
 		}
-		flusher.Flush()
 	}
 }
 
