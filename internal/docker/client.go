@@ -2,9 +2,9 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -116,13 +116,7 @@ func (c *Client) ContainerLogs(r *http.Request, containerID string) ([]nodelet.L
 		return nil, err
 	}
 
-	tail := r.URL.Query().Get("tail")
-	if tail == "" {
-		tail = "100"
-	}
-	if _, err := strconv.Atoi(tail); err != nil {
-		tail = "100"
-	}
+	tail := validateTailParam(r.URL.Query().Get("tail"))
 
 	reader, err := c.api.ContainerLogs(r.Context(), containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
@@ -148,13 +142,7 @@ func (c *Client) ContainerLogsStream(r *http.Request, containerID string) (<-cha
 		return nil, err
 	}
 
-	tail := r.URL.Query().Get("tail")
-	if tail == "" {
-		tail = "100"
-	}
-	if _, err := strconv.Atoi(tail); err != nil {
-		tail = "100"
-	}
+	tail := validateTailParam(r.URL.Query().Get("tail"))
 
 	reader, err := c.api.ContainerLogs(r.Context(), containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
@@ -213,4 +201,34 @@ func (c *Client) runtime(ctx context.Context, info system.Info) string {
 		return "podman"
 	}
 	return "docker"
+}
+
+// validateTailParam 校验并限制 tail 参数范围（1-10000），防止恶意拉取全量日志。
+func validateTailParam(tail string) string {
+	if tail == "" {
+		return "100"
+	}
+	n, err := parseInt(tail)
+	if err != nil || n < 1 {
+		return "100"
+	}
+	if n > 10000 {
+		return "10000"
+	}
+	return tail
+}
+
+// parseInt 是 strconv.Atoi 的简单包装，避免依赖 strconv。
+func parseInt(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("not a number: %q", s)
+		}
+		n = n*10 + int(c-'0')
+		if n > 1000000 {
+			return 1000000, nil
+		}
+	}
+	return n, nil
 }

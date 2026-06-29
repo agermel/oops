@@ -67,6 +67,7 @@ export function App() {
   const selectedContainerID = urlContainerId || "";
 
   const lastLoadedProjectRef = React.useRef("");
+  const prevUrlServerIdRef = React.useRef<string | undefined>(undefined);
 
   // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
@@ -475,16 +476,21 @@ export function App() {
   }
 
   async function toggleServer(nodeletID: string) {
-    const next = new Set(expandedServers);
-    if (next.has(nodeletID)) {
-      next.delete(nodeletID);
-      setExpandedServers(next);
+    if (expandedServers.has(nodeletID)) {
+      // 折叠：URL server 只动 URL，让 Effect B 统一同步 expandedServers
+      //        非 URL server 直接移除（无 URL 竞争）
       if (urlServerId === nodeletID) {
         replace({ view: "project-overview", projectId: selectedProjectID });
+      } else {
+        setExpandedServers((prev) => {
+          const next = new Set(prev);
+          next.delete(nodeletID);
+          return next;
+        });
       }
     } else {
-      next.add(nodeletID);
-      setExpandedServers(next);
+      // 展开：先加到 expandedServers，再设 URL；Effect B 看到已存在就 no-op
+      setExpandedServers((prev) => new Set(prev).add(nodeletID));
       if (!containers[nodeletID]) {
         loadContainers(selectedProjectID, nodeletID);
       }
@@ -518,10 +524,27 @@ export function App() {
     }
   }, [authenticated, selectedProjectID]);
 
-  // Effect B: URL 中有 server 时，展开并加载容器
+  // Effect B: URL ↔ expandedServers 双向同步
+  //   URL 有 server → 展开；URL 清除 → 折叠（由 toggleServer 通过 replace 触发）
   React.useEffect(() => {
-    if (!authenticated || !urlServerId || servers.length === 0) return;
+    const prevUrlServerId = prevUrlServerIdRef.current;
+    prevUrlServerIdRef.current = urlServerId;
 
+    if (!authenticated || servers.length === 0) return;
+
+    // URL 中的 server 被清除了 → 折叠该 server
+    if (!urlServerId) {
+      if (prevUrlServerId) {
+        setExpandedServers((prev) => {
+          const next = new Set(prev);
+          next.delete(prevUrlServerId);
+          return next;
+        });
+      }
+      return;
+    }
+
+    // URL 中有 server → 展开并加载容器
     const server = servers.find((s) => s.nodelet.id === urlServerId);
     if (!server) {
       replace({ view: "project-overview", projectId: selectedProjectID });

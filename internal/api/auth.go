@@ -102,12 +102,6 @@ func (s *Server) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthMe 返回当前登录用户信息。
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	// 未配置用户时，auth 被禁用，直接返回已认证。
-	if s.UserStore == nil || s.UserStore.IsEmpty() {
-		w.WriteHeader(http.StatusOK)
-		writeJSON(w, map[string]string{"name": "User"})
-		return
-	}
 	user, ok := UserFromContext(r.Context())
 	if !ok || user == nil {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)

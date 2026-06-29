@@ -28,14 +28,9 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// requireAuth 检查请求是否已通过鉴权（Cookie JWT 或 Bearer token）。
-// 当 userStore 为 nil 时（未配置用户），允许所有请求（向后兼容）。
+// requireAuth 检查请求是否已通过鉴权（Cookie JWT）。
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.UserStore == nil || s.UserStore.IsEmpty() {
-			next(w, r)
-			return
-		}
 		if _, ok := UserFromContext(r.Context()); ok {
 			next(w, r)
 			return

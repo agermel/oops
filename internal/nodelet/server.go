@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"oops/internal/logutil"
+	"go.uber.org/zap"
 )
 
 // Provider 提供当前 Nodelet 管理的机器和容器信息。
@@ -30,43 +31,39 @@ type Provider interface {
 	ContainerLogsStream(r *http.Request, containerID string) (<-chan LogEntry, error)
 }
 
-// Server 暴露 Nodelet 的 HTTP 协议。
+// Server 暴露 Nodelet 的 HTTP 协议。鉴权为强制要求。
 type Server struct {
-	provider    Provider
-	token       string
-	requireAuth bool
+	provider Provider
+	token    string
 }
 
-// NewServer 创建 Nodelet HTTP 服务（不要求鉴权，向后兼容）。
+// NewServer 创建不带鉴权的 Nodelet HTTP 服务（仅用于测试）。
 func NewServer(provider Provider) *Server {
-	return NewServerWithToken(provider, "", false)
+	return &Server{provider: provider}
 }
 
-// NewServerWithToken 创建带鉴权的 Nodelet HTTP 服务。
-// requireAuth 为 true 时，若 token 为空则拒绝所有受保护请求。
-func NewServerWithToken(provider Provider, token string, requireAuth bool) *Server {
-	return &Server{provider: provider, token: token, requireAuth: requireAuth}
+// NewServerWithToken 创建带强制鉴权的 Nodelet HTTP 服务。token 为空时所有受保护接口返回 503。
+func NewServerWithToken(provider Provider, token string) *Server {
+	return &Server{provider: provider, token: token}
 }
 
 // Routes 返回 Nodelet 的 HTTP 路由。
+// 所有接口统一经过: securityHeaders → rateLimit → authorize → handler
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc(HealthPath, s.handleHealth)
-	mux.HandleFunc(HostPath, s.authorize(s.handleHost))
-	mux.HandleFunc(ContainersPath, s.authorize(s.handleContainers))
-	mux.HandleFunc("/containers/", s.authorize(s.handleContainer))
+	mux.HandleFunc(HealthPath, securityHeaders(s.handleHealth))
+	mux.HandleFunc(HostPath, securityHeaders(rateLimitNodelet(s.authorize(s.handleHost))))
+	mux.HandleFunc(ContainersPath, securityHeaders(rateLimitNodelet(s.authorize(s.handleContainers))))
+	mux.HandleFunc("/containers/", securityHeaders(rateLimitNodelet(s.authorize(s.handleContainer))))
 	return mux
 }
 
-// authorize 校验中心端调用 Nodelet 的 Bearer Token。
+// authorize 校验中心端调用 Nodelet 的 Bearer Token。Token 为空时直接拒绝。
 func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.token == "" {
-			if s.requireAuth {
-				http.Error(w, "auth required but token not configured", http.StatusServiceUnavailable)
-				return
-			}
-			next(w, r)
+			logutil.Warn("nodelet: request without token configured", zap.String("path", r.URL.Path))
+			writeJSONError(w, http.StatusServiceUnavailable, "auth not configured")
 			return
 		}
 
@@ -74,7 +71,7 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 		actual := r.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)
@@ -186,11 +183,12 @@ func splitContainerPath(path string) (string, string, bool) {
 	parts := strings.Split(rest, "/")
 
 	extractID := func(raw string) (string, bool) {
-		if strings.Contains(raw, "..") {
-			return "", false
-		}
 		id, err := url.PathUnescape(raw)
 		if err != nil {
+			return "", false
+		}
+		// 先解码再检查 ..，防止 %2e%2e 绕过。
+		if strings.Contains(id, "..") {
 			return "", false
 		}
 		if !isValidContainerID(id) {

@@ -29,14 +29,6 @@ type spaHandler struct {
 	indexHTML    []byte // 缓存的 index.html 原始内容
 }
 
-// authProvider 判断当前鉴权模式。
-func (h *spaHandler) authProvider() string {
-	if h.userStore != nil && len(h.userStore.Users) > 0 {
-		return "simple"
-	}
-	return "none"
-}
-
 // extractUser 从 JWT Cookie 提取用户。
 func (h *spaHandler) extractUser(r *http.Request) *pageUser {
 	if h.tokenService == nil {
@@ -72,12 +64,15 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. 非文件 → SPA fallback：serve index.html。
-	provider := h.authProvider()
-	user := h.extractUser(r)
+	// 2. 确保 index.html 存在（build 产物必须有）。
+	if err := h.ensureBuild(); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 
-	// 3. Auth 重定向：simple 模式且未登录时。
-	if provider == "simple" && user == nil {
+	// 3. Auth 重定向：未登录时跳转到 /login。
+	user := h.extractUser(r)
+	if user == nil {
 		// /login 自己不能重定向，否则死循环。
 		if r.URL.Path != "/login" {
 			redirectURL := "/login?redirectUrl=" + r.URL.String()
@@ -87,22 +82,25 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. 注入 config__json 到 index.html。
-	h.serveIndexWithConfig(w, provider, user)
+	h.serveIndexWithConfig(w, "simple", user)
+}
+
+// ensureBuild 确保前端构建产物存在，首次调用时缓存 index.html。
+func (h *spaHandler) ensureBuild() error {
+	if h.indexHTML != nil {
+		return nil
+	}
+	indexPath := filepath.Join(h.staticDir, "index.html")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return fmt.Errorf("React build is missing. Run: npm --prefix web install && npm --prefix web run build")
+	}
+	h.indexHTML = data
+	return nil
 }
 
 // serveIndexWithConfig 在 index.html 中注入 config__json 后返回。
 func (h *spaHandler) serveIndexWithConfig(w http.ResponseWriter, provider string, user *pageUser) {
-	if h.indexHTML == nil {
-		// 首次读取并缓存原始 index.html。
-		indexPath := filepath.Join(h.staticDir, "index.html")
-		data, err := os.ReadFile(indexPath)
-		if err != nil {
-			http.Error(w, "React build is missing. Run: npm --prefix web install && npm --prefix web run build", http.StatusServiceUnavailable)
-			return
-		}
-		h.indexHTML = data
-	}
-
 	cfg := pageConfig{AuthProvider: provider, User: user}
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {

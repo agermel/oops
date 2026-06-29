@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"oops/internal/common"
@@ -13,17 +16,22 @@ import (
 
 // 子服务器的 nodelet 进程
 func main() {
+	logutil.Init(false, nil) // 生产模式: Info 级别，不接入 web 控制台
+
 	addr := common.EnvOrDefault("OOPS_NODELET_ADDR", ":8686")
 	publicAddress := common.EnvOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
 	token := os.Getenv("OOPS_NODELET_TOKEN")
-	requireAuth := os.Getenv("OOPS_NODELET_REQUIRE_AUTH") == "true"
+
+	if token == "" {
+		logutil.Fatalf("OOPS_NODELET_TOKEN must be set")
+	}
 
 	dockerClient, err := docker.NewClient(publicAddress)
 	if err != nil {
 		logutil.Fatalf("docker client: %v", err)
 	}
 
-	server := nodelet.NewServerWithToken(dockerClient, token, requireAuth)
+	server := nodelet.NewServerWithToken(dockerClient, token)
 
 	httpServer := &http.Server{
 		Addr:         addr,
@@ -33,6 +41,24 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	logutil.Infof("oops nodelet listening on http://localhost%s", addr)
-	logutil.Fatalf("server: %v", httpServer.ListenAndServe())
+	// 优雅关闭
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		logutil.Infof("oops nodelet listening on http://localhost%s", addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logutil.Fatalf("server: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	logutil.Infof("shutting down...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logutil.Fatalf("shutdown: %v", err)
+	}
+	logutil.Infof("stopped")
 }

@@ -38,8 +38,9 @@ func TestMountStaticFallsBackToIndex(t *testing.T) {
 	mux := http.NewServeMux()
 	handler := MountStatic(mux, staticDir, nil, nil)
 
+	// /login 不触发鉴权重定向，可直接测试 SPA fallback。
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/login", nil))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -71,7 +72,8 @@ func TestMountStaticConfigInjection(t *testing.T) {
 	handler := MountStatic(mux, staticDir, nil, nil)
 
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	// /login 不触发鉴权重定向，可直接测试 config 注入。
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/login", nil))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -79,7 +81,7 @@ func TestMountStaticConfigInjection(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `<script id="config__json"`) {
 		t.Fatalf("body missing config__json script: %q", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"authProvider":"none"`) {
+	if !strings.Contains(response.Body.String(), `"authProvider":"simple"`) {
 		t.Fatalf("body missing authProvider: %q", response.Body.String())
 	}
 }

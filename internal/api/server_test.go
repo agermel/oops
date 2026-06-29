@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"oops/internal/auth"
 	"oops/internal/config"
 	"oops/internal/nodelet"
 )
@@ -93,8 +95,29 @@ func TestSplitNodeletResourcePathLogsStream(t *testing.T) {
 	}
 }
 
+// testAuth setup 创建带有一个测试用户的 UserStore 和 TokenService，
+// 返回一个已签发的 JWT，可直接设为请求的 Cookie。
+func testAuthSetup(t *testing.T) (*auth.Store, *auth.TokenService, string) {
+	t.Helper()
+	hash, err := auth.HashPassword("test")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store := &auth.Store{}
+	// 手动构造一个带用户的 store——不依赖 yaml 文件。
+	store.Users = map[string]*auth.User{"admin": {Name: "Admin", Password: hash}}
+	ts := auth.NewTokenService(store.Users, 24*time.Hour)
+	token, err := ts.CreateToken("admin", "Admin")
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	return store, ts, token
+}
+
 // TestHandleNodeletLogsStream 验证中心端透传 Nodelet SSE。
 func TestHandleNodeletLogsStream(t *testing.T) {
+	userStore, tokenService, jwtToken := testAuthSetup(t)
+
 	client := &fakeNodeletClient{}
 	server := New(Options{
 		Nodelets: []config.NodeletConfig{{
@@ -103,8 +126,11 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 			Token:   "secret",
 		}},
 		NodeletClient: client,
+		UserStore:     userStore,
+		TokenService:  tokenService,
 	})
 	request := httptest.NewRequest(http.MethodGet, "/api/nodelets/local/containers/container-1/logs/stream?tail=20", nil)
+	request.AddCookie(&http.Cookie{Name: "jwt", Value: jwtToken})
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)

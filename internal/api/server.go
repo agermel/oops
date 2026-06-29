@@ -189,7 +189,7 @@ func (s *Server) Routes() *http.ServeMux {
 
 // Mount 把中心端 API 路由挂载到指定 mux。
 func (s *Server) Mount(mux *http.ServeMux) {
-	// 所有 API 路由统一经过: securityHeaders → authorize → limitBody → handler
+	// 所有 API 路由统一经过: securityHeaders → rateLimit → authMiddleware → requireAuth → limitBody → handler
 	authed := func(f http.HandlerFunc) http.HandlerFunc {
 		return securityHeaders(rateLimit(s.authMiddleware(s.requireAuth(limitBody(f)))))
 	}

@@ -66,14 +66,15 @@ func TestServerHealth(t *testing.T) {
 	}
 }
 
-// TestServerHost 验证 Nodelet 机器信息接口。
+// TestServerHost 验证 Nodelet 机器信息接口需要鉴权。
 func TestServerHost(t *testing.T) {
-	server := NewServer(fakeHostProvider{host: Host{
+	server := NewServerWithToken(fakeHostProvider{host: Host{
 		ID:        "host-1",
 		Name:      "prod-api-01",
 		Available: true,
-	}})
+	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
+	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -89,7 +90,7 @@ func TestServerHostWithToken(t *testing.T) {
 		ID:        "host-1",
 		Name:      "prod-api-01",
 		Available: true,
-	}}, "secret", false)
+	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
@@ -103,7 +104,7 @@ func TestServerHostWithToken(t *testing.T) {
 
 // TestServerHostUnauthorized 验证 Nodelet 数据接口拒绝错误 Token。
 func TestServerHostUnauthorized(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{}, "secret", false)
+	server := NewServerWithToken(fakeHostProvider{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	request.Header.Set("Authorization", "Bearer wrong")
 	response := httptest.NewRecorder()
@@ -115,9 +116,25 @@ func TestServerHostUnauthorized(t *testing.T) {
 	}
 }
 
+// TestServerHostNoTokenConfigured 验证未配置 Token 时受保护接口返回 503。
+func TestServerHostNoTokenConfigured(t *testing.T) {
+	server := NewServer(fakeHostProvider{host: Host{
+		ID:   "host-1",
+		Name: "prod-api-01",
+	}})
+	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
+	response := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
 // TestServerHealthWithoutToken 验证 Nodelet 存活接口无需 Token。
 func TestServerHealthWithoutToken(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{}, "secret", false)
+	server := NewServerWithToken(fakeHostProvider{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
 	response := httptest.NewRecorder()
 
@@ -130,10 +147,11 @@ func TestServerHealthWithoutToken(t *testing.T) {
 
 // TestServerContainers 验证 Nodelet 容器列表接口。
 func TestServerContainers(t *testing.T) {
-	server := NewServer(fakeHostProvider{containers: []Container{
+	server := NewServerWithToken(fakeHostProvider{containers: []Container{
 		{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Name: "api"},
-	}})
+	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainersPath, nil)
+	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -145,8 +163,9 @@ func TestServerContainers(t *testing.T) {
 
 // TestServerContainersUnavailable 验证容器列表读取失败时返回 503。
 func TestServerContainersUnavailable(t *testing.T) {
-	server := NewServer(fakeHostProvider{err: errors.New("docker unavailable")})
+	server := NewServerWithToken(fakeHostProvider{err: errors.New("docker unavailable")}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainersPath, nil)
+	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -158,10 +177,11 @@ func TestServerContainersUnavailable(t *testing.T) {
 
 // TestServerContainerLogs 验证 Nodelet 容器日志接口。
 func TestServerContainerLogs(t *testing.T) {
-	server := NewServer(fakeHostProvider{logs: []LogEntry{
+	server := NewServerWithToken(fakeHostProvider{logs: []LogEntry{
 		{ContainerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Stream: "stdout", Message: "started"},
-	}})
+	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainerLogsPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
+	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -173,10 +193,11 @@ func TestServerContainerLogs(t *testing.T) {
 
 // TestServerContainerLogsStream 验证 Nodelet 容器日志 SSE 接口。
 func TestServerContainerLogsStream(t *testing.T) {
-	server := NewServer(fakeHostProvider{streamLogs: []LogEntry{
+	server := NewServerWithToken(fakeHostProvider{streamLogs: []LogEntry{
 		{ContainerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Stream: "stdout", Message: "started"},
-	}})
+	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainerLogsStreamPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
+	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
@@ -194,13 +215,36 @@ func TestServerContainerLogsStream(t *testing.T) {
 
 // TestServerHostUnavailable 验证机器信息读取失败时返回 503。
 func TestServerHostUnavailable(t *testing.T) {
-	server := NewServer(fakeHostProvider{err: errors.New("docker unavailable")})
+	server := NewServerWithToken(fakeHostProvider{err: errors.New("docker unavailable")}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
+	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 
 	server.Routes().ServeHTTP(response, request)
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// TestPathTraversalRejection 验证路径穿越 payload 被拒绝。
+func TestPathTraversalRejection(t *testing.T) {
+	payloads := []struct {
+		name string
+		path string
+	}{
+		{"double dot", "/containers/../../etc/passwd/logs"},
+		{"percent-encoded double dot", "/containers/%2e%2e/%2e%2e/etc%2fpasswd/logs"},
+		{"mixed encoding", "/containers/foo%2f..%2fbar/logs"},
+		{"non-hex container ID", "/containers/../../../root/logs"},
+	}
+
+	for _, tc := range payloads {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, ok := splitContainerPath(tc.path)
+			if ok {
+				t.Fatalf("path %q should be rejected", tc.path)
+			}
+		})
 	}
 }
