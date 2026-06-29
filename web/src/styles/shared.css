@@ -241,6 +241,14 @@
   box-shadow: 0 0 0 3px rgba(250, 173, 20, 0.12);
 }
 
+.status-dot.loading {
+  background: transparent;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--primary);
+  animation: spin 0.6s linear infinite;
+  box-shadow: none;
+}
+
 .status-dot.large {
   width: 12px;
   height: 12px;
@@ -271,4 +279,63 @@
   color: var(--dead);
   font-size: var(--text-xs);
   word-break: break-all;
+}
+
+/* ---- Spinner ---- */
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner-sm {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
+
+/* ---- Skeleton (placeholder shimmer) ---- */
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--gray-100) 25%, var(--gray-50) 50%, var(--gray-100) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-line.sm  { width: 55%; }
+.skeleton-line.md  { width: 75%; }
+.skeleton-line.lg  { width: 90%; }
+
+.skeleton-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+/* loading overlay inside a positioned container */
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-8);
+  color: var(--muted);
+  font-size: var(--text-sm);
 }

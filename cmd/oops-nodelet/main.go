@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -14,6 +18,40 @@ import (
 	"oops/internal/nodelet"
 )
 
+// resolveToken 获取或自动生成配对 token。
+//
+// 首次启动时生成随机 token 并持久化到文件，后续启动直接读文件。
+// token 文件路径可通过 OOPS_NODELET_TOKEN_FILE 指定（默认 /var/lib/oops/nodelet/token）。
+func resolveToken() string {
+	tokenFile := common.EnvOrDefault("OOPS_NODELET_TOKEN_FILE", "/var/lib/oops/nodelet/token")
+
+	// 从持久化文件读取。
+	if data, err := os.ReadFile(tokenFile); err == nil && len(data) > 0 {
+		return string(data)
+	}
+
+	// 首次启动：生成并持久化。
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		logutil.Fatalf("generate token: %v", err)
+	}
+	token := hex.EncodeToString(b[:])
+
+	if err := os.MkdirAll(filepath.Dir(tokenFile), 0700); err != nil {
+		logutil.Fatalf("create token dir: %v", err)
+	}
+	if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
+		logutil.Fatalf("write token file: %v", err)
+	}
+
+	fmt.Println("==============================================")
+	fmt.Println("  Nodelet token (auto-generated, saved to disk)")
+	fmt.Println("  " + token)
+	fmt.Println("==============================================")
+
+	return token
+}
+
 // 子服务器的 nodelet 进程
 func main() {
 	logPath := common.EnvOrDefault("OOPS_NODELET_LOG_PATH", "/var/log/oops/nodelet.log")
@@ -21,11 +59,8 @@ func main() {
 
 	addr := common.EnvOrDefault("OOPS_NODELET_ADDR", ":8686")
 	publicAddress := common.EnvOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
-	token := os.Getenv("OOPS_NODELET_TOKEN")
 
-	if token == "" {
-		logutil.Fatalf("OOPS_NODELET_TOKEN must be set")
-	}
+	token := resolveToken()
 
 	dockerClient, err := docker.NewClient(publicAddress)
 	if err != nil {

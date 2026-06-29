@@ -12,7 +12,21 @@ export function StatusPill({
   );
 }
 
-export function StatusDot({ alive }: { alive: boolean }) {
+export function StatusDot({
+  alive,
+  loading = false,
+  unknown = false,
+}: {
+  alive: boolean;
+  loading?: boolean;
+  unknown?: boolean;
+}) {
+  if (loading) {
+    return <span className="status-dot loading" />;
+  }
+  if (unknown) {
+    return <span className="status-dot unknown" />;
+  }
   return (
     <span className={`status-dot ${alive ? "alive" : "dead"}`} />
   );

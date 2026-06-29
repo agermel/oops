@@ -1,0 +1,15 @@
+services:
+  nodelet:
+    image: crpi-3p45n46d3guz9zdh.cn-guangzhou.personal.cr.aliyuncs.com/agermel/oops-nodelet:latest
+    container_name: oops-nodelet
+    restart: always
+    environment:
+      - OOPS_NODELET_ADDR=:8686
+      - OOPS_NODELET_PUBLIC_ADDRESS=http://<server-ip>:8686
+      - OOPS_NODELET_LOG_PATH=/var/log/oops/nodelet.log
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./nodelet-logs:/var/log/oops
+      - ./nodelet-data:/var/lib/oops/nodelet
+    ports:
+      - "8686:8686"

@@ -90,7 +90,7 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 	}
 
 	// 查找匹配的 MCP 连接：优先按容器 ID 精确匹配，回退按类型匹配。
-	if s.mcpManager != nil && stype.IsDatabase() {
+	if s.mcpManager != nil && (stype.IsDatabase() || stype.IsMiddleware()) {
 		// Primary: match by container binding.
 		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
 		if bound != nil {
@@ -343,7 +343,7 @@ func (s *Server) handleContainerDSNGet(w http.ResponseWriter, r *http.Request) {
 	}
 	stype := docker.DetectServiceType(detail.Image)
 	var detected map[string]string
-	if stype.IsDatabase() {
+	if stype.IsDatabase() || stype.IsMiddleware() {
 		dsn := docker.ExtractDSN(stype, detail)
 		detected = dsnInfoToMap(dsn)
 	} else {

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Kafka MCP Server wrapper
+# Uses the community kafka-mcp (Python, Apache 2.0).
+# uvx downloads and caches on first run; subsequent runs are fast.
+# https://github.com/wklee610/kafka-mcp
+exec uvx kafka-mcp "$@"

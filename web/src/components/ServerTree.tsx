@@ -26,7 +26,7 @@ export function ServerTree({
   serversLoading: boolean;
   serverError: string;
   containers: Record<string, ContainerWithType[]>;
-  containersLoading: boolean;
+  containersLoading: Set<string>;
   selectedContainerID: string;
   expandedServers: Set<string>;
   onToggleServer: (nodeletID: string) => void;
@@ -99,12 +99,21 @@ export function ServerTree({
       {serverError && <div className="error-banner">{serverError}</div>}
 
       <div className="tree-list">
-        {serversLoading && servers.length > 0 && <div className="tree-loading">刷新中...</div>}
+        {serversLoading && servers.length === 0 && (
+          <div className="skeleton-block">
+            <div className="skeleton-line lg" />
+            <div className="skeleton-line md" />
+            <div className="skeleton-line md" />
+          </div>
+        )}
         {!serversLoading && servers.length === 0 && <div className="tree-empty">暂无服务器</div>}
         {servers.length > 0 &&
           servers.map((sw) => {
             const isExpanded = expandedServers.has(sw.nodelet.id);
             const conts = containers[sw.nodelet.id] || [];
+            const isContainerLoading = containersLoading.has(sw.nodelet.id);
+            const hasContainerResult = Object.prototype.hasOwnProperty.call(containers, sw.nodelet.id);
+            const isStatusUnknown = !sw.host?.available && !sw.error && !hasContainerResult;
             return (
               <div key={sw.nodelet.id} className="tree-node">
                 <button
@@ -117,15 +126,17 @@ export function ServerTree({
                     <strong>{sw.nodelet.name || sw.nodelet.id}</strong>
                     <small>{sw.nodelet.address}</small>
                   </div>
-                  <StatusDot alive={sw.host?.available ?? false} />
+                  <StatusDot alive={sw.host?.available ?? false} loading={isContainerLoading} unknown={isStatusUnknown} />
                 </button>
 
                 {sw.error && <div className="tree-node-error">{sw.error}</div>}
 
                 {isExpanded && (
                   <div className="tree-containers">
-                    {containersLoading && conts.length > 0 && <div className="tree-loading">刷新中...</div>}
-                    {!containersLoading && conts.length === 0 && !sw.error ? (
+                    {isContainerLoading && conts.length === 0 && (
+                      <div className="loading-overlay"><span className="spinner spinner-sm" /> 加载中...</div>
+                    )}
+                    {!isContainerLoading && conts.length === 0 && !sw.error ? (
                       <div className="tree-empty">暂无容器</div>
                     ) : (
                       conts.map((c) => {

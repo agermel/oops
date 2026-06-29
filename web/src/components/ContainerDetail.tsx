@@ -83,7 +83,7 @@ export function ContainerDetailView({
       {/* Tab content */}
       <div className="detail-body">
         {loading && !detail ? (
-          <div className="empty-state">正在加载容器详情</div>
+          <div className="loading-overlay"><span className="spinner" /> 加载容器详情...</div>
         ) : !detail ? (
           <div className="empty-state">从左侧选择一个容器查看详情</div>
         ) : (

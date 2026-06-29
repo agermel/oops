@@ -42,6 +42,8 @@ var dsnExtractors = map[ServiceType]dsnExtractor{
 	ServicePostgres:      {parse: extractPostgresDSN},
 	ServiceMongo:         {parse: extractMongoDSN},
 	ServiceElasticsearch: {parse: extractElasticsearchDSN},
+	ServiceNacos:         {parse: extractNacosDSN},
+	ServiceKafka:         {parse: extractKafkaDSN},
 }
 
 // ContainerInspect 对指定容器执行 docker inspect，返回详细元数据。
@@ -307,6 +309,54 @@ func extractElasticsearchDSN(env map[string]string) *DSNInfo {
 		Host: host,
 		Port: port,
 		User: user,
+		Raw:  raw,
+	}
+}
+
+var nacosAddrPattern = regexp.MustCompile(`^([^:]+):(\d+)$`)
+
+func extractNacosDSN(env map[string]string) *DSNInfo {
+	raw := firstNonEmpty(env, "NACOS_SERVER", "NACOS_SERVER_ADDR")
+	if raw == "" {
+		return nil
+	}
+
+	matches := nacosAddrPattern.FindStringSubmatch(raw)
+	if len(matches) != 3 {
+		return &DSNInfo{Raw: raw}
+	}
+
+	port, _ := strconv.Atoi(matches[2])
+	return &DSNInfo{
+		Host: matches[1],
+		Port: port,
+		Raw:  raw,
+	}
+}
+
+// kafkaURLPattern matches "PLAINTEXT://host:9092" or "host:9092".
+var kafkaURLPattern = regexp.MustCompile(`^(?:[a-zA-Z]+://)?([^:]+):(\d+)$`)
+
+func extractKafkaDSN(env map[string]string) *DSNInfo {
+	raw := firstNonEmpty(env, "KAFKA_BOOTSTRAP_SERVERS", "BOOTSTRAP_SERVERS", "KAFKA_ADVERTISED_LISTENERS")
+	if raw == "" {
+		return nil
+	}
+
+	// Kafka bootstrap servers can be comma-separated list; take the first.
+	if idx := strings.Index(raw, ","); idx >= 0 {
+		raw = raw[:idx]
+	}
+
+	matches := kafkaURLPattern.FindStringSubmatch(raw)
+	if len(matches) != 3 {
+		return &DSNInfo{Raw: raw}
+	}
+
+	port, _ := strconv.Atoi(matches[2])
+	return &DSNInfo{
+		Host: matches[1],
+		Port: port,
 		Raw:  raw,
 	}
 }

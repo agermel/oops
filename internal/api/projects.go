@@ -12,9 +12,9 @@ import (
 
 // serverWithNodelet 是项目详情中一台服务器的聚合视图。
 type serverWithNodelet struct {
-	Nodelet  config.NodeletConfig `json:"nodelet"`
-	Host     nodeletHostSummary   `json:"host"`
-	Error    string               `json:"error,omitempty"`
+	Nodelet config.NodeletConfig `json:"nodelet"`
+	Host    nodeletHostSummary   `json:"host"`
+	Error   string               `json:"error,omitempty"`
 }
 
 type nodeletHostSummary struct {
@@ -136,9 +136,6 @@ func (s *Server) listProjectServers(w http.ResponseWriter, r *http.Request, proj
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
 	results := make([]serverWithNodelet, len(p.NodeletIDs))
 	for i, nid := range p.NodeletIDs {
 		item, ok := s.findNodelet(nid)
@@ -147,18 +144,6 @@ func (s *Server) listProjectServers(w http.ResponseWriter, r *http.Request, proj
 		}
 		if ok {
 			sw.Nodelet = item
-			host, err := s.nodeletClient.Host(ctx, item.Address, item.Token)
-			if err != nil {
-				sw.Error = err.Error()
-			} else {
-				sw.Host = nodeletHostSummary{
-					Available:     true,
-					DockerVersion: host.DockerVersion,
-					Runtime:       host.Runtime,
-					NCPU:          host.NCPU,
-					MemTotal:      host.MemTotal,
-				}
-			}
 		} else {
 			sw.Error = "nodelet not found in config"
 		}
@@ -229,5 +214,3 @@ func (s *Server) handleProjectContainers(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, result)
 }
-
-

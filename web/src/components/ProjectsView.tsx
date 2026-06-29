@@ -11,7 +11,7 @@ function emptyProject(): Project {
 }
 
 function savePayload(project: Project) {
-  return { name: project.name, description: project.description || "" };
+  return { id: project.id, name: project.name, description: project.description || "" };
 }
 
 export function ProjectsView({
@@ -62,12 +62,15 @@ export function ProjectsView({
     const method = isNew ? "POST" : "PUT";
 
     try {
-      await apiRequest(url, {
+      const created = await apiRequest<Project>(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(savePayload(editing)),
       });
       closeForm();
+      if (isNew && created?.id) {
+        onSelect(created.id);
+      }
       onRefresh();
     } catch (err) {
       setFormError(getErrorMessage(err, "保存失败"));

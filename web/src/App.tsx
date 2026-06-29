@@ -78,7 +78,7 @@ export function App() {
   const [serversLoading, setServersLoading] = React.useState(false);
   const [serverError, setServerError] = React.useState("");
   const [containers, setContainers] = React.useState<Record<string, ContainerWithType[]>>({});
-  const [containersLoading, setContainersLoading] = React.useState(false);
+  const [containersLoading, setContainersLoading] = React.useState<Set<string>>(new Set());
   const [expandedServers, setExpandedServers] = React.useState<Set<string>>(new Set());
 
   // ---- 容器详情状态 ----
@@ -255,21 +255,29 @@ export function App() {
   }
 
   async function loadContainers(projectID: string, nodeletID: string) {
-    setContainersLoading(true);
+    setContainersLoading((prev) => new Set(prev).add(nodeletID));
     try {
       const data = await apiRequest<ContainerWithType[]>(serverPaths(projectID, nodeletID).containers);
       setContainers((prev) => ({ ...prev, [nodeletID]: data }));
       setServers((prev) => prev.map((sw) => (
-        sw.nodelet.id === nodeletID ? { ...sw, error: "" } : sw
+        sw.nodelet.id === nodeletID
+          ? { ...sw, host: { ...sw.host, available: true }, error: "" }
+          : sw
       )));
     } catch (err) {
       const message = getErrorMessage(err, "读取容器列表失败");
       setContainers((prev) => ({ ...prev, [nodeletID]: [] }));
       setServers((prev) => prev.map((sw) => (
-        sw.nodelet.id === nodeletID ? { ...sw, error: message } : sw
+        sw.nodelet.id === nodeletID
+          ? { ...sw, host: { ...sw.host, available: false }, error: message }
+          : sw
       )));
     } finally {
-      setContainersLoading(false);
+      setContainersLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(nodeletID);
+        return next;
+      });
     }
   }
 
@@ -560,7 +568,10 @@ export function App() {
     setExpandedServers(new Set([first.nodelet.id]));
     setSelectedNodeletID(first.nodelet.id);
     setSelectedContainerID("");
-  }, [authenticated, route.view, servers, serversLoading, expandedServers.size, selectedProjectID]);
+    if (!containers[first.nodelet.id]) {
+      loadContainers(selectedProjectID, first.nodelet.id);
+    }
+  }, [authenticated, route.view, servers, serversLoading, expandedServers.size, selectedProjectID, containers]);
 
   // ---------------- 基础 Effects ----------------
 

@@ -1,0 +1,14 @@
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /nodelet ./cmd/oops-nodelet/
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates && \
+    mkdir -p /var/log/oops /var/lib/oops/nodelet
+COPY --from=builder /nodelet /usr/local/bin/oops-nodelet
+EXPOSE 8686
+ENTRYPOINT ["oops-nodelet"]

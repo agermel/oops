@@ -46,7 +46,7 @@ export function ProjectDetailView({
   serversLoading: boolean;
   serverError: string;
   containers: Record<string, ContainerWithType[]>;
-  containersLoading: boolean;
+  containersLoading: Set<string>;
   selectedNodeletID: string;
   selectedContainerID: string;
   containerDetail?: ContainerDetailType;

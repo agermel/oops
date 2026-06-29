@@ -1,0 +1,6 @@
+#!/bin/bash
+# Nacos MCP Server wrapper
+# Uses the official nacos-group/nacos-mcp-server (Python, Apache 2.0).
+# uvx downloads and caches on first run; subsequent runs are fast.
+# https://github.com/nacos-group/nacos-mcp-server
+exec uvx --from mcp-server-nacos mcp-server-nacos "$@"
