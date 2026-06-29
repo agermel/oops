@@ -2,10 +2,11 @@ package auth
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"time"
+
+	"oops/internal/logutil"
 
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -68,7 +69,7 @@ func (s *Store) Validate(username, password string) (*User, error) {
 // Find 按用户名查找用户（不验证密码）。
 func (s *Store) Find(username string) *User {
 	if err := s.reloadIfChanged(); err != nil {
-		log.Printf("auth: reload users failed: %v", err)
+		logutil.Errorf("auth: reload users failed: %v", err)
 	}
 
 	s.mu.RLock()
