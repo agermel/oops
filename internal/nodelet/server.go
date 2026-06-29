@@ -54,13 +54,13 @@ func NewServerWithToken(provider Provider, token string) *Server {
 }
 
 // Routes 返回 Nodelet 的 HTTP 路由。
-// 所有接口统一经过: securityHeaders → rateLimit → authorize → handler
+// 受保护路由: securityHeaders → requestLogger → rateLimit → authorize → handler
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(HealthPath, securityHeaders(s.handleHealth))
-	mux.HandleFunc(HostPath, securityHeaders(s.rateLimit(s.authorize(s.handleHost))))
-	mux.HandleFunc(ContainersPath, securityHeaders(s.rateLimit(s.authorize(s.handleContainers))))
-	mux.HandleFunc("/containers/", securityHeaders(s.rateLimit(s.authorize(s.handleContainer))))
+	mux.HandleFunc(HostPath, requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleHost)))))
+	mux.HandleFunc(ContainersPath, requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleContainers)))))
+	mux.HandleFunc("/containers/", requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleContainer)))))
 	return mux
 }
 
@@ -76,6 +76,10 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 		expected := "Bearer " + s.token
 		actual := r.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
+			logutil.Warn("nodelet: authorize failed",
+				zap.String("ip", extractIP(r)),
+				zap.String("path", r.URL.Path),
+			)
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -88,11 +92,11 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := extractIP(r)
-			if !s.limiter.allow(ip, 50, 100) {
-				logutil.Warn("nodelet: rate limited",
-					zap.String("ip", ip),
-					zap.String("path", r.URL.Path),
-				)
+		if !s.limiter.allow(ip, 50, 100) {
+			logutil.Warn("nodelet: rate limited",
+				zap.String("ip", ip),
+				zap.String("path", r.URL.Path),
+			)
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
@@ -107,29 +111,39 @@ func (s *Server) Shutdown() {
 }
 
 // handleHealth 返回 Nodelet 存活状态。
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	logutil.Debug("nodelet: health check", zap.String("ip", extractIP(r)))
 	writeJSON(w, http.StatusOK, Health{Status: "ok"})
 }
 
 // handleHost 返回 Nodelet 所在机器的信息。
 func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	host, err := s.provider.Host(r)
+	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		logutil.Errorf("nodelet: host: %v", err)
 		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
+	logutil.Info("nodelet: host", zap.Int64("latencyMs", latency))
 	writeJSON(w, http.StatusOK, host)
 }
 
 // handleContainers 返回 Nodelet 所在机器上的容器列表。
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	containers, err := s.provider.Containers(r)
+	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		logutil.Errorf("nodelet: containers: %v", err)
 		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
+	logutil.Info("nodelet: containers",
+		zap.Int("count", len(containers)),
+		zap.Int64("latencyMs", latency),
+	)
 	writeJSON(w, http.StatusOK, containers)
 }
 
@@ -137,28 +151,43 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	containerID, action, ok := splitContainerPath(r.URL.Path)
 	if !ok {
+		logutil.Debug("nodelet: invalid container path", zap.String("path", r.URL.Path))
 		http.NotFound(w, r)
 		return
 	}
 
 	switch action {
 	case "inspect":
+		start := time.Now()
 		detail, err := s.provider.ContainerInspect(r, containerID)
+		latency := time.Since(start).Milliseconds()
 		if err != nil {
 			logutil.Errorf("nodelet: inspect %s: %v", containerID, err)
 			writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
+		logutil.Info("nodelet: inspect",
+			zap.String("containerID", containerID),
+			zap.Int64("latencyMs", latency),
+		)
 		writeJSON(w, http.StatusOK, detail)
 	case "logs":
+		start := time.Now()
 		logs, err := s.provider.ContainerLogs(r, containerID)
+		latency := time.Since(start).Milliseconds()
 		if err != nil {
 			logutil.Errorf("nodelet: logs %s: %v", containerID, err)
 			writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 			return
 		}
+		logutil.Info("nodelet: logs",
+			zap.String("containerID", containerID),
+			zap.Int("entryCount", len(logs)),
+			zap.Int64("latencyMs", latency),
+		)
 		writeJSON(w, http.StatusOK, logs)
 	case "logs/stream":
+		logutil.Debug("nodelet: logs/stream start", zap.String("containerID", containerID))
 		s.handleContainerLogsStream(w, r, containerID)
 	default:
 		http.NotFound(w, r)

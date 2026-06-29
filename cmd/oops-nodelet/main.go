@@ -16,6 +16,8 @@ import (
 	"oops/internal/docker"
 	"oops/internal/logutil"
 	"oops/internal/nodelet"
+
+	"go.uber.org/zap"
 )
 
 // resolveToken 获取或自动生成配对 token。
@@ -69,6 +71,18 @@ func main() {
 
 	server := nodelet.NewServerWithToken(dockerClient, token)
 	defer server.Shutdown()
+
+	tokenStatus := "configured"
+	if token == "" {
+		tokenStatus = "not configured"
+	}
+	logutil.Info("nodelet: starting",
+		zap.String("token", tokenStatus),
+		zap.String("provider", "docker"),
+		zap.String("addr", addr),
+		zap.String("publicAddress", publicAddress),
+		zap.String("logPath", logPath),
+	)
 
 	httpServer := &http.Server{
 		Addr:         addr,

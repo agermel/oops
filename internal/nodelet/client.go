@@ -10,6 +10,9 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"oops/internal/logutil"
+	"go.uber.org/zap"
 )
 
 // Client 调用远端 oops-nodelet HTTP 接口。
@@ -82,6 +85,7 @@ func (c *Client) get(ctx context.Context, address string, route string, token st
 		return err
 	}
 
+	start := time.Now()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
@@ -91,7 +95,15 @@ func (c *Client) get(ctx context.Context, address string, route string, token st
 	}
 
 	response, err := c.httpClient.Do(request)
+	latency := time.Since(start).Milliseconds()
 	if err != nil {
+		logutil.Error("nodelet client: request failed",
+			zap.String("method", "GET"),
+			zap.String("path", route),
+			zap.String("endpoint", endpoint),
+			zap.Int64("latencyMs", latency),
+			zap.Error(err),
+		)
 		return err
 	}
 	defer response.Body.Close()
@@ -102,8 +114,21 @@ func (c *Client) get(ctx context.Context, address string, route string, token st
 		if message == "" {
 			message = http.StatusText(response.StatusCode)
 		}
+		logutil.Error("nodelet client: non-2xx response",
+			zap.String("method", "GET"),
+			zap.String("path", route),
+			zap.Int("status", response.StatusCode),
+			zap.Int64("latencyMs", latency),
+		)
 		return fmt.Errorf("nodelet returned HTTP %d: %s", response.StatusCode, message)
 	}
+
+	logutil.Info("nodelet client: request",
+		zap.String("method", "GET"),
+		zap.String("path", route),
+		zap.Int("status", response.StatusCode),
+		zap.Int64("latencyMs", latency),
+	)
 	return json.NewDecoder(response.Body).Decode(out)
 }
 
@@ -114,6 +139,7 @@ func (c *Client) stream(ctx context.Context, address string, route string, token
 		return nil, err
 	}
 
+	start := time.Now()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -130,7 +156,15 @@ func (c *Client) stream(ctx context.Context, address string, route string, token
 	}
 
 	response, err := httpClient.Do(request)
+	latency := time.Since(start).Milliseconds()
 	if err != nil {
+		logutil.Error("nodelet client: stream failed",
+			zap.String("method", "GET"),
+			zap.String("path", route),
+			zap.String("endpoint", endpoint),
+			zap.Int64("latencyMs", latency),
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
@@ -141,8 +175,21 @@ func (c *Client) stream(ctx context.Context, address string, route string, token
 		if message == "" {
 			message = http.StatusText(response.StatusCode)
 		}
+		logutil.Error("nodelet client: non-2xx stream response",
+			zap.String("method", "GET"),
+			zap.String("path", route),
+			zap.Int("status", response.StatusCode),
+			zap.Int64("latencyMs", latency),
+		)
 		return nil, fmt.Errorf("nodelet returned HTTP %d: %s", response.StatusCode, message)
 	}
+
+	logutil.Debug("nodelet client: stream connected",
+		zap.String("method", "GET"),
+		zap.String("path", route),
+		zap.Int("status", response.StatusCode),
+		zap.Int64("latencyMs", latency),
+	)
 	return response.Body, nil
 }
 

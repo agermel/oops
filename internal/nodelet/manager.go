@@ -8,6 +8,9 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"oops/internal/logutil"
+	"go.uber.org/zap"
 )
 
 // NodeletConfig 保存一台 oops-nodelet 的访问信息。
@@ -84,6 +87,7 @@ func (m *NodeletManager) Find(id string) (NodeletConfig, bool) {
 			return n.toConfig(), true
 		}
 	}
+	logutil.Warn("nodelet manager: find missed", zap.String("id", id))
 	return NodeletConfig{}, false
 }
 
@@ -98,12 +102,22 @@ func (m *NodeletManager) Add(cfg NodeletConfig) error {
 
 	for _, existing := range m.config.Nodelets {
 		if existing.ID == cfg.ID {
+			logutil.Warn("nodelet manager: add skipped, already exists", zap.String("id", cfg.ID))
 			return fmt.Errorf("nodelet %q already exists", cfg.ID)
 		}
 	}
 
 	m.config.Nodelets = append(m.config.Nodelets, toPersisted(cfg))
-	return m.saveLocked()
+	if err := m.saveLocked(); err != nil {
+		return err
+	}
+	logutil.Info("nodelet manager: add",
+		zap.String("id", cfg.ID),
+		zap.String("name", cfg.Name),
+		zap.String("address", cfg.Address),
+		zap.Bool("hasToken", cfg.HasToken),
+	)
+	return nil
 }
 
 // Update 修改已有 nodelet 配置并持久化。
@@ -119,11 +133,21 @@ func (m *NodeletManager) Update(cfg NodeletConfig) error {
 		}
 	}
 	if idx < 0 {
+		logutil.Warn("nodelet manager: update skipped, not found", zap.String("id", cfg.ID))
 		return fmt.Errorf("nodelet %q not found", cfg.ID)
 	}
 
 	m.config.Nodelets[idx] = toPersisted(cfg)
-	return m.saveLocked()
+	if err := m.saveLocked(); err != nil {
+		return err
+	}
+	logutil.Info("nodelet manager: update",
+		zap.String("id", cfg.ID),
+		zap.String("name", cfg.Name),
+		zap.String("address", cfg.Address),
+		zap.Bool("hasToken", cfg.HasToken),
+	)
+	return nil
 }
 
 // Remove 删除一条 nodelet 配置并持久化。
@@ -139,11 +163,16 @@ func (m *NodeletManager) Remove(id string) error {
 		}
 	}
 	if idx < 0 {
+		logutil.Warn("nodelet manager: remove skipped, not found", zap.String("id", id))
 		return fmt.Errorf("nodelet %q not found", id)
 	}
 
 	m.config.Nodelets = append(m.config.Nodelets[:idx], m.config.Nodelets[idx+1:]...)
-	return m.saveLocked()
+	if err := m.saveLocked(); err != nil {
+		return err
+	}
+	logutil.Info("nodelet manager: remove", zap.String("id", id))
+	return nil
 }
 
 // Test 尝试连接 nodelet 的 /health 端点验证配置有效。
