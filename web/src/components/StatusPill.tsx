@@ -17,19 +17,21 @@ export function StatusDot({
   alive,
   loading = false,
   unknown = false,
+  title,
 }: {
   alive: boolean;
   loading?: boolean;
   unknown?: boolean;
+  title?: string;
 }) {
   if (loading) {
-    return <span className="status-dot loading" />;
+    return <span className="status-dot loading" title={title || "checking"} />;
   }
   if (unknown) {
-    return <span className="status-dot unknown" />;
+    return <span className="status-dot unknown" title={title || "unknown"} />;
   }
   return (
-    <span className={`status-dot ${alive ? "alive" : "dead"}`} />
+    <span className={`status-dot ${alive ? "alive" : "dead"}`} title={title || (alive ? "reachable" : "unreachable")} />
   );
 }
 

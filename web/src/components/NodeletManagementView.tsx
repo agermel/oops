@@ -1,9 +1,10 @@
 import React from "react";
-import { Plus, Trash2, Edit3, Server, Loader2 } from "lucide-react";
+import { Plus, Trash2, Edit3, Server } from "lucide-react";
 import type { NodeletConfig } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { NodeletFormModal } from "./NodeletFormModal";
 import { Button } from "./ui/Button";
+import { StatusDot } from "./StatusPill";
 
 type NodeletRow = NodeletConfig & {
   status?: "ok" | "failed" | "checking";
@@ -24,7 +25,7 @@ export function NodeletManagementView() {
     setError("");
     try {
       const configs = await apiRequest<NodeletConfig[]>("/api/nodelets");
-      setNodelets(configs.map((c) => ({ ...c })));
+      setNodelets(configs.map((c) => ({ ...c, status: "checking" })));
       // 异步检测每个 nodelet 连通性
       for (const c of configs) {
         checkStatus(c);
@@ -63,8 +64,16 @@ export function NodeletManagementView() {
     }
   }
 
+  const nodeletsRef = React.useRef(nodelets);
+  nodeletsRef.current = nodelets;
+
+  // 首次加载 + 每 30s keepalive 检测连通性。
   React.useEffect(() => {
     fetchNodelets();
+    const timer = setInterval(() => {
+      for (const n of nodeletsRef.current) checkStatus(n);
+    }, 600_000);
+    return () => clearInterval(timer);
   }, []);
 
   function openAdd() {
@@ -102,7 +111,7 @@ export function NodeletManagementView() {
             <span>Servers</span>
           </h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ color: "var(--clr-text-muted)", fontSize: 13 }}>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>
               {nodelets.length} server{nodelets.length !== 1 ? "s" : ""}
             </span>
             <Button size="sm" onClick={openAdd}>
@@ -122,7 +131,7 @@ export function NodeletManagementView() {
       ) : nodelets.length === 0 ? (
         <div className="empty-state">
           <p>No servers configured</p>
-          <p style={{ color: "var(--clr-text-muted)", marginTop: 4 }}>
+          <p style={{ color: "var(--muted)", marginTop: 4 }}>
             Add a nodelet server to start monitoring containers.
           </p>
         </div>
@@ -148,13 +157,13 @@ export function NodeletManagementView() {
                   </td>
                   <td>
                     {n.status === "checking" ? (
-                      <Loader2 size={14} className="spinner-sm" style={{ color: "var(--clr-text-muted)" }} />
+                      <StatusDot alive={false} loading />
                     ) : n.status === "ok" ? (
-                      <span className="status-dot" style={{ backgroundColor: "var(--clr-success)" }} title="reachable" />
+                      <StatusDot alive />
                     ) : n.status === "failed" ? (
-                      <span className="status-dot" style={{ backgroundColor: "var(--clr-error)", cursor: "help" }} title={n.statusError || "unreachable"} />
+                      <StatusDot alive={false} title={n.statusError || "unreachable"} />
                     ) : (
-                      <span className="status-dot" style={{ backgroundColor: "var(--clr-text-muted)" }} title="unknown" />
+                      <StatusDot alive={false} unknown />
                     )}
                   </td>
                   <td>

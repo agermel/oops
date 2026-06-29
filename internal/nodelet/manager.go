@@ -146,23 +146,36 @@ func (m *NodeletManager) Remove(id string) error {
 }
 
 // Test 尝试连接 nodelet 的 /health 端点验证配置有效。
+// 最多重试 3 次，每次间隔递增（1s / 2s / 3s）。
 func (m *NodeletManager) Test(cfg NodeletConfig) error {
-	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.Address+"/health", nil)
-	if err != nil {
-		return fmt.Errorf("bad address: %w", err)
+	const maxRetries = 3
+	client := &http.Client{Timeout: 6 * time.Second}
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.Address+"/health", nil)
+		if err != nil {
+			return fmt.Errorf("bad address: %w", err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		lastErr = fmt.Errorf("health returned %d", resp.StatusCode)
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("health returned %d", resp.StatusCode)
-	}
-	return nil
+	return fmt.Errorf("connect (×%d): %w", maxRetries, lastErr)
 }
 
 // --- internal ---

@@ -266,6 +266,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	// ---- Project Servers ----
 	mux.HandleFunc("GET /api/projects/{pid}/servers", authed(s.handleProjectServersList))
 	mux.HandleFunc("POST /api/projects/{pid}/servers", authed(s.handleProjectServersAdd))
+	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}", authed(s.handleProjectServersRemove))
 
 	// ---- Project Containers ----
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers", authed(s.handleProjectContainers))
@@ -1029,6 +1030,7 @@ func (s *Server) handleNodeletUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNodeletRemove handles DELETE /api/nodelets/{id}.
+// 同时从所有引用了该 nodelet 的项目中移除。
 func (s *Server) handleNodeletRemove(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if s.nodeletManager == nil {
@@ -1038,6 +1040,32 @@ func (s *Server) handleNodeletRemove(w http.ResponseWriter, r *http.Request) {
 	if err := s.nodeletManager.Remove(id); err != nil {
 		logutil.Error("api: nodelet remove", zap.Error(err))
 		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	// 级联清理项目引用。
+	if s.projectStore != nil {
+		for _, p := range s.projectStore.List() {
+			for _, nid := range p.NodeletIDs {
+				if nid == id {
+					_ = s.projectStore.RemoveNodelet(p.ID, id)
+					break
+				}
+			}
+		}
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleProjectServersRemove handles DELETE /api/projects/{pid}/servers/{sid}.
+func (s *Server) handleProjectServersRemove(w http.ResponseWriter, r *http.Request) {
+	pid := r.PathValue("pid")
+	sid := r.PathValue("sid")
+	if s.projectStore == nil {
+		writeJSONError(w, "not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.projectStore.RemoveNodelet(pid, sid); err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})

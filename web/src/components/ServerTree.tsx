@@ -1,6 +1,6 @@
-import { Server, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { Server, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import React from "react";
-import type { ServerWithNodelet, ContainerWithType, NodeletItem } from "../types";
+import type { ServerWithNodelet, ContainerWithType, NodeletConfig } from "../types";
 import { serviceTypeIcons, serviceLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { projectPaths } from "../lib/paths";
@@ -34,36 +34,38 @@ export function ServerTree({
   onServersChanged: () => void;
 }) {
   const [showAddModal, setShowAddModal] = React.useState(false);
-  const [nodelets, setNodelets] = React.useState<NodeletItem[]>([]);
+  const [nodelets, setNodelets] = React.useState<NodeletConfig[]>([]);
   const [nodeletsLoading, setNodeletsLoading] = React.useState(false);
   const [addError, setAddError] = React.useState("");
   const [addingID, setAddingID] = React.useState("");
-  // 缓存 nodelet 列表，避免每次打开弹窗都重新请求
-  const nodeletsCacheRef = React.useRef<NodeletItem[] | null>(null);
 
   const paths = projectPaths(projectId);
 
   async function openAddModal() {
     setShowAddModal(true);
     setAddError("");
-    if (nodeletsCacheRef.current) {
-      setNodelets(nodeletsCacheRef.current);
-    } else {
-      setNodeletsLoading(true);
-      try {
-        const data = await apiRequest<NodeletItem[]>("/api/nodelets/status");
-        nodeletsCacheRef.current = data;
-        setNodelets(data);
-      } catch (err) {
-        setAddError(getErrorMessage(err, "读取服务器列表失败"));
-      } finally {
-        setNodeletsLoading(false);
-      }
+    setNodeletsLoading(true);
+    try {
+      setNodelets(await apiRequest<NodeletConfig[]>("/api/nodelets"));
+    } catch (err) {
+      setAddError(getErrorMessage(err, "读取服务器列表失败"));
+    } finally {
+      setNodeletsLoading(false);
     }
   }
 
   function closeAddModal() {
     setShowAddModal(false);
+  }
+
+  async function removeServer(nodeletID: string) {
+    if (!window.confirm(`确定要从项目中移除服务器吗？`)) return;
+    try {
+      await apiRequest(`${paths.servers}/${encodeURIComponent(nodeletID)}`, { method: "DELETE" });
+      onServersChanged();
+    } catch (err) {
+      alert(getErrorMessage(err, "移除失败"));
+    }
   }
 
   async function addServer(nodeletID: string) {
@@ -85,7 +87,7 @@ export function ServerTree({
   }
 
   const existingIDs = new Set(servers.map((s) => s.nodelet.id));
-  const availableNodelets = nodelets.filter((n) => !existingIDs.has(n.nodelet.id));
+  const availableNodelets = nodelets.filter((n) => !existingIDs.has(n.id));
   return (
     <aside className="server-tree">
       <div className="tree-header">
@@ -116,18 +118,24 @@ export function ServerTree({
             const isStatusUnknown = !sw.host?.available && !sw.error && !hasContainerResult;
             return (
               <div key={sw.nodelet.id} className="tree-node">
-                <button
-                  className={`tree-server ${sw.host?.available ? "alive" : "dead"}`}
-                  onClick={() => onToggleServer(sw.nodelet.id)}
-                >
-                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  <Server size={15} />
-                  <div className="tree-server-info">
-                    <strong>{sw.nodelet.name || sw.nodelet.id}</strong>
-                    <small>{sw.nodelet.address}</small>
-                  </div>
-                  <StatusDot alive={sw.host?.available ?? false} loading={isContainerLoading} unknown={isStatusUnknown} />
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                  <button
+                    className={`tree-server ${sw.host?.available ? "alive" : "dead"}`}
+                    onClick={() => onToggleServer(sw.nodelet.id)}
+                    style={{ flex: 1 }}
+                  >
+                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    <Server size={15} />
+                    <div className="tree-server-info">
+                      <strong>{sw.nodelet.name || sw.nodelet.id}</strong>
+                      <small>{sw.nodelet.address}</small>
+                    </div>
+                    <StatusDot alive={sw.host?.available ?? false} loading={isContainerLoading} unknown={isStatusUnknown} />
+                  </button>
+                  <Button size="xs" variant="ghost" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
+                    <Trash2 size={12} />
+                  </Button>
+                </div>
 
                 {sw.error && <div className="tree-node-error">{sw.error}</div>}
 
@@ -173,20 +181,17 @@ export function ServerTree({
           ) : (
             <ul className="nodelet-pick-list">
               {availableNodelets.map((n) => (
-                <li key={n.nodelet.id}>
+                <li key={n.id}>
                   <div className="nodelet-pick-info">
-                    <strong>{n.nodelet.name || n.nodelet.id}</strong>
-                    <small>{n.nodelet.address}</small>
-                    {n.host?.available !== undefined && (
-                      <StatusDot alive={n.host.available} />
-                    )}
+                    <strong>{n.name || n.id}</strong>
+                    <small>{n.address}</small>
                   </div>
                   <Button
                     size="sm"
-                    disabled={addingID === n.nodelet.id}
-                    onClick={() => addServer(n.nodelet.id)}
+                    disabled={addingID === n.id}
+                    onClick={() => addServer(n.id)}
                   >
-                    {addingID === n.nodelet.id ? "添加中..." : "添加"}
+                    {addingID === n.id ? "添加中..." : "添加"}
                   </Button>
                 </li>
               ))}
