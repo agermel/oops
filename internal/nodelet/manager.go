@@ -1,0 +1,173 @@
+package nodelet
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"sync"
+	"time"
+)
+
+// NodeletConfig 保存一台 oops-nodelet 的访问信息。
+// Token 在 JSON 响应中永远不暴露。
+type NodeletConfig struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Token   string `json:"-"`
+}
+
+// nodeletConfigFile 是 manager 持久化文件的顶层结构。
+type nodeletConfigFile struct {
+	Nodelets []NodeletConfig `json:"nodelets"`
+}
+
+// NodeletManager 管理 nodelet 配置的 CRUD，持久化到 JSON 文件。
+type NodeletManager struct {
+	mu         sync.Mutex
+	configPath string
+	config     nodeletConfigFile
+}
+
+// NewNodeletManager 加载 JSON 文件，不存在时初始化为空列表。
+// configPath 为空时创建纯内存 manager（测试用途）。
+func NewNodeletManager(configPath string) (*NodeletManager, error) {
+	m := &NodeletManager{configPath: configPath}
+	if configPath == "" {
+		m.config = nodeletConfigFile{Nodelets: []NodeletConfig{}}
+		return m, nil
+	}
+	if err := m.load(); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("load nodelets: %w", err)
+		}
+		m.config = nodeletConfigFile{Nodelets: []NodeletConfig{}}
+	}
+	return m, nil
+}
+
+// List 返回所有 nodelet 配置的副本。
+func (m *NodeletManager) List() []NodeletConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]NodeletConfig, len(m.config.Nodelets))
+	copy(out, m.config.Nodelets)
+	return out
+}
+
+// Find 按 ID 查找 nodelet。
+func (m *NodeletManager) Find(id string) (NodeletConfig, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, n := range m.config.Nodelets {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return NodeletConfig{}, false
+}
+
+// Add 新增一条 nodelet 配置并持久化。
+func (m *NodeletManager) Add(cfg NodeletConfig) error {
+	if cfg.ID == "" {
+		return fmt.Errorf("id is required")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, existing := range m.config.Nodelets {
+		if existing.ID == cfg.ID {
+			return fmt.Errorf("nodelet %q already exists", cfg.ID)
+		}
+	}
+
+	m.config.Nodelets = append(m.config.Nodelets, cfg)
+	return m.saveLocked()
+}
+
+// Update 修改已有 nodelet 配置并持久化。
+func (m *NodeletManager) Update(cfg NodeletConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	idx := -1
+	for i, existing := range m.config.Nodelets {
+		if existing.ID == cfg.ID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("nodelet %q not found", cfg.ID)
+	}
+
+	m.config.Nodelets[idx] = cfg
+	return m.saveLocked()
+}
+
+// Remove 删除一条 nodelet 配置并持久化。
+func (m *NodeletManager) Remove(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	idx := -1
+	for i, existing := range m.config.Nodelets {
+		if existing.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("nodelet %q not found", id)
+	}
+
+	m.config.Nodelets = append(m.config.Nodelets[:idx], m.config.Nodelets[idx+1:]...)
+	return m.saveLocked()
+}
+
+// Test 尝试连接 nodelet 的 /health 端点验证配置有效。
+func (m *NodeletManager) Test(cfg NodeletConfig) error {
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.Address+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("bad address: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// --- internal ---
+
+func (m *NodeletManager) load() error {
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &m.config)
+}
+
+func (m *NodeletManager) saveLocked() error {
+	if m.configPath == "" {
+		return nil // 纯内存模式
+	}
+	data, err := json.MarshalIndent(m.config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	if err := os.WriteFile(m.configPath, data, 0600); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
+}

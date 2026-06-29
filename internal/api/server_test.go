@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"oops/internal/auth"
-	"oops/internal/config"
 	"oops/internal/nodelet"
 )
 
@@ -59,11 +58,13 @@ func TestNodeletRoutes(t *testing.T) {
 	}
 
 	client := &fakeNodeletClient{}
+	nm, _ := nodelet.NewNodeletManager("")
+	_ = nm.Add(nodelet.NodeletConfig{ID: "local", Address: "http://nodelet", Token: "secret"})
 	server := New(Options{
-		Nodelets:      []config.NodeletConfig{{ID: "local", Address: "http://nodelet", Token: "secret"}},
-		NodeletClient: client,
-		UserStore:     userStore,
-		TokenService:  tokenService,
+		NodeletManager: nm,
+		NodeletClient:  client,
+		UserStore:      userStore,
+		TokenService:   tokenService,
 	})
 
 	for _, tt := range tests {
@@ -103,15 +104,13 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 	userStore, tokenService, jwtToken := testAuthSetup(t)
 
 	client := &fakeNodeletClient{}
+	nm, _ := nodelet.NewNodeletManager("")
+	_ = nm.Add(nodelet.NodeletConfig{ID: "local", Address: "http://nodelet", Token: "secret"})
 	server := New(Options{
-		Nodelets: []config.NodeletConfig{{
-			ID:      "local",
-			Address: "http://nodelet",
-			Token:   "secret",
-		}},
-		NodeletClient: client,
-		UserStore:     userStore,
-		TokenService:  tokenService,
+		NodeletManager: nm,
+		NodeletClient:  client,
+		UserStore:      userStore,
+		TokenService:   tokenService,
 	})
 	request := httptest.NewRequest(http.MethodGet, "/api/nodelets/local/containers/container-1/logs/stream?tail=20", nil)
 	request.AddCookie(&http.Cookie{Name: "jwt", Value: jwtToken})

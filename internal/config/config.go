@@ -24,7 +24,6 @@ const (
 // Config 是应用启动或刷新时读取到的完整配置。
 type Config struct {
 	Env              string                  `mapstructure:"env"`
-	Nodelets         []NodeletConfig         `mapstructure:"nodelets"`
 	ExtraConnections []connection.Connection `mapstructure:"connections"`
 	MySQL            MySQLConfig             `mapstructure:"mysql"`
 	Redis            RedisConfig             `mapstructure:"redis"`
@@ -33,14 +32,6 @@ type Config struct {
 	OTel             OTelConfig              `mapstructure:"otel"`
 	LLM              LLMConfig               `mapstructure:"llm"`
 	MCP              MCPConfig               `mapstructure:"mcp"`
-}
-
-// NodeletConfig 保存一台 oops-nodelet 的访问地址。
-type NodeletConfig struct {
-	ID      string `mapstructure:"id" json:"id"`
-	Name    string `mapstructure:"name" json:"name"`
-	Address string `mapstructure:"address" json:"address"`
-	Token   string `mapstructure:"token" json:"-"`
 }
 
 // MySQLConfig 保存 MySQL 连接配置。

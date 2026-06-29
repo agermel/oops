@@ -20,6 +20,7 @@ import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
 import { ProjectsView } from "./components/ProjectsView";
 import { ProjectDetailView } from "./components/ProjectDetailView";
+import { NodeletManagementView } from "./components/NodeletManagementView";
 import { ChatView } from "./components/ChatView";
 import { MCPView } from "./components/MCPView";
 import { ToolsView } from "./components/ToolsView";
@@ -48,9 +49,9 @@ export function App() {
   // ---- 路由（始终调用，即使未登录也解析路径） ----
   const { route, navigate, replace } = usePathRouter();
 
-  const activeNav = route.view === "console" ? "console" : "projects";
+  const activeNav = route.view === "servers" ? "servers" : route.view === "console" ? "console" : "projects";
   const selectedProjectID =
-    route.view === "projects" || route.view === "console"
+    route.view === "projects" || route.view === "servers" || route.view === "console"
       ? ""
       : route.projectId || "";
   const projectSection: string =
@@ -617,7 +618,8 @@ export function App() {
         跳到主内容
       </a>
       <Header activeNav={activeNav} onNavChange={(id: string) => {
-        if (id === "console") navigate({ view: "console" });
+        if (id === "servers") navigate({ view: "servers" });
+        else if (id === "console") navigate({ view: "console" });
         // 全局视图下的 chat/projects 都导航到项目列表
         else navigate({ view: "projects" });
       }} />
@@ -630,13 +632,21 @@ export function App() {
           isProjectRoute
             ? goToProjectSection
             : (id: string) => {
-                if (id === "console") navigate({ view: "console" });
+                if (id === "servers") navigate({ view: "servers" });
+        else if (id === "console") navigate({ view: "console" });
                 else if (id === "projects") navigate({ view: "projects" });
               }
         }
       />
 
       <main id="main-content" className="content">
+		{route.view === "servers" && (
+		  <section className="workspace-card">
+		    <NodeletManagementView />
+		  </section>
+		)}
+
+
         {activeNav === "console" && !selectedProject && (
           <section className="workspace-card">
             <ConsolePanel />

@@ -1,10 +1,7 @@
 env: "prod"
 
-nodelets:
-  - id: "local"
-    name: "本机"
-    address: "http://127.0.0.1:8686"
-    token: "change-me"
+# nodelet 配置请编辑 config/nodelets.json，格式:
+# { "nodelets": [{ "id": "local", "name": "本机", "address": "http://127.0.0.1:8686", "token": "..." }] }
 
 connections:
   - id: "elasticsearch"

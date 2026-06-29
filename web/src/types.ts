@@ -30,6 +30,7 @@ export type NodeletConfig = {
   id: string;
   name: string;
   address: string;
+  token?: string;
 };
 
 export type NodeletHostSummary = {
@@ -220,6 +221,7 @@ export type NodeletItem = ServerWithNodelet;
 
 export const navigation = [
   { id: "projects", label: "项目", icon: FolderKanban },
+  { id: "servers", label: "服务器", icon: Server },
   { id: "console", label: "控制台", icon: Terminal },
 ] as const;
 

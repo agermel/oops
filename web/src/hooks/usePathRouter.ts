@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 
 export type Route =
   | { view: "projects" }
+  | { view: "servers" }
   | { view: "console" }
   | { view: "project-overview"; projectId: string }
   | { view: "project-mcp"; projectId: string }
@@ -16,6 +17,11 @@ export type Route =
 export function parsePathRoute(pathname: string): Route {
   // 去掉可能的 base prefix（如 /oops），然后按 / 拆分
   const segs = pathname.split("/").filter(Boolean);
+
+  // /servers
+  if (segs[0] === "servers") {
+    return { view: "servers" };
+  }
 
   // /console
   if (segs[0] === "console") {
@@ -67,6 +73,8 @@ export function routeToPath(route: Route): string {
   switch (route.view) {
     case "projects":
       return "/";
+    case "servers":
+      return "/servers";
     case "console":
       return "/console";
     case "project-overview":

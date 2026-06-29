@@ -46,31 +46,31 @@ type NodeletClient interface {
 
 // Options 保存中心端 API 服务依赖。
 type Options struct {
-	Connections   []connection.Connection
-	Nodelets      []config.NodeletConfig
-	NodeletClient NodeletClient
-	Registry      *connection.Registry
-	LLMEnabled    bool
-	LLMConfig     config.LLMConfig
-	UserStore     *auth.Store
-	TokenService  *auth.TokenService
-	TokenTTL      time.Duration
+	Connections    []connection.Connection
+	NodeletManager *nodelet.NodeletManager
+	NodeletClient  NodeletClient
+	Registry       *connection.Registry
+	LLMEnabled     bool
+	LLMConfig      config.LLMConfig
+	UserStore      *auth.Store
+	TokenService   *auth.TokenService
+	TokenTTL       time.Duration
 }
 
 // Server 保存中心端 API 服务运行所需的配置和依赖。
 type Server struct {
-	connections   []connection.Connection
-	nodelets      []config.NodeletConfig
-	nodeletClient NodeletClient
-	registry      *connection.Registry
-	llmClient     *llm.Client
-	mcpManager    *mcp.Manager
-	projectStore  *config.ProjectStore
-	dsnStore      *config.ContainerDSNStore
-	sessionStore  *llm.SessionStore
-	UserStore     *auth.Store
-	TokenService  *auth.TokenService
-	tokenTTL      time.Duration
+	connections    []connection.Connection
+	nodeletManager *nodelet.NodeletManager
+	nodeletClient  NodeletClient
+	registry       *connection.Registry
+	llmClient      *llm.Client
+	mcpManager     *mcp.Manager
+	projectStore   *config.ProjectStore
+	dsnStore       *config.ContainerDSNStore
+	sessionStore   *llm.SessionStore
+	UserStore      *auth.Store
+	TokenService   *auth.TokenService
+	tokenTTL       time.Duration
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -82,7 +82,7 @@ type statusItem struct {
 
 // nodeletItem 是 GUI 机器列表接口返回的一台 Nodelet 状态。
 type nodeletItem struct {
-	Nodelet   config.NodeletConfig `json:"nodelet"`
+	Nodelet   nodelet.NodeletConfig `json:"nodelet"`
 	Host      nodelet.Host         `json:"host"`
 	Available bool                 `json:"available"`
 	Error     string               `json:"error,omitempty"`
@@ -90,10 +90,16 @@ type nodeletItem struct {
 
 // NewFromConfig 使用配置创建中心端 API 服务。
 func NewFromConfig(cfg config.Config) *Server {
+	nm, err := nodelet.NewNodeletManager("config/nodelets.json")
+	if err != nil {
+		logutil.Error("nodelet: manager", zap.Error(err))
+		nm, _ = nodelet.NewNodeletManager("/dev/null") // fallback: empty
+	}
+
 	s := New(Options{
-		Connections:   cfg.Connections(),
-		Nodelets:      cfg.Nodelets,
-		NodeletClient: nodelet.NewClient(nil),
+		Connections:    cfg.Connections(),
+		NodeletManager: nm,
+		NodeletClient:  nodelet.NewClient(nil),
 		Registry:      checker.NewDefaultRegistry(),
 		LLMEnabled:    cfg.LLM.Enabled,
 		LLMConfig:     cfg.LLM,
@@ -148,9 +154,9 @@ func New(options Options) *Server {
 	}
 
 	s := &Server{
-		connections:   options.Connections,
-		nodelets:      options.Nodelets,
-		nodeletClient: options.NodeletClient,
+		connections:    options.Connections,
+		nodeletManager: options.NodeletManager,
+		nodeletClient:  options.NodeletClient,
 		registry:      options.Registry,
 		sessionStore:  llm.NewSessionStore(),
 		UserStore:     options.UserStore,
@@ -211,6 +217,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 
 	// ---- Nodelets ----
 	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodelets))
+	mux.HandleFunc("POST /api/nodelets", authed(s.handleNodeletAdd))
+	mux.HandleFunc("PUT /api/nodelets/{id}", authed(s.handleNodeletUpdate))
+	mux.HandleFunc("DELETE /api/nodelets/{id}", authed(s.handleNodeletRemove))
+	mux.HandleFunc("POST /api/nodelets/test", authed(s.handleNodeletTest))
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers", authed(s.handleNodeletContainers))
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs", authed(s.handleNodeletLogs))
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs/stream", authed(s.handleNodeletLogsStreamRoute))
@@ -392,11 +402,12 @@ func (s *Server) handleNodelets(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	results := make([]nodeletItem, len(s.nodelets))
+	nodelets := s.nodeletManager.List()
+	results := make([]nodeletItem, len(nodelets))
 	var wg sync.WaitGroup
-	for index, item := range s.nodelets {
+	for index, item := range nodelets {
 		wg.Add(1)
-		go func(index int, item config.NodeletConfig) {
+		go func(index int, item nodelet.NodeletConfig) {
 			defer wg.Done()
 
 			checkCtx, checkCancel := context.WithTimeout(ctx, 6*time.Second)
@@ -475,7 +486,7 @@ func (s *Server) handleNodeletLogsStreamRoute(w http.ResponseWriter, r *http.Req
 }
 
 // handleNodeletLogsStream 透传远端 Nodelet 的容器日志 SSE。
-func (s *Server) handleNodeletLogsStream(w http.ResponseWriter, r *http.Request, item config.NodeletConfig, containerID string) {
+func (s *Server) handleNodeletLogsStream(w http.ResponseWriter, r *http.Request, item nodelet.NodeletConfig, containerID string) {
 	stream, err := s.nodeletClient.ContainerLogsStream(r.Context(), item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 	if err != nil {
 		sanitizedError(w, "nodelet logs stream", err, http.StatusServiceUnavailable)
@@ -515,13 +526,11 @@ func copyAndFlush(w io.Writer, flusher http.Flusher, reader io.Reader) {
 }
 
 // findNodelet 按配置 ID 查找 Nodelet。
-func (s *Server) findNodelet(id string) (config.NodeletConfig, bool) {
-	for _, item := range s.nodelets {
-		if item.ID == id {
-			return item, true
-		}
+func (s *Server) findNodelet(id string) (nodelet.NodeletConfig, bool) {
+	if s.nodeletManager == nil {
+		return nodelet.NodeletConfig{}, false
 	}
-	return config.NodeletConfig{}, false
+	return s.nodeletManager.Find(id)
 }
 
 // chatRequest 是 POST /api/chat 的请求体。
@@ -629,11 +638,12 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 
 // ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。
 func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error) {
-	results := make([]llm.NodeletSummary, len(s.nodelets))
+	nodelets := s.nodeletManager.List()
+	results := make([]llm.NodeletSummary, len(nodelets))
 	var wg sync.WaitGroup
-	for index, item := range s.nodelets {
+	for index, item := range nodelets {
 		wg.Add(1)
-		go func(index int, item config.NodeletConfig) {
+		go func(index int, item nodelet.NodeletConfig) {
 			defer wg.Done()
 
 			checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
@@ -965,6 +975,81 @@ func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok", "output": output})
+}
+
+// handleNodeletAdd handles POST /api/nodelets.
+func (s *Server) handleNodeletAdd(w http.ResponseWriter, r *http.Request) {
+	var cfg nodelet.NodeletConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if s.nodeletManager == nil {
+		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.nodeletManager.Add(cfg); err != nil {
+		logutil.Error("api: nodelet add", zap.Error(err))
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleNodeletUpdate handles PUT /api/nodelets/{id}.
+func (s *Server) handleNodeletUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var cfg nodelet.NodeletConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	cfg.ID = id
+	if s.nodeletManager == nil {
+		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.nodeletManager.Update(cfg); err != nil {
+		logutil.Error("api: nodelet update", zap.Error(err))
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleNodeletRemove handles DELETE /api/nodelets/{id}.
+func (s *Server) handleNodeletRemove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.nodeletManager == nil {
+		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.nodeletManager.Remove(id); err != nil {
+		logutil.Error("api: nodelet remove", zap.Error(err))
+		writeJSONError(w, err.Error(), mcpErrorStatus(err))
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleNodeletTest handles POST /api/nodelets/test.
+func (s *Server) handleNodeletTest(w http.ResponseWriter, r *http.Request) {
+	var cfg nodelet.NodeletConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if s.nodeletManager == nil {
+		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.nodeletManager.Test(cfg); err != nil {
+		logutil.Error("api: nodelet test", zap.Error(err))
+		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // writeJSON 写入 JSON 响应。

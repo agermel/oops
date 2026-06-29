@@ -8,11 +8,12 @@ import (
 
 	"oops/internal/config"
 	"oops/internal/docker"
+	"oops/internal/nodelet"
 )
 
 // serverWithNodelet 是项目详情中一台服务器的聚合视图。
 type serverWithNodelet struct {
-	Nodelet config.NodeletConfig `json:"nodelet"`
+	Nodelet nodelet.NodeletConfig `json:"nodelet"`
 	Host    nodeletHostSummary   `json:"host"`
 	Error   string               `json:"error,omitempty"`
 }
@@ -140,7 +141,7 @@ func (s *Server) listProjectServers(w http.ResponseWriter, r *http.Request, proj
 	for i, nid := range p.NodeletIDs {
 		item, ok := s.findNodelet(nid)
 		sw := serverWithNodelet{
-			Nodelet: config.NodeletConfig{ID: nid, Name: nid},
+			Nodelet: nodelet.NodeletConfig{ID: nid, Name: nid},
 		}
 		if ok {
 			sw.Nodelet = item

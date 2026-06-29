@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,22 +17,6 @@ func TestLoadExample(t *testing.T) {
 	}
 	if len(cfg.ExtraConnections) != 3 {
 		t.Fatalf("ExtraConnections length = %d, want 3", len(cfg.ExtraConnections))
-	}
-	if len(cfg.Nodelets) != 1 {
-		t.Fatalf("Nodelets length = %d, want 1", len(cfg.Nodelets))
-	}
-	if cfg.Nodelets[0].Address != "http://127.0.0.1:8686" {
-		t.Fatalf("Nodelets[0].Address = %q, want %q", cfg.Nodelets[0].Address, "http://127.0.0.1:8686")
-	}
-	if cfg.Nodelets[0].Token != "change-me" {
-		t.Fatalf("Nodelets[0].Token = %q, want %q", cfg.Nodelets[0].Token, "change-me")
-	}
-	data, err := json.Marshal(cfg.Nodelets[0])
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	if string(data) != `{"id":"local","name":"本机","address":"http://127.0.0.1:8686"}` {
-		t.Fatalf("nodelet JSON = %s", data)
 	}
 	if cfg.ExtraConnections[0].ID != "elasticsearch" {
 		t.Fatalf("ExtraConnections[0].ID = %q, want %q", cfg.ExtraConnections[0].ID, "elasticsearch")
@@ -84,8 +67,5 @@ nodelets:
 	}
 	if cfg.Env != "test" {
 		t.Fatalf("Env = %q, want %q", cfg.Env, "test")
-	}
-	if len(cfg.Nodelets) != 1 || cfg.Nodelets[0].ID != "custom" {
-		t.Fatalf("Nodelets = %#v", cfg.Nodelets)
 	}
 }
