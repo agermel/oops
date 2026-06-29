@@ -1,10 +1,13 @@
 import React from "react";
-import { Sparkles, Send, Bot, User, Trash2 } from "lucide-react";
-import type { ChatExchange, StepEvent } from "../types";
+import { Sparkles, Send, Bot, User, Trash2, Plus, MessageSquare } from "lucide-react";
+import type { ChatExchange, StepEvent, SessionInfo } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
 import { FormInput } from "./ui/FormInput";
 import { Button } from "./ui/Button";
+
+// 工具事件类型（展示用），不含 answer/error/session 等终端事件。
+const displayEventTypes = new Set(["thinking", "tool_call", "tool_result"]);
 
 function withToolNames(steps: StepEvent[]): StepEvent[] {
   const names = new Map<string, string>();
@@ -30,9 +33,12 @@ export function ChatView({
   chatInput,
   chatLoading,
   chatError,
+  sessionId,
+  sessions,
   onInputChange,
   onSend,
   onClear,
+  onNewChat,
 }: {
   chatExchanges: ChatExchange[];
   currentSteps: StepEvent[];
@@ -40,9 +46,12 @@ export function ChatView({
   chatInput: string;
   chatLoading: boolean;
   chatError: string;
+  sessionId: string;
+  sessions: SessionInfo[];
   onInputChange: (value: string) => void;
   onSend: () => void;
   onClear: () => void;
+  onNewChat: () => void;
 }) {
   // 流式传输中是否已出现 error，用于停止工具调用的 running 动画。
   const streamError = React.useMemo(
@@ -50,9 +59,9 @@ export function ChatView({
     [currentSteps],
   );
 
-  // 预处理当前步骤，注入 toolName 并过滤掉 answer/error。
+  // 预处理当前步骤，注入 toolName 并过滤掉 answer/error/session。
   const visibleCurrentSteps = React.useMemo(
-    () => withToolNames(currentSteps.filter((s) => s.type !== "answer" && s.type !== "error")),
+    () => withToolNames(currentSteps.filter((s) => displayEventTypes.has(s.type))),
     [currentSteps],
   );
 
@@ -61,23 +70,42 @@ export function ChatView({
     () =>
       chatExchanges.map((ex) => ({
         ...ex,
-        displaySteps: withToolNames(ex.steps.filter((s) => s.type !== "answer" && s.type !== "error")),
+        displaySteps: withToolNames(ex.steps.filter((s) => displayEventTypes.has(s.type))),
       })),
     [chatExchanges],
   );
 
   const hasContent = chatExchanges.length > 0 || currentSteps.length > 0;
+  const otherSessions = sessions.filter((s) => s.id !== sessionId);
 
   return (
     <section className="chat-panel" id="chat-section">
       <div className="chat-header">
         <span><Sparkles size={18} /> 智能助手</span>
-        {hasContent && (
-          <button onClick={onClear} title="清空对话" aria-label="清空对话">
-            <Trash2 size={16} />
-          </button>
-        )}
+        <span className="chat-header-actions">
+          {hasContent && (
+            <>
+              <button onClick={onNewChat} title="新建对话" aria-label="新建对话">
+                <Plus size={16} />
+              </button>
+              <button onClick={onClear} title="清空当前对话" aria-label="清空当前对话">
+                <Trash2 size={16} />
+              </button>
+            </>
+          )}
+        </span>
       </div>
+      {otherSessions.length > 0 && (
+        <div className="chat-sessions-bar">
+          <MessageSquare size={14} />
+          <span className="chat-sessions-label">历史会话</span>
+          {otherSessions.slice(0, 5).map((s) => (
+            <span key={s.id} className="chat-session-badge" title={`${s.messageCount} 条消息`}>
+              {s.id.slice(-8)}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="chat-body" role="log" aria-live="polite">
         {chatExchanges.length === 0 && currentSteps.length === 0 && !chatLoading && !currentQuestion && !chatError && (
           <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>

@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 )
 
 // Client 封装 LLM 模型和工具，提供统一的提问接口。
@@ -86,9 +87,11 @@ func (c *Client) rebuildLocked() {
 }
 
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
-func (c *Client) Ask(ctx context.Context, question string) (<-chan StepEvent, error) {
+// messages 是完整的消息列表（system prompt + 历史消息 + 当前问题）。
+// onMessage 在 agent 产生每条新消息时被调用，用于持久化到 session。
+func (c *Client) Ask(ctx context.Context, messages []*schema.Message, onMessage MessageCallback) (<-chan StepEvent, error) {
 	c.toolsMu.RLock()
 	tools := c.tools
 	c.toolsMu.RUnlock()
-	return Ask(ctx, c.model, tools, question)
+	return Ask(ctx, c.model, tools, messages, onMessage)
 }

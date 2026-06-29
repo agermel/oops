@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"oops/internal/config"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 // TestClientNew 验证客户端创建。
@@ -71,7 +73,11 @@ func TestClientAskSkipped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	events, err := client.Ask(ctx, "有哪些机器？如果不止一台，请列出它们的名称。")
+	messages := []*schema.Message{
+		schema.SystemMessage(SystemPrompt),
+		schema.UserMessage("有哪些机器？如果不止一台，请列出它们的名称。"),
+	}
+	events, err := client.Ask(ctx, messages, nil)
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
 	}

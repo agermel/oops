@@ -39,6 +39,50 @@
   color: var(--muted);
   border: 0;
   background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.chat-header button:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.chat-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* ---- sessions bar ---- */
+
+.chat-sessions-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.chat-sessions-label {
+  color: var(--muted);
+  margin-right: var(--space-1);
+}
+
+.chat-session-badge {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  cursor: default;
 }
 
 .chat-body {

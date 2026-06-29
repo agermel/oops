@@ -8,11 +8,13 @@ import type {
   LogEntry,
   StepEvent,
   ChatExchange,
+  SessionInfo,
+  SessionDetail,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { useHashRouter } from "./hooks/useHashRouter";
 import { apiRequest, getErrorMessage } from "./lib/api";
-import { projectPaths, serverPaths } from "./lib/paths";
+import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
 import { ProjectsView } from "./components/ProjectsView";
@@ -91,6 +93,12 @@ export function App() {
   const [chatError, setChatError] = React.useState("");
   const chatLoadingRef = React.useRef(false);
   const chatStepsRef = React.useRef<StepEvent[]>([]);
+  const [sessionId, setSessionId] = React.useState<string>(() => {
+    // 从 localStorage 恢复上次的 session ID
+    return localStorage.getItem("oops_session_id") || "";
+  });
+  const [sessionLoaded, setSessionLoaded] = React.useState(false);
+  const [sessions, setSessions] = React.useState<SessionInfo[]>([]);
 
   // ---- 日志缓冲区 ----
   const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -136,6 +144,63 @@ export function App() {
     flushLogs.cancel();
     logBuffer.current = [];
   }
+
+  // ---- 会话加载 ----
+  React.useEffect(() => {
+    if (!sessionId || sessionLoaded) return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const detail = await apiRequest<SessionDetail>(
+          sessionPaths(sessionId).get + "?include_messages=true"
+        );
+        if (!cancelled && detail?.id) {
+          // 将后端消息转换为 ChatExchange 展示
+          const exchanges: ChatExchange[] = [];
+          let currentQuestion = "";
+          let currentSteps: StepEvent[] = [];
+          for (const msg of detail.messages) {
+            if (msg.role === "user") {
+              // 新的一轮开始
+              if (currentQuestion) {
+                // 保存上一轮（即使不完整）
+                exchanges.push({ question: currentQuestion, steps: currentSteps });
+              }
+              currentQuestion = msg.content;
+              currentSteps = [];
+            } else if (msg.role === "assistant") {
+              currentSteps.push({ type: "answer", content: msg.content });
+            } else if (msg.role === "tool") {
+              currentSteps.push({
+                type: "tool_result",
+                content: msg.content,
+                toolCallId: msg.toolCallId,
+                toolName: msg.toolName,
+              });
+            }
+          }
+          if (currentQuestion) {
+            const answer = currentSteps.find((s) => s.type === "answer");
+            exchanges.push({
+              question: currentQuestion,
+              steps: currentSteps,
+              answer: answer?.content,
+            });
+          }
+          setChatExchanges(exchanges);
+          setSessionLoaded(true);
+          loadSessions();
+        }
+      } catch {
+        if (!cancelled) {
+          localStorage.removeItem("oops_session_id");
+          setSessionId("");
+        }
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [sessionId, sessionLoaded]);
 
   // ---------------- 数据获取（纯函数，不依赖闭包中的导航状态） ----------------
 
@@ -260,7 +325,7 @@ export function App() {
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ session_id: sessionId || undefined, question: q }),
       });
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
@@ -283,6 +348,12 @@ export function App() {
           if (line.startsWith("data: ")) {
             try {
               const evt: StepEvent = JSON.parse(line.slice(6));
+              // 首条 session 事件：记录 session ID
+              if (evt.type === "session" && evt.content) {
+                setSessionId(evt.content);
+                localStorage.setItem("oops_session_id", evt.content);
+                continue;
+              }
               chatStepsRef.current = [...chatStepsRef.current, evt];
               setCurrentSteps(chatStepsRef.current);
             } catch { /* skip */ }
@@ -300,6 +371,7 @@ export function App() {
       setCurrentQuestion("");
       setChatLoading(false);
       chatLoadingRef.current = false;
+      loadSessions();
     } catch (err) {
       setChatError(getErrorMessage(err, "聊天请求失败"));
       setCurrentQuestion("");
@@ -329,13 +401,51 @@ export function App() {
     else navigate({ view: "project-overview", projectId: selectedProjectID });
   }
 
-  function clearChat() {
+  function startNewChat() {
+    // 保留旧 session 在后端，前端切换到新会话
+    localStorage.removeItem("oops_session_id");
     setChatExchanges([]);
     setCurrentSteps([]);
     chatStepsRef.current = [];
     setCurrentQuestion("");
     setChatError("");
+    setSessionId("");
+    setSessionLoaded(false);
   }
+
+  async function loadSessions() {
+    try {
+      const list = await apiRequest<SessionInfo[]>(
+        "/api/sessions" + (selectedProjectID ? `?project_id=${encodeURIComponent(selectedProjectID)}` : "")
+      );
+      setSessions(list || []);
+    } catch { /* 会话列表加载失败不影响主流程 */ }
+  }
+
+  function clearChat() {
+    // 删除后端 session
+    if (sessionId) {
+      fetch(sessionPaths(sessionId).delete, { method: "DELETE" }).catch(() => {});
+      localStorage.removeItem("oops_session_id");
+    }
+    setChatExchanges([]);
+    setCurrentSteps([]);
+    chatStepsRef.current = [];
+    setCurrentQuestion("");
+    setChatError("");
+    setSessionId("");
+    setSessionLoaded(false);
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+  }
+
+  // 项目切换时重置会话
+  React.useEffect(() => {
+    if (sessionId && sessionLoaded) {
+      // 当项目切换时，新建会话（旧会话保留在后端可查）
+      startNewChat();
+    }
+    loadSessions();
+  }, [selectedProjectID]);
 
 
   function selectServerFromUI(nodeletID: string) {
@@ -616,9 +726,12 @@ export function App() {
               chatInput={chatInput}
               chatLoading={chatLoading}
               chatError={chatError}
+              sessionId={sessionId}
+              sessions={sessions}
               onInputChange={setChatInput}
               onSend={() => sendChat()}
               onClear={clearChat}
+              onNewChat={startNewChat}
             />
           </section>
         )}

@@ -21,6 +21,7 @@ import (
 	"oops/internal/nodelet"
 
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -62,6 +63,7 @@ type Server struct {
 	mcpManager    *mcp.Manager
 	projectStore  *config.ProjectStore
 	dsnStore      *config.ContainerDSNStore
+	sessionStore  *llm.SessionStore
 }
 
 // statusItem 是 GUI 状态接口返回的一行连接状态。
@@ -133,6 +135,7 @@ func New(options Options) *Server {
 		nodelets:      options.Nodelets,
 		nodeletClient: options.NodeletClient,
 		registry:      options.Registry,
+		sessionStore:  llm.NewSessionStore(),
 	}
 
 	if options.LLMEnabled {
@@ -175,6 +178,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/nodelets", wrap(s.handleNodelets))
 	mux.HandleFunc("/api/nodelets/", wrap(s.handleNodeletResource))
 	mux.HandleFunc("/api/chat", wrap(s.handleChat))
+	mux.HandleFunc("/api/sessions", wrap(s.handleSessions))
+	mux.HandleFunc("/api/sessions/", wrap(s.handleSessionByID))
 	mux.HandleFunc("/api/mcp/connections", wrap(s.handleMCPConnections))
 	mux.HandleFunc("/api/mcp/connections/", wrap(s.handleMCPConnection))
 	mux.HandleFunc("/api/tools", wrap(s.handleTools))
@@ -186,6 +191,136 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	// 项目与容器详情 API。
 	mux.HandleFunc("/api/projects", wrap(s.handleProjects))
 	mux.HandleFunc("/api/projects/", wrap(s.handleProjectsRouter))
+}
+
+// handleSessions 处理 GET /api/sessions — 列出全局或项目会话。
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// 可通过查询参数 ?project_id=xxx 过滤项目会话。
+	projectID := r.URL.Query().Get("project_id")
+	writeJSON(w, s.sessionStore.List(projectID))
+}
+
+// handleSessionByID 处理 GET/DELETE /api/sessions/:id。
+func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		sess, ok := s.sessionStore.Get(id)
+		if !ok {
+			writeJSONError(w, "session not found", http.StatusNotFound)
+			return
+		}
+		if r.URL.Query().Get("include_messages") == "true" {
+			writeJSON(w, sess.ToDetail())
+		} else {
+			writeJSON(w, llm.SessionInfo{
+				ID:           sess.ID,
+				ProjectID:    sess.ProjectID,
+				MessageCount: len(sess.Messages),
+				CreatedAt:    sess.CreatedAt.UnixMilli(),
+				UpdatedAt:    sess.UpdatedAt.UnixMilli(),
+			})
+		}
+
+	case http.MethodDelete:
+		if !s.sessionStore.Delete(id) {
+			writeJSONError(w, "session not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	default:
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProjectSessions 处理 GET /api/projects/:pid/sessions — 列出项目会话。
+func (s *Server) handleProjectSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pid := extractProjectID(r.URL.Path)
+	writeJSON(w, s.sessionStore.List(pid))
+}
+
+// handleProjectSessionByID 处理 GET/DELETE /api/projects/:pid/sessions/:id。
+func (s *Server) handleProjectSessionByID(w http.ResponseWriter, r *http.Request) {
+	pid := extractProjectID(r.URL.Path)
+	id := extractSessionID(r.URL.Path)
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		sess, ok := s.sessionStore.Get(id)
+		if !ok || sess.ProjectID != pid {
+			writeJSONError(w, "session not found", http.StatusNotFound)
+			return
+		}
+		if r.URL.Query().Get("include_messages") == "true" {
+			writeJSON(w, sess.ToDetail())
+		} else {
+			writeJSON(w, llm.SessionInfo{
+				ID:           sess.ID,
+				ProjectID:    sess.ProjectID,
+				MessageCount: len(sess.Messages),
+				CreatedAt:    sess.CreatedAt.UnixMilli(),
+				UpdatedAt:    sess.UpdatedAt.UnixMilli(),
+			})
+		}
+
+	case http.MethodDelete:
+		sess, ok := s.sessionStore.Get(id)
+		if !ok || sess.ProjectID != pid {
+			writeJSONError(w, "session not found", http.StatusNotFound)
+			return
+		}
+		s.sessionStore.Delete(id)
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	default:
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// extractProjectID 从 URL 路径提取项目 ID。
+// 路径格式: /api/projects/:pid/...
+func extractProjectID(rawPath string) string {
+	rest := strings.TrimPrefix(rawPath, "/api/projects/")
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return ""
+}
+
+// extractSessionID 从 URL 路径提取 session ID。
+// 路径格式: /api/projects/:pid/sessions/:id 或 /api/sessions/:id
+func extractSessionID(rawPath string) string {
+	// 尝试项目路径
+	rest := strings.TrimPrefix(rawPath, "/api/projects/")
+	parts := strings.Split(rest, "/")
+	if len(parts) >= 3 && parts[1] == "sessions" {
+		return parts[2]
+	}
+	// 全局路径
+	rest = strings.TrimPrefix(rawPath, "/api/sessions/")
+	if rest != rawPath && rest != "" && !strings.Contains(rest, "/") {
+		return rest
+	}
+	return ""
 }
 
 // handleConnectionStatus 执行所有连接检查并返回 JSON。
@@ -386,18 +521,35 @@ func splitNodeletResourcePath(rawPath string) (string, string, string, bool) {
 	return "", "", "", false
 }
 
+// chatRequest 是 POST /api/chat 的请求体。
+type chatRequest struct {
+	SessionID string `json:"session_id"`
+	Question  string `json:"question"`
+}
+
 // handleChat 处理 LLM 对话请求。
+// 接受 session_id（可选）和 question，通过 SSE 流式返回每一步执行过程。
+// 若不传 session_id，后端自动创建新会话并通过首条 SSE 事件返回 session ID。
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	// 暂未配置大模型
+	s.handleChatWithProject(w, r, "")
+}
+
+// handleProjectChat 处理项目级对话请求。
+func (s *Server) handleProjectChat(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
+	pid := strings.Split(path, "/")[0]
+	s.handleChatWithProject(w, r, pid)
+}
+
+// handleChatWithProject 是 handleChat 和 handleProjectChat 的共享实现。
+// projectID 为空时表示全局会话。
+func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, projectID string) {
 	if s.llmClient == nil {
 		http.Error(w, `{"error":"LLM not configured. Set llm.enabled=true and llm.api_key in config."}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	// 请求构建
-	var req struct {
-		Question string `json:"question"`
-	}
+	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
 		http.Error(w, `{"error":"question is required"}`, http.StatusBadRequest)
 		return
@@ -406,9 +558,32 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	// 向大模型请求，流式返回每一步。
-	// 返回类型 <-chan，颗粒度是每一步
-	events, err := s.llmClient.Ask(ctx, req.Question)
+	// 获取或创建会话。
+	var sess *llm.Session
+	if req.SessionID != "" {
+		sess = s.sessionStore.GetOrCreate(req.SessionID, projectID)
+	} else {
+		sess = s.sessionStore.Create(projectID)
+	}
+
+	// 构建完整消息列表: system prompt + 历史消息 + 当前问题。
+	messages := []*schema.Message{
+		schema.SystemMessage(llm.SystemPrompt),
+	}
+	messages = append(messages, sess.Messages...)
+	userMsg := schema.UserMessage(req.Question)
+	messages = append(messages, userMsg)
+
+	// 用户消息先写入 session。
+	s.sessionStore.AppendMessage(sess.ID, userMsg)
+
+	// onMessage 回调：agent 产生的每条新消息都追加到 session。
+	onMessage := func(_ context.Context, msg *schema.Message) error {
+		s.sessionStore.AppendMessage(sess.ID, msg)
+		return nil
+	}
+
+	events, err := s.llmClient.Ask(ctx, messages, onMessage)
 	if err != nil {
 		sanitizedError(w, "chat ask", err, http.StatusInternalServerError)
 		return
@@ -430,6 +605,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, ":ok\n\n")
 	flusher.Flush()
 
+	// 首条事件：告知客户端 session ID。
+	sessionEvt := llm.StepEvent{Type: "session", Content: sess.ID}
+	data, _ := json.Marshal(sessionEvt)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
 	for evt := range events {
 		data, err := json.Marshal(evt)
 		if err != nil {
@@ -442,16 +623,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
-}
-
-// handleProjectChat 处理项目级对话请求，提取项目 ID 后复用通用聊天逻辑。
-func (s *Server) handleProjectChat(w http.ResponseWriter, r *http.Request) {
-	// 从 URL 提取项目 ID（/api/projects/:pid/chat）
-	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
-	pid := strings.Split(path, "/")[0]
-	_ = pid // 预留：后续可按项目范围注入上下文
-
-	s.handleChat(w, r)
 }
 
 // ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。
@@ -696,6 +867,20 @@ func (s *Server) handleProjectsRouter(w http.ResponseWriter, r *http.Request) {
 	// /api/projects/:pid/chat
 	if parts[1] == "chat" {
 		s.handleProjectChat(w, r)
+		return
+	}
+
+	// /api/projects/:pid/sessions
+	if parts[1] == "sessions" {
+		if len(parts) == 2 {
+			s.handleProjectSessions(w, r)
+			return
+		}
+		if len(parts) == 3 && parts[2] != "" {
+			s.handleProjectSessionByID(w, r)
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 

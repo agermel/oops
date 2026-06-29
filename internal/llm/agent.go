@@ -32,8 +32,8 @@ func sanitizeError(raw string) string {
 	return s
 }
 
-// systemPrompt 是 Agent 的系统提示词。
-const systemPrompt = `你是一个基础设施运维助手，负责回答当前监控环境中的问题。
+// SystemPrompt 是 Agent 的系统提示词。调用方应在构建消息列表时将其作为首条消息。
+const SystemPrompt = `你是一个基础设施运维助手，负责回答当前监控环境中的问题。
 
 你可以使用工具查询实时运维数据。回答时：
 - 先调用工具获取最新数据，不要猜测
@@ -43,6 +43,10 @@ const systemPrompt = `你是一个基础设施运维助手，负责回答当前�
 - 如果用户提到的机器或容器不存在，明确告知
 - 回答简洁，聚焦运维数据
 - 不要建议执行 shell 命令或修改系统配置`
+
+// MessageCallback 是 Ask 在产生每条新消息时调用的回调。
+// ctx 是 agent 的内部 context；若回调返回非 nil 错误，Ask 会终止执行。
+type MessageCallback func(ctx context.Context, msg *schema.Message) error
 
 // StepEvent 表示 Agent 执行过程中的一个步骤，通过 SSE 推送给前端。
 type StepEvent struct {
@@ -87,9 +91,11 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 }
 
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
+// messages 是完整的消息列表，由调用方构建（通常包含 system prompt + 历史消息 + 当前问题）。
+// onMessage 在 agent 产生每条新消息（assistant 输出、工具结果）时被调用，用于持久化到 session。
 // 调用方需要从 channel 读取 StepEvent 直到 channel 关闭。
 // 若 agent 创建失败，返回 error（此时 channel 为 nil）。
-func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, question string) (<-chan StepEvent, error) {
+func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback) (<-chan StepEvent, error) {
 	opt, future := react.WithMessageFuture()
 
 	agent, err := newAgent(ctx, chatModel, tools)
@@ -116,10 +122,6 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 		genDone := make(chan generateResult, 1)
 
 		go func() {
-			messages := []*schema.Message{
-				schema.SystemMessage(systemPrompt),
-				schema.UserMessage(question),
-			}
 			resp, err := agent.Generate(agentCtx, messages, opt)
 			genDone <- generateResult{msg: resp, err: err}
 		}()
@@ -135,6 +137,14 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			}
 			if !ok {
 				break
+			}
+
+			if onMessage != nil {
+				if err := onMessage(agentCtx, msg); err != nil {
+					logutil.Error("llm: onMessage", zap.Error(err))
+					sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(err.Error())})
+					return
+				}
 			}
 
 			for _, evt := range messageToStepEvents(msg) {
@@ -156,6 +166,12 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			logutil.Error("llm: generate", zap.Error(result.err))
 			sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(result.err.Error())})
 			return
+		}
+
+		if onMessage != nil {
+			if err := onMessage(agentCtx, result.msg); err != nil {
+				logutil.Error("llm: onMessage final", zap.Error(err))
+			}
 		}
 
 		sendEvent(ctx, events, StepEvent{Type: "answer", Content: result.msg.Content})

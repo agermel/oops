@@ -187,11 +187,13 @@ export type LogEntry = {
 // ---- LLM 对话 ----
 
 export type StepEvent = {
-  type: "thinking" | "tool_call" | "tool_result" | "answer" | "error";
+  type: "thinking" | "tool_call" | "tool_result" | "answer" | "error" | "session";
   content: string;
   toolName?: string;
   toolArgs?: string;
   toolCallId?: string;
+  // session 事件专用
+  sessionId?: string;
 };
 
 export type ChatExchange = {
@@ -199,6 +201,25 @@ export type ChatExchange = {
   steps: StepEvent[];
   answer?: string;
   error?: string;
+};
+
+export type SessionInfo = {
+  id: string;
+  projectId?: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SessionMessage = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  toolCallId?: string;
+  toolName?: string;
+};
+
+export type SessionDetail = SessionInfo & {
+  messages: SessionMessage[];
 };
 
 // ---- 兼容旧组件 ----

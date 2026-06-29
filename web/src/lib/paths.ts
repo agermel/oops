@@ -7,6 +7,17 @@ export function projectPaths(projectId: string) {
   return {
     servers: `/api/projects/${pid}/servers`,
     chat: `/api/projects/${pid}/chat`,
+    sessions: `/api/projects/${pid}/sessions`,
+    session: (sid: string) => `/api/projects/${pid}/sessions/${enc(sid)}`,
+  };
+}
+
+export function sessionPaths(sessionId: string) {
+  const sid = enc(sessionId);
+  return {
+    get: `/api/sessions/${sid}`,
+    delete: `/api/sessions/${sid}`,
+    list: "/api/sessions",
   };
 }
 
