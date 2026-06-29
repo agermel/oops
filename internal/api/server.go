@@ -661,12 +661,26 @@ func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error)
 }
 
 // ListContainers 实现 llm.OpsData，返回指定 Nodelet 的容器列表。
-func (s *Server) ListContainers(ctx context.Context, nodeletID string) ([]nodelet.Container, error) {
+// status 不为空时仅返回匹配状态的容器。
+func (s *Server) ListContainers(ctx context.Context, nodeletID, status string) ([]nodelet.Container, error) {
 	item, ok := s.findNodelet(nodeletID)
 	if !ok {
 		return nil, fmt.Errorf("nodelet %q not found", nodeletID)
 	}
-	return s.nodeletClient.Containers(ctx, item.Address, item.Token)
+	containers, err := s.nodeletClient.Containers(ctx, item.Address, item.Token)
+	if err != nil {
+		return nil, err
+	}
+	if status == "" {
+		return containers, nil
+	}
+	filtered := make([]nodelet.Container, 0, len(containers))
+	for _, c := range containers {
+		if c.State == status {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered, nil
 }
 
 // GetLogs 实现 llm.OpsData，返回指定容器的历史日志。

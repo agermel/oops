@@ -48,6 +48,16 @@ const SystemPrompt = `你是一个基础设施运维助手，负责回答当前�
 // ctx 是 agent 的内部 context；若回调返回非 nil 错误，Ask 会终止执行。
 type MessageCallback func(ctx context.Context, msg *schema.Message) error
 
+// ToolResultHook 是工具结果后处理回调。
+// 在工具结果进入 session 和 SSE 之前调用，可修改 msg.Content。
+// 返回 nil 表示丢弃该事件（不推送给前端，也不存入 session）。
+type ToolResultHook func(ctx context.Context, msg *schema.Message) *schema.Message
+
+// AfterToolCall 是按工具名注册的工具结果后处理 hook。
+// key 为工具名（如 "get_logs"、"list_containers"），MCP 工具也使用其工具名。
+// 仅在 msg.Role == Tool 时触发。
+var AfterToolCall = map[string]ToolResultHook{}
+
 // StepEvent 表示 Agent 执行过程中的一个步骤，通过 SSE 推送给前端。
 type StepEvent struct {
 	Type       string `json:"type"`                 // thinking | tool_call | tool_result | answer | error
@@ -137,6 +147,16 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			}
 			if !ok {
 				break
+			}
+
+			// afterToolCall hook：工具结果后处理
+			if msg.Role == schema.Tool && msg.ToolName != "" {
+				if hook, ok := AfterToolCall[msg.ToolName]; ok {
+					msg = hook(agentCtx, msg)
+					if msg == nil {
+						continue // hook 决定丢弃该消息
+					}
+				}
 			}
 
 			if onMessage != nil {

@@ -17,8 +17,8 @@ type OpsData interface {
 	// ListNodelets 返回所有 Nodelet 的概要信息。
 	ListNodelets(ctx context.Context) ([]NodeletSummary, error)
 
-	// ListContainers 返回指定 Nodelet 上的容器列表。
-	ListContainers(ctx context.Context, nodeletID string) ([]nodelet.Container, error)
+	// ListContainers 返回指定 Nodelet 上的容器列表。status 为空时返回全部。
+	ListContainers(ctx context.Context, nodeletID, status string) ([]nodelet.Container, error)
 
 	// GetLogs 返回指定容器的历史日志。
 	GetLogs(ctx context.Context, nodeletID, containerID string, tail int) ([]nodelet.LogEntry, error)
@@ -58,6 +58,7 @@ type listNodeletsInput struct{}
 
 type listContainersInput struct {
 	NodeletID string `json:"nodelet_id" jsonschema:"required,description=要查询的 Nodelet ID"`
+	Status    string `json:"status,omitempty" jsonschema:"description=按状态过滤（running | stopped | restarting 等），不传返回全部。建议先查 running 缩小范围"`
 }
 
 type getLogsInput struct {
@@ -87,15 +88,19 @@ func NewListNodeletsTool(ops OpsData) (tool.InvokableTool, error) {
 // NewListContainersTool 创建 list_containers 工具——列出指定机器上的容器。
 func NewListContainersTool(ops OpsData) (tool.InvokableTool, error) {
 	return utils.InferTool("list_containers", ""+
-		"列出指定 Nodelet 上运行的所有 Docker 容器。"+
+		"列出指定 Nodelet 上的 Docker 容器。"+
 		"返回容器 ID、名称、镜像、状态（running/stopped 等）、健康状态和创建时间。"+
+		"建议通过 status 参数先过滤 running 容器缩小范围。"+
 		"最多返回 200 条记录。",
 		func(ctx context.Context, input *listContainersInput) (string, error) {
-			containers, err := ops.ListContainers(ctx, input.NodeletID)
+			containers, err := ops.ListContainers(ctx, input.NodeletID, input.Status)
 			if err != nil {
 				return fmt.Sprintf("查询失败：%v", err), nil
 			}
 			if len(containers) == 0 {
+				if input.Status != "" {
+					return fmt.Sprintf("该 Nodelet 上没有状态为 %q 的容器。", input.Status), nil
+				}
 				return "该 Nodelet 上没有容器。", nil
 			}
 			if len(containers) > 200 {
@@ -110,6 +115,7 @@ func NewGetLogsTool(ops OpsData) (tool.InvokableTool, error) {
 	return utils.InferTool("get_logs", ""+
 		"获取指定容器最近的历史日志。"+
 		"返回日志时间戳、输出流（stdout/stderr）、日志消息和日志级别。"+
+		"tail 参数控制返回行数（默认 50），建议从 20 开始，需要更多细节时再增大。"+
 		"最多返回 500 条记录。",
 		func(ctx context.Context, input *getLogsInput) (string, error) {
 			tail := input.Tail
