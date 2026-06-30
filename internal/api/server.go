@@ -59,6 +59,9 @@ type Server struct {
 	nodeletClient  NodeletClient
 	registry       *connection.Registry
 	llmClient      *llm.Client
+	promptStore    *llm.PromptStore
+	agentRouter    *llm.Router
+	eventStore     *llm.EventStore
 	mcpManager     *mcp.Manager
 	projectStore   *config.ProjectStore
 	dsnStore       *config.ContainerDSNStore
@@ -169,6 +172,23 @@ func New(options Options) *Server {
 		} else {
 			s.llmClient = client
 		}
+	}
+
+	// Prompt 外部化管理（LLM 未启用时也初始化，供后续启用时使用）。
+	ps, err := llm.NewPromptStore("config/prompts")
+	if err != nil {
+		logutil.Warn("llm: prompt store", zap.Error(err))
+	} else {
+		s.promptStore = ps
+		s.agentRouter = llm.NewRouter(ps)
+	}
+
+	// SQLite 事件持久化。
+	es, err := llm.OpenEventStore("data/events.db")
+	if err != nil {
+		logutil.Warn("llm: event store", zap.Error(err))
+	} else {
+		s.eventStore = es
 	}
 
 	return s

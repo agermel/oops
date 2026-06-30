@@ -89,9 +89,10 @@ func (c *Client) rebuildLocked() {
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
 // messages 是完整的消息列表（system prompt + 历史消息 + 当前问题）。
 // onMessage 在 agent 产生每条新消息时被调用，用于持久化到 session。
-func (c *Client) Ask(ctx context.Context, messages []*schema.Message, onMessage MessageCallback) (<-chan StepEvent, error) {
+// maxStep 控制 Agent 最大步数；<=0 时使用默认值 15。
+func (c *Client) Ask(ctx context.Context, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan StepEvent, error) {
 	c.toolsMu.RLock()
 	tools := c.tools
 	c.toolsMu.RUnlock()
-	return Ask(ctx, c.model, tools, messages, onMessage)
+	return Ask(ctx, c.model, tools, messages, onMessage, maxStep)
 }

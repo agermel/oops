@@ -77,9 +77,14 @@ func NewListNodeletsTool(ops OpsData) (tool.InvokableTool, error) {
 		"列出所有已配置的 Nodelet（受监控的机器）。"+
 		"返回每台机器的 ID、名称、地址、可用状态、Docker 版本、运行时、CPU 数量和内存总量。",
 		func(ctx context.Context, _ *listNodeletsInput) (string, error) {
-			items, err := ops.ListNodelets(ctx)
+			var items []NodeletSummary
+			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
+				var callErr error
+				items, callErr = ops.ListNodelets(ctx)
+				return callErr
+			})
 			if err != nil {
-				return fmt.Sprintf("机器列表查询失败：%v", err), nil
+				return formatRetryError("机器列表查询失败", err, DefaultRetryPolicy.MaxRetries), nil
 			}
 			return formatItems(items), nil
 		})
@@ -93,9 +98,14 @@ func NewListContainersTool(ops OpsData) (tool.InvokableTool, error) {
 		"建议通过 status 参数先过滤 running 容器缩小范围。"+
 		"最多返回 200 条记录。",
 		func(ctx context.Context, input *listContainersInput) (string, error) {
-			containers, err := ops.ListContainers(ctx, input.NodeletID, input.Status)
+			var containers []nodelet.Container
+			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
+				var callErr error
+				containers, callErr = ops.ListContainers(ctx, input.NodeletID, input.Status)
+				return callErr
+			})
 			if err != nil {
-				return fmt.Sprintf("查询失败：%v", err), nil
+				return formatRetryError("查询失败", err, DefaultRetryPolicy.MaxRetries), nil
 			}
 			if len(containers) == 0 {
 				if input.Status != "" {
@@ -122,9 +132,14 @@ func NewGetLogsTool(ops OpsData) (tool.InvokableTool, error) {
 			if tail <= 0 {
 				tail = 50
 			}
-			logs, err := ops.GetLogs(ctx, input.NodeletID, input.ContainerID, tail)
+			var logs []nodelet.LogEntry
+			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
+				var callErr error
+				logs, callErr = ops.GetLogs(ctx, input.NodeletID, input.ContainerID, tail)
+				return callErr
+			})
 			if err != nil {
-				return fmt.Sprintf("日志查询失败：%v", err), nil
+				return formatRetryError("日志查询失败", err, DefaultRetryPolicy.MaxRetries), nil
 			}
 			if len(logs) == 0 {
 				return "该容器没有日志记录。", nil
@@ -142,9 +157,14 @@ func NewCheckConnectionsTool(ops OpsData) (tool.InvokableTool, error) {
 		"对所有已配置的连接（MySQL、Redis、Elasticsearch、Kafka 等）执行健康检查。"+
 		"返回每个连接的状态（alive/dead/unknown）、延迟和错误消息。",
 		func(ctx context.Context, _ *checkConnectionsInput) (string, error) {
-			items, err := ops.CheckConnections(ctx)
+			var items []ConnectionStatus
+			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
+				var callErr error
+				items, callErr = ops.CheckConnections(ctx)
+				return callErr
+			})
 			if err != nil {
-				return fmt.Sprintf("连接检查失败：%v", err), nil
+				return formatRetryError("连接检查失败", err, DefaultRetryPolicy.MaxRetries), nil
 			}
 			return formatItems(items), nil
 		})

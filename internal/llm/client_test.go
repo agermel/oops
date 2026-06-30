@@ -77,7 +77,7 @@ func TestClientAskSkipped(t *testing.T) {
 		schema.SystemMessage(SystemPrompt),
 		schema.UserMessage("有哪些机器？如果不止一台，请列出它们的名称。"),
 	}
-	events, err := client.Ask(ctx, messages, nil)
+	events, err := client.Ask(ctx, messages, nil, 15)
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
 	}

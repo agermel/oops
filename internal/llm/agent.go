@@ -81,10 +81,14 @@ func newModel(ctx context.Context, cfg config.LLMConfig) (model.ToolCallingChatM
 }
 
 // newAgent 创建 ReAct Agent（不含 MessageFuture option）。
-func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool) (*react.Agent, error) {
+func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, maxStep int) (*react.Agent, error) {
 	baseTools := make([]tool.BaseTool, len(tools))
 	for i, t := range tools {
 		baseTools[i] = t
+	}
+
+	if maxStep <= 0 {
+		maxStep = 15
 	}
 
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
@@ -92,7 +96,7 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: baseTools,
 		},
-		MaxStep: 30,
+		MaxStep: maxStep,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
@@ -103,12 +107,13 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
 // messages 是完整的消息列表，由调用方构建（通常包含 system prompt + 历史消息 + 当前问题）。
 // onMessage 在 agent 产生每条新消息（assistant 输出、工具结果）时被调用，用于持久化到 session。
+// maxStep 控制 Agent 最大步数；<=0 时使用默认值 15。
 // 调用方需要从 channel 读取 StepEvent 直到 channel 关闭。
 // 若 agent 创建失败，返回 error（此时 channel 为 nil）。
-func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback) (<-chan StepEvent, error) {
+func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan StepEvent, error) {
 	opt, future := react.WithMessageFuture()
 
-	agent, err := newAgent(ctx, chatModel, tools)
+	agent, err := newAgent(ctx, chatModel, tools, maxStep)
 	if err != nil {
 		logutil.Error("llm: create agent", zap.Error(err))
 		return nil, err

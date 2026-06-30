@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"oops/internal/llm"
+	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino/schema"
 )
@@ -134,24 +135,70 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		sess = s.sessionStore.Create(projectID)
 	}
 
-	// 构建完整消息列表: system prompt + 历史消息 + 当前问题。
-	messages := []*schema.Message{
-		schema.SystemMessage(llm.SystemPrompt),
+	// 路由选择 Agent 配置（prompt + maxStep）。
+	var agentCfg llm.AgentConfig
+	if s.agentRouter != nil {
+		agentCfg = s.agentRouter.Route(req.Question)
 	}
+	if agentCfg.Prompt == "" {
+		agentCfg.Prompt = llm.SystemPrompt // 回退到硬编码 prompt
+	}
+	if agentCfg.MaxStep <= 0 {
+		agentCfg.MaxStep = llm.MaxStep
+	}
+
+	// 构建消息列表。
+	systemMsg := schema.SystemMessage(agentCfg.Prompt)
+	messages := []*schema.Message{systemMsg}
 	messages = append(messages, sess.Messages...)
 	userMsg := schema.UserMessage(req.Question)
 	messages = append(messages, userMsg)
 
+	// Context 窗口裁剪。
+	trimResult := llm.TrimToBudget(messages, llm.DefaultBudget)
+	if trimResult.Trimmed > 0 {
+		logutil.Infof("chat: trimmed %d messages, tokens: %d → %d",
+			trimResult.Trimmed, llm.EstimateTokens(messages), trimResult.TotalTokens)
+	}
+	messages = trimResult.Messages
+
 	// 用户消息先写入 session。
 	s.sessionStore.AppendMessage(sess.ID, userMsg)
 
-	// onMessage 回调：agent 产生的每条新消息都追加到 session。
+	// 生成 run ID（用于事件持久化）。
+	runID := sess.ID + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// onMessage 回调：agent 产生的每条新消息追加到 session + event store。
+	seq := 0
 	onMessage := func(_ context.Context, msg *schema.Message) error {
 		s.sessionStore.AppendMessage(sess.ID, msg)
+		if s.eventStore != nil {
+			evt := llm.StepEvent{
+				Type:       string(msg.Role),
+				Content:    msg.Content,
+				ToolName:   msg.ToolName,
+				ToolCallID: msg.ToolCallID,
+			}
+			// 对 tool_call 类型也记录参数。
+			if msg.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
+				for _, tc := range msg.ToolCalls {
+					s.eventStore.AppendEvent(runID, sess.ID, projectID, seq, llm.StepEvent{
+						Type:       "tool_call",
+						Content:    tc.Function.Name,
+						ToolName:   tc.Function.Name,
+						ToolArgs:   tc.Function.Arguments,
+						ToolCallID: tc.ID,
+					})
+					seq++
+				}
+			}
+			s.eventStore.AppendEvent(runID, sess.ID, projectID, seq, evt)
+			seq++
+		}
 		return nil
 	}
 
-	events, err := s.llmClient.Ask(ctx, messages, onMessage)
+	events, err := s.llmClient.Ask(ctx, messages, onMessage, agentCfg.MaxStep)
 	if err != nil {
 		sanitizedError(w, "chat ask", err, http.StatusInternalServerError)
 		return
