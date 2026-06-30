@@ -168,21 +168,18 @@ func (s *Server) handleProjectLogsStream(w http.ResponseWriter, r *http.Request)
 
 	stream, err := s.nodeletClient.ContainerLogsStream(r.Context(), item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeJSONError(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer stream.Close()
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+	flusher, err := requireFlusher(w)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
+	setSSEHeaders(w)
 
 	copyAndFlush(w, flusher, stream)
 }
@@ -273,7 +270,7 @@ func (s *Server) handleContainerMCPDelete(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, err.Error(), mcpErrorStatus(err))
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSONOK(w)
 }
 
 // dsnConfigResponse is the JSON shape for the DSN config endpoint.
@@ -381,7 +378,7 @@ func (s *Server) handleContainerDSNPut(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "save dsn: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSONOK(w)
 }
 
 // handleContainerDSNDelete handles DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn.
@@ -396,7 +393,7 @@ func (s *Server) handleContainerDSNDelete(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, "delete dsn: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSONOK(w)
 }
 
 // errNotFound 返回一个标记为 404 的错误。

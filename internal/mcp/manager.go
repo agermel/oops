@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,12 +12,16 @@ import (
 	"oops/internal/config"
 	"oops/internal/console"
 	"oops/internal/logutil"
+	"oops/internal/store"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
+
+// DefaultConfigPath is the default path for the MCP connections file.
+const DefaultConfigPath = "config/mcp_connections.json"
 
 // allowedCommands returns the list of MCP stdio commands permitted to execute.
 // Controlled via OOPS_MCP_ALLOWED_COMMANDS (comma-separated). When the env var
@@ -121,10 +124,7 @@ func NewManager(configPath string, onChange func([]tool.BaseTool)) (*Manager, er
 	}
 
 	if err := m.load(); err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("load mcp config: %w", err)
-		}
-		m.config = ManagerConfig{Connections: []ConnectionConfig{}}
+		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 
 	// Start all enabled connections asynchronously on startup.
@@ -583,22 +583,17 @@ func expandEnvSlice(vals []string) []string {
 }
 
 func (m *Manager) load() error {
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
+	if err := store.LoadJSON(m.configPath, &m.config); err != nil {
 		return err
 	}
-	return json.Unmarshal(data, &m.config)
+	if m.config.Connections == nil {
+		m.config.Connections = []ConnectionConfig{}
+	}
+	return nil
 }
 
 func (m *Manager) saveLocked() error {
-	data, err := json.MarshalIndent(m.config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if err := os.WriteFile(m.configPath, data, 0600); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-	return nil
+	return store.SaveJSON(m.configPath, m.config)
 }
 
 func (m *Manager) startLocked(cfg ConnectionConfig) error {

@@ -37,6 +37,7 @@ type ProbeResult struct {
 // 维护一份可缓存的连通性状态，供 API 和前端统一读取。
 type NodeletProber struct {
 	mu      sync.Mutex
+	cond    *sync.Cond
 	manager *NodeletManager
 
 	results map[string]*ProbeResult // nodeletID → 最新状态
@@ -66,6 +67,7 @@ func NewNodeletProber(manager *NodeletManager) *NodeletProber {
 		stopCh:         make(chan struct{}),
 		doneCh:         make(chan struct{}),
 	}
+	p.cond = sync.NewCond(&p.mu)
 	// 从 manager 预填所有已知 nodelet 条目
 	for _, cfg := range manager.List() {
 		p.results[cfg.ID] = &ProbeResult{
@@ -152,19 +154,14 @@ func (p *NodeletProber) ProbeNow(nodeletID string) ProbeResult {
 	p.mu.Lock()
 	_, alreadyProbing := p.probing[nodeletID]
 	if alreadyProbing {
-		p.mu.Unlock()
-		logutil.Debug("nodelet prober: probe skipped, already in progress", zap.String("nodeletID", nodeletID))
-		// 已在探测中，等当前探测完成返回结果
 		for {
-			p.mu.Lock()
 			_, stillProbing := p.probing[nodeletID]
-			p.mu.Unlock()
 			if !stillProbing {
-				break
+				p.mu.Unlock()
+				return *p.StatusByID(nodeletID)
 			}
-			time.Sleep(100 * time.Millisecond)
+			p.cond.Wait()
 		}
-		return *p.StatusByID(nodeletID)
 	}
 	p.probing[nodeletID] = struct{}{}
 	p.mu.Unlock()
@@ -172,6 +169,7 @@ func (p *NodeletProber) ProbeNow(nodeletID string) ProbeResult {
 	defer func() {
 		p.mu.Lock()
 		delete(p.probing, nodeletID)
+		p.cond.Broadcast()
 		p.mu.Unlock()
 	}()
 
@@ -199,6 +197,7 @@ func (p *NodeletProber) ProbeAll() {
 			defer func() {
 				p.mu.Lock()
 				delete(p.probing, c.ID)
+				p.cond.Broadcast()
 				p.mu.Unlock()
 			}()
 			p.probeOne(c)
@@ -296,6 +295,7 @@ func (p *NodeletProber) tick() {
 			defer func() {
 				p.mu.Lock()
 				delete(p.probing, c.ID)
+				p.cond.Broadcast()
 				p.mu.Unlock()
 			}()
 			p.probeOne(c)

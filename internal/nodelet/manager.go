@@ -2,16 +2,22 @@ package nodelet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"oops/internal/logutil"
+	"oops/internal/store"
+
 	"go.uber.org/zap"
 )
+
+// DefaultConfigPath is the default path for the nodelet configuration file.
+const DefaultConfigPath = "config/nodelets.json"
+
+// FallbackConfigPath is used when the primary config cannot be loaded.
+const FallbackConfigPath = "/dev/null"
 
 // NodeletConfig 保存一台 oops-nodelet 的访问信息。
 // Token 在 JSON API 响应中永远不暴露（json:"-"），
@@ -60,9 +66,7 @@ func NewNodeletManager(configPath string) (*NodeletManager, error) {
 		return m, nil
 	}
 	if err := m.load(); err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("load nodelets: %w", err)
-		}
+		return nil, fmt.Errorf("load nodelets: %w", err)
 	}
 	return m, nil
 }
@@ -211,23 +215,18 @@ func (m *NodeletManager) Test(cfg NodeletConfig) error {
 // --- internal ---
 
 func (m *NodeletManager) load() error {
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
+	if err := store.LoadJSON(m.configPath, &m.config); err != nil {
 		return err
 	}
-	return json.Unmarshal(data, &m.config)
+	if m.config.Nodelets == nil {
+		m.config.Nodelets = []persistedNodelet{}
+	}
+	return nil
 }
 
 func (m *NodeletManager) saveLocked() error {
 	if m.configPath == "" {
 		return nil
 	}
-	data, err := json.MarshalIndent(m.config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if err := os.WriteFile(m.configPath, data, 0600); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-	return nil
+	return store.SaveJSON(m.configPath, m.config)
 }

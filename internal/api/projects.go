@@ -48,12 +48,12 @@ func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request) {
 // handleProjectCreate handles POST /api/projects.
 func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 	if s.projectStore == nil {
-		http.Error(w, `{"error":"project store not initialized"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
 		return
 	}
 	var p config.Project
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	if err := s.projectStore.Add(p); err != nil {
@@ -83,12 +83,12 @@ func (s *Server) handleProjectGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("pid")
 	if s.projectStore == nil {
-		http.Error(w, `{"error":"project store not initialized"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
 		return
 	}
 	var p config.Project
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	p.ID = projectID
@@ -103,14 +103,14 @@ func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProjectDelete(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("pid")
 	if s.projectStore == nil {
-		http.Error(w, `{"error":"project store not initialized"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
 		return
 	}
 	if err := s.projectStore.Remove(projectID); err != nil {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSONOK(w)
 }
 
 // handleProjectServersList handles GET /api/projects/{pid}/servers.
@@ -166,7 +166,7 @@ func (s *Server) listProjectServers(w http.ResponseWriter, r *http.Request, proj
 
 func (s *Server) addProjectServer(w http.ResponseWriter, r *http.Request, projectID string) {
 	if s.projectStore == nil {
-		http.Error(w, `{"error":"project store not initialized"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -174,13 +174,13 @@ func (s *Server) addProjectServer(w http.ResponseWriter, r *http.Request, projec
 		NodeletID string `json:"nodeletId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeletID == "" {
-		http.Error(w, `{"error":"nodeletId is required"}`, http.StatusBadRequest)
+		writeJSONError(w, "nodeletId is required", http.StatusBadRequest)
 		return
 	}
 
 	// 验证 nodelet 存在。
 	if _, ok := s.findNodelet(req.NodeletID); !ok {
-		http.Error(w, `{"error":"nodelet not found in config"}`, http.StatusBadRequest)
+		writeJSONError(w, "nodelet not found in config", http.StatusBadRequest)
 		return
 	}
 
@@ -188,7 +188,7 @@ func (s *Server) addProjectServer(w http.ResponseWriter, r *http.Request, projec
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSONOK(w)
 }
 
 // handleProjectContainers handles GET /api/projects/{pid}/servers/{sid}/containers.

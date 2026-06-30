@@ -3,9 +3,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"time"
+
+	"oops/internal/store"
 )
 
 // DefaultProjectsPath 是项目配置文件的默认路径。
@@ -66,18 +67,8 @@ type ProjectStore struct {
 // NewProjectStore 从指定路径加载项目存储。如果文件不存在则创建空存储。
 func NewProjectStore(path string) (*ProjectStore, error) {
 	s := &ProjectStore{path: path}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("read projects file: %w", err)
-		}
-		s.config = ProjectStoreConfig{Projects: []Project{}}
-		return s, nil
-	}
-
-	if err := json.Unmarshal(data, &s.config); err != nil {
-		return nil, fmt.Errorf("parse projects file: %w", err)
+	if err := store.LoadJSON(path, &s.config); err != nil {
+		return nil, err
 	}
 	if s.config.Projects == nil {
 		s.config.Projects = []Project{}
@@ -231,12 +222,5 @@ func (s *ProjectStore) RemoveNodelet(projectID string, nodeletID string) error {
 }
 
 func (s *ProjectStore) saveLocked() error {
-	data, err := json.MarshalIndent(s.config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if err := os.WriteFile(s.path, data, 0600); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-	return nil
+	return store.SaveJSON(s.path, s.config)
 }

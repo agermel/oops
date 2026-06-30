@@ -12,6 +12,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultPath is the default path for the user credentials YAML file.
+const DefaultPath = "data/users.yml"
+
 // User 表示一个可登录的用户。
 type User struct {
 	Username string `yaml:"-"`      // 登录用户名（YAML map 的 key），不在 YAML 中序列化

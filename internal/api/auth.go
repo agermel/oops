@@ -17,11 +17,11 @@ func isHTTPS(r *http.Request) bool {
 // handleCreateToken 处理 POST /api/token，验证凭证并签发 JWT Cookie。
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if s.UserStore == nil || s.TokenService == nil {
-		http.Error(w, "auth not configured", http.StatusInternalServerError)
+		writeJSONError(w, "auth not configured", http.StatusInternalServerError)
 		return
 	}
 
@@ -29,12 +29,12 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	ct := r.Header.Get("Content-Type")
 	if strings.Contains(ct, "multipart/form-data") {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeJSONError(w, "bad request", http.StatusBadRequest)
 			return
 		}
 	} else {
 		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeJSONError(w, "bad request", http.StatusBadRequest)
 			return
 		}
 	}
@@ -45,14 +45,14 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	limitKey := loginLimitKey(username, r)
 	if !defaultLoginLimiter.allow(limitKey) {
 		w.Header().Set("Retry-After", "900")
-		http.Error(w, "too many login attempts, please try again later", http.StatusTooManyRequests)
+		writeJSONError(w, "too many login attempts, please try again later", http.StatusTooManyRequests)
 		return
 	}
 
 	user, err := s.UserStore.Validate(username, password)
 	if err != nil {
 		defaultLoginLimiter.recordFail(limitKey)
-		http.Error(w, "invalid username or password", http.StatusUnauthorized)
+		writeJSONError(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
 
@@ -60,7 +60,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	token, err := s.TokenService.CreateToken(username, user.Name)
 	if err != nil {
-		http.Error(w, "token creation failed", http.StatusInternalServerError)
+		writeJSONError(w, "token creation failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -84,7 +84,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 // handleDeleteToken 处理 DELETE /api/token，清除 JWT Cookie。
 func (s *Server) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{

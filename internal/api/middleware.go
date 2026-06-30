@@ -64,5 +64,5 @@ func sanitizedError(w http.ResponseWriter, context string, err error, status int
 	if msg == "" {
 		msg = "internal error"
 	}
-	http.Error(w, msg, status)
+	writeJSONError(w, msg, status)
 }

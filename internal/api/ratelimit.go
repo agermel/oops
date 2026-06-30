@@ -92,7 +92,7 @@ func rateLimitWith(next http.HandlerFunc, reqPerSec int, burst int) http.Handler
 		ip := extractIP(r)
 		if !defaultLimiter.allow(ip, reqPerSec, burst) {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			writeJSONError(w, "too many requests", http.StatusTooManyRequests)
 			return
 		}
 		next(w, r)

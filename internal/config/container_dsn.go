@@ -1,11 +1,14 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
+
+	"oops/internal/store"
 )
+
+// DefaultDSNPath is the default path for the container DSN overrides file.
+const DefaultDSNPath = "config/container_dsn.json"
 
 // ContainerDSNStore persists user DSN overrides per container.
 // It follows the same load/save pattern as ProjectStore and mcp.Manager.
@@ -29,9 +32,7 @@ func NewContainerDSNStore(path string) (*ContainerDSNStore, error) {
 	}
 
 	if err := s.load(); err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("load container dsn: %w", err)
-		}
+		return nil, fmt.Errorf("load container dsn: %w", err)
 	}
 	return s, nil
 }
@@ -88,12 +89,8 @@ func (s *ContainerDSNStore) Delete(nodeletID, containerID string) error {
 }
 
 func (s *ContainerDSNStore) load() error {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return err
-	}
 	var cfg dsnStoreConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := store.LoadJSON(s.path, &cfg); err != nil {
 		return err
 	}
 	s.entries = cfg.Entries
@@ -104,13 +101,5 @@ func (s *ContainerDSNStore) load() error {
 }
 
 func (s *ContainerDSNStore) saveLocked() error {
-	cfg := dsnStoreConfig{Entries: s.entries}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if err := os.WriteFile(s.path, data, 0600); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-	return nil
+	return store.SaveJSON(s.path, dsnStoreConfig{Entries: s.entries})
 }
