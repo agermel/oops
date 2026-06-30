@@ -90,22 +90,43 @@ export function ContainerMCP({
 
   // 构建一键配置预填
   function buildPrefill(): MCPPrefill {
-    const env: string[] = [];
-    if (dsn?.raw) {
-      const type = serviceType;
-      if (type === "mysql") env.push(`MYSQL_DSN=${dsn.raw}`);
-      else if (type === "redis") {
-        if (dsn.host) env.push(`REDIS_HOST=${dsn.host}`);
-        if (dsn.port) env.push(`REDIS_PORT=${String(dsn.port)}`);
-      } else if (type === "postgres") env.push(`DATABASE_URL=${dsn.raw}`);
-      else if (type === "mongo") env.push(`MONGO_URI=${dsn.raw}`);
-      else if (type === "elasticsearch") env.push(`ELASTICSEARCH_URL=${dsn.raw}`);
-      else env.push(dsn.raw);
-    }
     // 预填主机：优先用 DSN 检测到的，其次用节点服务器 IP
     const host = dsn?.host || serverIP();
     // 预填端口：优先用 DSN 检测到的，其次用容器暴露端口
     const port = dsn?.port ? String(dsn.port) : publishedPort();
+    const user = dsn?.user || "";
+    const database = dsn?.database || "";
+
+    const env: string[] = [];
+    const type = serviceType;
+
+    if (type === "mysql") {
+      if (dsn?.raw) {
+        env.push(`MYSQL_DSN=${dsn.raw}`);
+      } else if (host) {
+        env.push(`MYSQL_DSN=${user}:@tcp(${host}:${port})/${database}?charset=utf8mb4`);
+      }
+    } else if (type === "redis") {
+      if (host) env.push(`REDIS_HOST=${host}`);
+      if (port) env.push(`REDIS_PORT=${port}`);
+      env.push("REDIS_DB=0");
+      env.push("REDIS_PWD=");
+    } else if (type === "postgres") {
+      if (dsn?.raw) {
+        env.push(`DATABASE_URL=${dsn.raw}`);
+      } else if (host) {
+        env.push(`DATABASE_URL=postgres://${user}:@${host}:${port}/${database}`);
+      }
+    } else if (type === "elasticsearch") {
+      if (dsn?.raw) {
+        env.push(`ELASTICSEARCH_URL=${dsn.raw}`);
+      } else if (host) {
+        env.push(`ELASTICSEARCH_URL=http://${host}:${port || "9200"}`);
+      }
+    } else if (type === "mongo") {
+      if (dsn?.raw) env.push(`MONGO_URI=${dsn.raw}`);
+    }
+
     return {
       name: containerName,
       type: serviceType,
