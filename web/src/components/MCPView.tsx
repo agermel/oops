@@ -271,7 +271,7 @@ export function MCPView() {
                       <tr className="mcp-tools-row">
                         <td colSpan={7}>
                           <div className="mcp-tools-list">
-                            <MCPToolList connectionId={item.id} tools={item.tools!} />
+                            <MCPToolList connectionId={item.id} tools={item.tools!} onRefreshTools={fetchConnections} />
                           </div>
                         </td>
                       </tr>

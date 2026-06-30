@@ -148,7 +148,7 @@ export type ToolInfo = {
 
 // ToolTestResult 表示前端单个工具的测试状态。
 export type ToolTestResult = {
-  status: "untested" | "testing" | "ok" | "error";
+  status: "untested" | "testing" | "ok" | "error" | "unavailable" | "transport_error";
   output?: string;
   error?: string;
 };
@@ -198,13 +198,18 @@ export type LogEntry = {
 // ---- LLM 对话 ----
 
 export type StepEvent = {
-  type: "thinking" | "tool_call" | "tool_result" | "answer" | "error" | "session";
+  type: "thinking" | "tool_call" | "tool_result" | "answer" | "error" | "session" | "stats";
   content: string;
   toolName?: string;
   toolArgs?: string;
   toolCallId?: string;
   // session 事件专用
   sessionId?: string;
+  agentType?: string;   // Agent 类型: diagnose | inspect | default
+  maxStep?: number;     // 最大步数
+  // stats 事件专用
+  tokens?: number;      // 估算 token 用量
+  trimmed?: number;     // 被裁剪的消息数
 };
 
 export type ChatExchange = {

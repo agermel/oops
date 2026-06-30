@@ -625,6 +625,24 @@
   padding: var(--space-2) var(--space-4) var(--space-3);
 }
 
+.mcp-tools-subwrap {
+  margin-top: var(--space-2);
+}
+
+.mcp-tools-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.mcp-tools-subtitle {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--muted);
+}
+
 .mcp-tools-subtable {
   width: 100%;
   border-collapse: collapse;
@@ -675,6 +693,12 @@
 .tool-testing { color: var(--unknown); animation: spin 1s linear infinite; display: inline-block; }
 .tool-ok { color: var(--alive); cursor: help; }
 .tool-err { color: var(--dead); cursor: help; }
+.tool-warn { color: var(--unknown); cursor: help; }
+
+/* tool test detail color variants */
+.tool-detail-ok { background: var(--success-bg); color: var(--alive); }
+.tool-detail-warn { background: var(--warning-bg, #fff8e1); color: var(--unknown); }
+.tool-detail-error { background: var(--error-bg); color: var(--error-text); }
 
 /* tool test detail row */
 .tool-test-detail-row td {

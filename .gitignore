@@ -7,4 +7,5 @@ web/dist/
 config/mcp_connections.json
 config/projects.json
 data/users.yml
+data/events.db
 bin/

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,14 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
+)
+
+// Sentinel errors for TestTool to distinguish different failure modes.
+var (
+	// ErrConnectionNotRunning indicates the MCP connection process is not active.
+	ErrConnectionNotRunning = errors.New("connection not running")
+	// ErrToolCallFailed indicates the transport-level call to the MCP tool failed.
+	ErrToolCallFailed = errors.New("tool call failed")
 )
 
 // DefaultConfigPath is the default path for the MCP connections file.
@@ -390,7 +399,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 	proc, ok := m.processes[connID]
 	if !ok {
 		m.mu.Unlock()
-		return "", fmt.Errorf("connection %q is not running", connID)
+		return "", fmt.Errorf("%w: %q", ErrConnectionNotRunning, connID)
 	}
 	session := proc.session
 	cfgName := proc.cfg.Name
@@ -426,7 +435,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			zap.Error(err),
 		)
 		console.Feed("mcp error: test tool %q on %q: %v", toolName, cfgName, err)
-		return "", fmt.Errorf("call %q: %w", toolName, err)
+		return "", fmt.Errorf("%w: call %q: %w", ErrToolCallFailed, toolName, err)
 	}
 	if result.IsError {
 		var msgs []string

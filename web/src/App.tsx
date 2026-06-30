@@ -17,6 +17,7 @@ import { usePathRouter } from "./hooks/usePathRouter";
 import { pageConfig } from "./lib/config";
 import { apiRequest, getErrorMessage } from "./lib/api";
 import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
+import { shouldAutoExpandFirstServer } from "./lib/serverTreeState";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
 import { ProjectsView } from "./components/ProjectsView";
@@ -66,6 +67,7 @@ export function App() {
   const [selectedContainerID, setSelectedContainerID] = React.useState("");
 
   const lastLoadedProjectRef = React.useRef("");
+  const autoExpandFirstServerRef = React.useRef(false);
 
   // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
@@ -113,6 +115,9 @@ export function App() {
   });
   const [sessionLoaded, setSessionLoaded] = React.useState(false);
   const [sessions, setSessions] = React.useState<SessionInfo[]>([]);
+  const [agentType, setAgentType] = React.useState<string>("");
+  const [maxStep, setMaxStep] = React.useState<number>(0);
+  const [tokenStats, setTokenStats] = React.useState<{ tokens: number; trimmed: number } | null>(null);
 
   // ---- 日志缓冲区 ----
   const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -424,6 +429,12 @@ export function App() {
               if (evt.type === "session" && evt.content) {
                 setSessionId(evt.content);
                 localStorage.setItem("oops_session_id", evt.content);
+                if (evt.agentType) setAgentType(evt.agentType);
+                if (evt.maxStep) setMaxStep(evt.maxStep);
+                continue;
+              }
+              if (evt.type === "stats") {
+                setTokenStats({ tokens: evt.tokens || 0, trimmed: evt.trimmed || 0 });
                 continue;
               }
               chatStepsRef.current = [...chatStepsRef.current, evt];
@@ -479,6 +490,74 @@ export function App() {
     setChatError("");
     setSessionId("");
     setSessionLoaded(false);
+    setAgentType("");
+    setMaxStep(0);
+    setTokenStats(null);
+  }
+
+  async function switchSession(id: string) {
+    if (chatLoadingRef.current) return; // 正在流式传输中不切换
+    closeLogStream();
+    try {
+      const detail = await apiRequest<SessionDetail>(
+        sessionPaths(id).get + "?include_messages=true"
+      );
+      if (detail?.id) {
+        const exchanges: ChatExchange[] = [];
+        let currentQuestion = "";
+        let currentSteps: StepEvent[] = [];
+        for (const msg of detail.messages) {
+          if (msg.role === "user") {
+            if (currentQuestion) {
+              exchanges.push({ question: currentQuestion, steps: currentSteps });
+            }
+            currentQuestion = msg.content;
+            currentSteps = [];
+          } else if (msg.role === "assistant") {
+            currentSteps.push({ type: "answer", content: msg.content });
+          } else if (msg.role === "thinking") {
+            currentSteps.push({ type: "thinking", content: msg.content });
+          } else if (msg.role === "tool_call") {
+            currentSteps.push({
+              type: "tool_call",
+              content: msg.content,
+              toolCallId: msg.toolCallId,
+              toolName: msg.toolName,
+              toolArgs: msg.toolArgs,
+            });
+          } else if (msg.role === "tool") {
+            currentSteps.push({
+              type: "tool_result",
+              content: msg.content,
+              toolCallId: msg.toolCallId,
+              toolName: msg.toolName,
+            });
+          }
+        }
+        if (currentQuestion) {
+          const answer = currentSteps.find((s) => s.type === "answer");
+          exchanges.push({
+            question: currentQuestion,
+            steps: currentSteps,
+            answer: answer?.content,
+          });
+        }
+        setChatExchanges(exchanges);
+        setCurrentSteps([]);
+        chatStepsRef.current = [];
+        setCurrentQuestion("");
+        setChatError("");
+        setSessionId(id);
+        localStorage.setItem("oops_session_id", id);
+        setSessionLoaded(true);
+        setAgentType("");
+        setMaxStep(0);
+        setTokenStats(null);
+        loadSessions();
+      }
+    } catch (err) {
+      setChatError(getErrorMessage(err, "加载会话失败"));
+    }
   }
 
   async function loadSessions() {
@@ -503,6 +582,9 @@ export function App() {
     setSessionId("");
     setSessionLoaded(false);
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    setAgentType("");
+    setMaxStep(0);
+    setTokenStats(null);
   }
 
   React.useEffect(() => {
@@ -556,6 +638,7 @@ export function App() {
     if (!authenticated) return;
     if (selectedProjectID && selectedProjectID !== lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = selectedProjectID;
+      autoExpandFirstServerRef.current = false;
       setSelectedNodeletID("");
       setSelectedContainerID("");
       setServers([]);
@@ -568,6 +651,7 @@ export function App() {
     }
     if (!selectedProjectID && lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = "";
+      autoExpandFirstServerRef.current = false;
       setSelectedNodeletID("");
       setSelectedContainerID("");
       setServers([]);
@@ -598,11 +682,17 @@ export function App() {
 
   // Effect E: 进入项目概览且无展开的 server → 自动展开首台服务器并选中
   React.useEffect(() => {
-    if (!authenticated || route.view !== "project-overview") return;
-    if (servers.length === 0 || serversLoading) return;
-    if (expandedServers.size > 0) return;
+    if (!shouldAutoExpandFirstServer({
+      authenticated,
+      view: route.view,
+      serverCount: servers.length,
+      serversLoading,
+      expandedCount: expandedServers.size,
+      autoExpandConsumed: autoExpandFirstServerRef.current,
+    })) return;
 
     const first = servers[0];
+    autoExpandFirstServerRef.current = true;
     setExpandedServers(new Set([first.nodelet.id]));
     setSelectedNodeletID(first.nodelet.id);
     setSelectedContainerID("");
@@ -783,10 +873,14 @@ export function App() {
               chatError={chatError}
               sessionId={sessionId}
               sessions={sessions}
+              agentType={agentType}
+              maxStep={maxStep}
+              tokenStats={tokenStats}
               onInputChange={setChatInput}
               onSend={() => sendChat()}
               onClear={clearChat}
               onNewChat={startNewChat}
+              onSelectSession={switchSession}
             />
           </section>
         )}

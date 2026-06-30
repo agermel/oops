@@ -15,8 +15,10 @@ function summarizeToolArgs(toolArgs: string): string {
   }
 }
 
-export function StepBlock({ step, animate, hasResult }: { step: StepEvent; animate?: boolean; hasResult?: boolean }) {
+export function StepBlock({ step, animate, hasResult, forceExpand }: { step: StepEvent; animate?: boolean; hasResult?: boolean; forceExpand?: boolean }) {
   const [expanded, setExpanded] = React.useState(false);
+
+  const isExpanded = forceExpand || expanded;
 
   if (step.type === "thinking") {
     return (
@@ -62,12 +64,12 @@ export function StepBlock({ step, animate, hasResult }: { step: StepEvent; anima
     }
     return (
       <div className="step-block step-tool-result">
-        <div className="step-icon">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</div>
+        <div className="step-icon">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</div>
         <div className="step-content">
           <button className="step-toggle" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? "收起" : "展开"} {resultName} 返回
+            {isExpanded ? "收起" : "展开"} {resultName} 返回
           </button>
-          <div className={`step-result-wrap ${expanded ? "open" : ""}`}>
+          <div className={`step-result-wrap ${isExpanded ? "open" : ""}`}>
             <pre className="step-result">{formatted}</pre>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import React from "react";
-import { Wrench, Plus, Trash2, Edit3 } from "lucide-react";
+import { Wrench, Plus, Trash2, Edit3, RotateCw } from "lucide-react";
 import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo, MCPPrefill } from "../types";
 import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
@@ -139,6 +139,10 @@ export function ContainerMCP({
       <div className="section-header">
         <Wrench size={18} />
         <h2>MCP 连接</h2>
+        <Button variant="ghost" size="sm" onClick={fetchConnection} disabled={loading} title="刷新 MCP 连接状态">
+          <RotateCw size={14} className={loading ? "spin" : ""} />
+          <span>刷新</span>
+        </Button>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
@@ -212,7 +216,7 @@ export function ContainerMCP({
             <div className="mcp-tools-section">
               <div className="mcp-tools-section-title">工具列表</div>
               <div className="mcp-tools-list">
-                <MCPToolList connectionId={connection.id} tools={connection.tools} />
+                <MCPToolList connectionId={connection.id} tools={connection.tools} onRefreshTools={fetchConnection} />
               </div>
             </div>
           )}

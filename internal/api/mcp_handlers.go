@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -298,7 +299,14 @@ func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) 
 			zap.String("tool", toolName),
 			zap.Error(err),
 		)
-		writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+		switch {
+		case errors.Is(err, mcp.ErrConnectionNotRunning):
+			writeJSON(w, map[string]string{"status": "unavailable", "error": err.Error()})
+		case errors.Is(err, mcp.ErrToolCallFailed):
+			writeJSON(w, map[string]string{"status": "transport_error", "error": err.Error()})
+		default:
+			writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok", "output": output})

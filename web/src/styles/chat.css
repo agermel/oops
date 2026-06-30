@@ -23,12 +23,13 @@
   background: var(--surface-subtle);
 }
 
-.chat-header span {
+.chat-header-left {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   font-weight: var(--font-bold);
   font-size: var(--text-md);
+  flex-wrap: wrap;
 }
 
 .chat-header button {
@@ -250,36 +251,6 @@
 
 /* ---- Chat Footer ---- */
 
-.chat-footer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 48px;
-  gap: 10px;
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
-  background: var(--surface-subtle);
-}
-
-.chat-footer .form-input {
-  height: 40px;
-  font-size: var(--text-base);
-}
-
-.chat-footer button {
-  width: 48px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  color: var(--surface-card);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--primary);
-}
-
-.chat-footer button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .chat-active {
   color: var(--alive) !important;
 }
@@ -394,3 +365,121 @@
   overflow: auto;
   font-family: var(--font-mono);
 }
+
+/* ---- Agent Badge ---- */
+
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.agent-badge-diagnose {
+  background: var(--error-bg);
+  color: var(--dead);
+  border: 1px solid var(--error-border);
+}
+
+.agent-badge-inspect {
+  background: var(--success-bg);
+  color: var(--alive);
+  border: 1px solid var(--alive);
+}
+
+.agent-badge-default {
+  background: var(--blue-50);
+  color: var(--primary);
+  border: 1px solid var(--primary);
+}
+
+/* ---- Agent Step Counter ---- */
+
+.agent-step-counter {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-weight: var(--font-normal);
+  padding: 2px 6px;
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- Session Badge (clickable) ---- */
+
+.chat-session-badge {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.chat-session-badge:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ---- Token Stats ---- */
+
+.chat-footer {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.chat-footer-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  gap: 10px;
+}
+
+.chat-footer-main .form-input {
+  height: 40px;
+  font-size: var(--text-base);
+}
+
+.chat-footer-main button {
+  width: 48px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--surface-card);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+}
+
+.chat-footer-main button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-token-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.chat-token-stats.token-trimmed {
+  color: var(--unknown);
+}
+
+.token-trimmed-hint {
+  color: var(--unknown);
+  font-weight: var(--font-semibold);
+}
+
+/* Remove old single-rule footer button styles (now under .chat-footer-main) */

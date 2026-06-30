@@ -217,8 +217,13 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	fmt.Fprintf(w, ":ok\n\n")
 	flusher.Flush()
 
-	// 首条事件：告知客户端 session ID。
-	sessionEvt := llm.StepEvent{Type: "session", Content: sess.ID}
+	// 首条事件：告知客户端 session ID + Agent 类型 + 最大步数。
+	sessionEvt := llm.StepEvent{
+		Type:      "session",
+		Content:   sess.ID,
+		AgentType: string(agentCfg.Type),
+		MaxStep:   agentCfg.MaxStep,
+	}
 	data, _ := json.Marshal(sessionEvt)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
@@ -233,6 +238,17 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		}
 		flusher.Flush()
 	}
+
+	// 末尾事件：token 用量统计。
+	statsEvt := llm.StepEvent{
+		Type:    "stats",
+		Tokens:  trimResult.TotalTokens,
+		Trimmed: trimResult.Trimmed,
+	}
+	statsData, _ := json.Marshal(statsEvt)
+	fmt.Fprintf(w, "data: %s\n\n", statsData)
+	flusher.Flush()
+
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
