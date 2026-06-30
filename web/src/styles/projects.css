@@ -1090,6 +1090,22 @@
   vertical-align: middle;
 }
 
+.mcp-status-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.mcp-check-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
 .mcp-toggle-cell {
   text-align: center;
 }

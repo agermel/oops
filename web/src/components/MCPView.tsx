@@ -20,13 +20,26 @@ export function MCPView() {
   const [editItem, setEditItem] = React.useState<MCPConnectionStatus | null>(null);
 
   const [toggling, setToggling] = React.useState<Set<string>>(new Set());
+  const [checking, setChecking] = React.useState<Set<string>>(new Set());
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set());
+
+  function setCheckingIds(update: (prev: Set<string>) => Set<string>) {
+    setChecking((prev) => {
+      const next = update(prev);
+      return next;
+    });
+  }
+
+  function replaceConnection(nextItem: MCPConnectionStatus) {
+    setConnections((prev) => prev.map((item) => (item.id === nextItem.id ? nextItem : item)));
+  }
 
   async function fetchConnections() {
     setLoading(true);
     setError("");
     try {
-      setConnections(await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections"));
+      const next = await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections");
+      setConnections(next);
     } catch (err) {
       setError(getErrorMessage(err, "读取 MCP 连接失败"));
     } finally {
@@ -34,19 +47,43 @@ export function MCPView() {
     }
   }
 
-  async function pollConnections() {
+  async function refreshConnectionsQuietly() {
     try {
-      setConnections(await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections"));
+      const next = await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections");
+      setConnections(next);
+      setCheckingIds((prev) => {
+        const nextChecking = new Set(prev);
+        for (const item of next) {
+          if (item.status === "running" || (item.status === "error" && item.error) || !item.enabled) {
+            nextChecking.delete(item.id);
+          }
+        }
+        return nextChecking;
+      });
+      return next;
     } catch (_err) {
       // 轮询静默失败，不覆盖已有数据和错误展示
+      return null;
     }
   }
 
   React.useEffect(() => {
     fetchConnections();
-    const interval = setInterval(pollConnections, 30_000);
+    const interval = setInterval(refreshConnectionsQuietly, 30_000);
     return () => { clearInterval(interval); };
   }, []);
+
+  React.useEffect(() => {
+    if (checking.size === 0) return;
+    const startedAt = Date.now();
+    const interval = setInterval(async () => {
+      await refreshConnectionsQuietly();
+      if (Date.now() - startedAt >= 60_000) {
+        setCheckingIds(() => new Set());
+      }
+    }, 1_000);
+    return () => clearInterval(interval);
+  }, [checking.size]);
 
   function openAdd() {
     setEditItem(null);
@@ -68,7 +105,7 @@ export function MCPView() {
     }
   }
 
-  async function handleToggleEnabled(item: MCPConnectionStatus) {
+  async function handleToggleEnabled(item: MCPConnectionStatus, enabled: boolean) {
     setToggling((prev) => new Set(prev).add(item.id));
     const body: MCPConnectionConfig = {
       id: item.id,
@@ -77,7 +114,9 @@ export function MCPView() {
       command: item.command,
       args: item.args,
       env: item.env,
-      enabled: !item.enabled,
+      enabled,
+      containerId: item.containerId,
+      nodeletId: item.nodeletId,
     };
     try {
       await apiRequest(`/api/mcp/connections/${encodeURIComponent(item.id)}`, {
@@ -85,7 +124,26 @@ export function MCPView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      fetchConnections();
+      if (enabled) {
+        replaceConnection({ ...item, enabled, status: "stopped", error: undefined });
+        setCheckingIds((prev) => new Set(prev).add(item.id));
+        await refreshConnectionsQuietly();
+      } else {
+        replaceConnection({
+          ...item,
+          enabled,
+          status: "stopped",
+          error: undefined,
+          toolCount: 0,
+          tools: undefined,
+        });
+        setCheckingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
+        refreshConnectionsQuietly();
+      }
     } catch (err) {
       setError(getErrorMessage(err, "更新失败"));
     } finally {
@@ -162,6 +220,7 @@ export function MCPView() {
               connections.map((item) => {
                 const isExpanded = expandedRows.has(item.id);
                 const hasTools = item.status === "running" && item.tools && item.tools.length > 0;
+                const isChecking = checking.has(item.id);
                 return (
                   <React.Fragment key={item.id}>
                     <tr className={isExpanded ? "mcp-row-expanded" : ""}>
@@ -170,7 +229,12 @@ export function MCPView() {
                         <TypePill label={item.type} />
                       </td>
                       <td>
-                        <StatusPill status={item.status} labelMap={mcpStatusLabel} />
+                        <span className="mcp-status-inline">
+                          <StatusPill status={item.status} labelMap={mcpStatusLabel} />
+                          <span className="mcp-check-slot">
+                            {isChecking && <span className="spinner spinner-sm" title="检查中" />}
+                          </span>
+                        </span>
                         {item.error && <span className="error-hint">{item.error}</span>}
                       </td>
                       <td className="mcp-count-cell">
@@ -189,7 +253,7 @@ export function MCPView() {
                         <ToggleSwitch
                           checked={item.enabled}
                           disabled={toggling.has(item.id)}
-                          onChange={() => handleToggleEnabled(item)}
+                          onChange={(enabled) => handleToggleEnabled(item, enabled)}
                         />
                       </td>
                       <td className="mcp-actions-cell">
