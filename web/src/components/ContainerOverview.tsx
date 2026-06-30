@@ -15,7 +15,7 @@ export function ContainerOverview({ detail, onEditDSN }: { detail: ContainerDeta
           <h2>{detail.container.name}</h2>
           <div className="overview-header-badges">
             {label && <TypePill label={label} />}
-            <StatusPill status={detail.container.state} labelMap={{ running: "running", dead: "dead", exited: "exited" }} />
+            <StatusPill status={detail.container.state} labelMap={{ running: "运行中", dead: "已停止", exited: "已退出" }} />
           </div>
         </div>
       </div>

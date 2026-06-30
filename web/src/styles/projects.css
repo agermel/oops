@@ -155,8 +155,23 @@
   margin-bottom: 2px;
 }
 
+.tree-node-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tree-remove-btn {
+  flex: 0 0 auto;
+}
+
+.tree-node-detail {
+  padding-left: 22px;
+  padding-top: var(--space-1);
+}
+
 .tree-node-error {
-  margin: -3px 10px 8px 38px;
+  margin: 0 0 var(--space-2) 0;
   padding: 7px 9px;
   color: var(--error-text);
   background: var(--error-bg);
@@ -172,6 +187,7 @@
   align-items: center;
   gap: var(--space-1);
   width: 100%;
+  min-width: 0;
   padding: 9px 10px;
   border: none;
   background: none;
@@ -195,6 +211,9 @@
   display: block;
   font-size: var(--text-base);
   font-weight: var(--font-bold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tree-server-info small {
@@ -204,11 +223,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.tree-containers {
-  padding-left: 22px;
-  padding-top: var(--space-1);
 }
 
 .tree-container {
@@ -358,14 +372,14 @@
   background: var(--surface-card);
 }
 
-.detail-body > [role="tabpanel"]:not([hidden]) {
+.detail-body > [role="tabpanel"] {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-.detail-body > [role="tabpanel"]:not([hidden]):has(.container-logs) {
-  min-height: 0;
+/* 日志 tab 的滚动由 ContainerLogs 内部控制 */
+.detail-body > [role="tabpanel"]:has(.container-logs) {
   display: flex;
   flex-direction: column;
   overflow: hidden;

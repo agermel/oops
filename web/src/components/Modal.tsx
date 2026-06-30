@@ -15,13 +15,19 @@ export function Modal({
   onClose: () => void;
   maxWidth?: string;
 }) {
+  // 全局 Escape 监听（div 不可聚焦，onKeyDown 无效，改用 useEffect + keydown listener）
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div
       className="modal-overlay"
       onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
     >
       <div
         className="modal-card"

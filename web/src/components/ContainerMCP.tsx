@@ -1,6 +1,6 @@
 import React from "react";
 import { Wrench, Plus, Trash2, Edit3, RotateCw } from "lucide-react";
-import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo, MCPPrefill } from "../types";
+import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo, MCPPrefill, PortMapping } from "../types";
 import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { serverPaths } from "../lib/paths";
@@ -17,6 +17,8 @@ export function ContainerMCP({
   containerName,
   serviceType,
   dsn,
+  nodeletAddress,
+  containerPorts,
   onMCPChanged,
 }: {
   mcp?: MCPStatus;
@@ -26,6 +28,8 @@ export function ContainerMCP({
   containerName: string;
   serviceType: string;
   dsn?: DSNInfo;
+  nodeletAddress?: string;
+  containerPorts?: PortMapping[];
   onMCPChanged: () => void;
 }) {
   const [connection, setConnection] = React.useState<MCPConnectionStatus | null>(null);
@@ -62,6 +66,28 @@ export function ContainerMCP({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, nodeletId, containerId, mcp?.connectionId]);
 
+  // 从 nodelet 地址提取服务器 IP（去掉协议和 nodelet API 端口）
+  function serverIP(): string {
+    if (!nodeletAddress) return "";
+    try {
+      const u = new URL(nodeletAddress);
+      return u.hostname;
+    } catch {
+      // 如果不是合法 URL，原样返回
+      return nodeletAddress.replace(/^https?:\/\//, "").replace(/:\d+$/, "");
+    }
+  }
+
+  // 从容器的端口映射里取第一个对外暴露的端口号
+  function publishedPort(): string {
+    if (!containerPorts || containerPorts.length === 0) return "";
+    for (const p of containerPorts) {
+      if (p.hostPort) return p.hostPort;
+    }
+    // 没有 hostPort 就用容器内部端口
+    return String(containerPorts[0].containerPort || "");
+  }
+
   // 构建一键配置预填
   function buildPrefill(): MCPPrefill {
     const env: string[] = [];
@@ -76,11 +102,15 @@ export function ContainerMCP({
       else if (type === "elasticsearch") env.push(`ELASTICSEARCH_URL=${dsn.raw}`);
       else env.push(dsn.raw);
     }
+    // 预填主机：优先用 DSN 检测到的，其次用节点服务器 IP
+    const host = dsn?.host || serverIP();
+    // 预填端口：优先用 DSN 检测到的，其次用容器暴露端口
+    const port = dsn?.port ? String(dsn.port) : publishedPort();
     return {
       name: containerName,
       type: serviceType,
-      host: dsn?.host,
-      port: dsn?.port,
+      host: host || undefined,
+      port: port ? Number(port) : undefined,
       user: dsn?.user,
       database: dsn?.database,
       env,

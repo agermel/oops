@@ -103,11 +103,12 @@ type ManagerConfig struct {
 }
 
 type managedProcess struct {
-	cfg     ConnectionConfig
-	session MCPSession // retained for per-tool testing
-	closer  func()
-	tools   []tool.BaseTool
-	exitCh  <-chan struct{} // closed when the subprocess exits (nil for SSE)
+	cfg       ConnectionConfig
+	session   MCPSession // retained for per-tool testing
+	closer    func()
+	tools     []tool.BaseTool
+	exitCh    <-chan struct{} // closed when the subprocess exits (nil for SSE)
+	stderrBuf *StderrBuffer   // captured stderr; nil for SSE
 }
 
 // Manager manages MCP server subprocess lifecycles and persists configuration.
@@ -559,8 +560,13 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, _, closer, _, err := Connect(ctx, mcpCfg)
+	_, _, closer, _, stderrBuf, err := Connect(ctx, mcpCfg)
 	if err != nil {
+		if stderrBuf != nil {
+			if s := stderrBuf.String(); s != "" {
+				return fmt.Errorf("test connect: %w\nstderr: %s", err, s)
+			}
+		}
 		return fmt.Errorf("test connect: %w", err)
 	}
 	closer()
@@ -620,16 +626,17 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 
-		session, tools, closer, exitCh, err := Connect(ctx, mcpCfg)
+		session, tools, closer, exitCh, stderrBuf, err := Connect(ctx, mcpCfg)
 		cancel()
 
 		if err == nil {
 			m.processes[cfg.ID] = &managedProcess{
-				cfg:     cfg,
-				session: session,
-				closer:  closer,
-				tools:   tools,
-				exitCh:  exitCh,
+				cfg:       cfg,
+				session:   session,
+				closer:    closer,
+				tools:     tools,
+				exitCh:    exitCh,
+				stderrBuf: stderrBuf,
 			}
 			logutil.Info("mcp: started",
 				zap.String("id", cfg.ID),
@@ -671,16 +678,14 @@ func (m *Manager) monitorExit(id string, exitCh <-chan struct{}) {
 		return // already stopped/removed
 	}
 	session := proc.session
+	stderrBuf := proc.stderrBuf
 	m.mu.Unlock()
 
 	// 进程已退出，检查是否还能通信。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "ping"
-	req.Params.Arguments = map[string]any{}
-	_, err := session.CallTool(ctx, req)
+	err := session.Ping(ctx)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -691,13 +696,19 @@ func (m *Manager) monitorExit(id string, exitCh <-chan struct{}) {
 	}
 
 	if err != nil {
+		errMsg := fmt.Sprintf("进程意外退出: %v", err)
+		if stderrBuf != nil {
+			if s := stderrBuf.String(); s != "" {
+				errMsg += "\nstderr: " + s
+			}
+		}
 		logutil.Error("mcp: process exited unexpectedly",
 			zap.String("id", id),
 			zap.Error(err),
 		)
 		console.Feed("mcp error: connection %q exited unexpectedly: %v", id, err)
 		delete(m.processes, id)
-		m.errors[id] = fmt.Sprintf("进程意外退出: %v", err)
+		m.errors[id] = errMsg
 	} else {
 		// 虽然 stderr 管道关闭了，但 session 仍能通信（可能是 stderr 被关闭但进程还在）。
 		// 暂时保留运行状态。
@@ -774,27 +785,25 @@ func (m *Manager) keepaliveLoop(interval time.Duration) {
 	}
 }
 
-// pingRunning 对所有 running 状态的连接发送 CallTool("ping")。
+// pingRunning 对所有 running 状态的连接发送 MCP 协议 Ping。
 // 参考 monitorExit 的锁外 ping 模式：先复制 session 引用再释放锁，
 // 避免持锁期间进行网络调用。
 func (m *Manager) pingRunning() {
 	m.mu.Lock()
 	type target struct {
-		id      string
-		session MCPSession
+		id        string
+		session   MCPSession
+		stderrBuf *StderrBuffer
 	}
 	targets := make([]target, 0, len(m.processes))
 	for id, proc := range m.processes {
-		targets = append(targets, target{id: id, session: proc.session})
+		targets = append(targets, target{id: id, session: proc.session, stderrBuf: proc.stderrBuf})
 	}
 	m.mu.Unlock()
 
 	for _, t := range targets {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		req := mcp.CallToolRequest{}
-		req.Params.Name = "ping"
-		req.Params.Arguments = map[string]any{}
-		_, err := t.session.CallTool(ctx, req)
+		err := t.session.Ping(ctx)
 		cancel()
 
 		if err != nil {
@@ -802,7 +811,13 @@ func (m *Manager) pingRunning() {
 			// 双重检查：可能在等待期间被 stop/remove 清理。
 			if _, stillRunning := m.processes[t.id]; stillRunning {
 				m.stopLocked(t.id)
-				m.errors[t.id] = fmt.Sprintf("keepalive ping failed: %v", err)
+				errMsg := fmt.Sprintf("keepalive ping failed: %v", err)
+				if t.stderrBuf != nil {
+					if s := t.stderrBuf.String(); s != "" {
+						errMsg += "\nstderr: " + s
+					}
+				}
+				m.errors[t.id] = errMsg
 				logutil.Warn("mcp: keepalive ping failed",
 					zap.String("connID", t.id),
 					zap.Error(err),

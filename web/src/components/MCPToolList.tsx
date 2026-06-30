@@ -1,7 +1,7 @@
 import React from "react";
 import { Play, RotateCw, AlertTriangle, WifiOff, XCircle } from "lucide-react";
 import type { ToolInfo, ToolTestResult } from "../types";
-import { apiRequest, getErrorMessage } from "../lib/api";
+import { getErrorMessage } from "../lib/api";
 import { Button } from "./ui/Button";
 
 // toolTestStatus 返回测试结果的显示信息。
@@ -45,22 +45,25 @@ export function MCPToolList({
         `/api/mcp/connections/${encodeURIComponent(connectionId)}/tools/${encodeURIComponent(toolName)}/test`,
         { method: "POST" },
       );
-      const data = await resp.json().catch(() => ({ status: "error", error: `HTTP ${resp.status}` }));
-      const result: ToolTestResult = data.status === "ok"
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        // HTTP 错误：区分后端不可达 (502/503) 和业务错误 (4xx)
+        const isTransport = resp.status >= 500 || resp.status === 0;
+        const result: ToolTestResult = {
+          status: isTransport ? "transport_error" : (data?.status || "error"),
+          error: data?.error || `HTTP ${resp.status}`,
+        };
+        setToolTests((prev) => { const next = { ...prev, [key]: result }; toolTestsRef.current = next; return next; });
+        return;
+      }
+      const result: ToolTestResult = data?.status === "ok"
         ? { status: "ok", output: data.output }
-        : { status: data.status || "error", error: data.error || "未知错误" };
-      setToolTests((prev) => {
-        const next = { ...prev, [key]: result };
-        toolTestsRef.current = next;
-        return next;
-      });
+        : { status: data?.status || "error", error: data?.error || "未知错误" };
+      setToolTests((prev) => { const next = { ...prev, [key]: result }; toolTestsRef.current = next; return next; });
     } catch (err) {
-      const result: ToolTestResult = { status: "error", error: getErrorMessage(err, "测试请求失败") };
-      setToolTests((prev) => {
-        const next = { ...prev, [key]: result };
-        toolTestsRef.current = next;
-        return next;
-      });
+      // fetch 本身抛出的异常（网络断开等）→ 传输层错误
+      const result: ToolTestResult = { status: "transport_error", error: getErrorMessage(err, "网络请求失败") };
+      setToolTests((prev) => { const next = { ...prev, [key]: result }; toolTestsRef.current = next; return next; });
     } finally {
       setTestingTools((prev) => {
         const next = new Set(prev);

@@ -27,12 +27,18 @@ export function ConsolePanel() {
   const [entries, setEntries] = React.useState<ConsoleEntry[]>([]);
   const [autoScroll, setAutoScroll] = React.useState(true);
   const [levelFilter, setLevelFilter] = React.useState<Set<string>>(() => new Set(["info", "warn", "error"]));
+  const [connStatus, setConnStatus] = React.useState<"connecting" | "open" | "error">("connecting");
   const panelRef = React.useRef<HTMLDivElement>(null);
   const sourceRef = React.useRef<EventSource | null>(null);
 
   React.useEffect(() => {
+    setConnStatus("connecting");
     const source = new EventSource("/api/console/stream");
     sourceRef.current = source;
+
+    source.onopen = () => {
+      setConnStatus("open");
+    };
 
     source.onmessage = (event) => {
       try {
@@ -44,7 +50,8 @@ export function ConsolePanel() {
     };
 
     source.onerror = () => {
-      // EventSource auto-reconnects
+      setConnStatus("error");
+      // EventSource 自动重连，重连成功后 onopen 会再次触发
     };
 
     return () => {
@@ -84,6 +91,9 @@ export function ConsolePanel() {
       {/* Toolbar */}
       <div className="console-toolbar">
         <div className="console-stats">
+          <span className={`console-stat conn-${connStatus}`}>
+            {connStatus === "connecting" ? "连接中…" : connStatus === "error" ? "连接断开" : "已连接"}
+          </span>
           {entries.length > 0 ? (
             <>
               <span className="console-stat">共 {entries.length} 条</span>

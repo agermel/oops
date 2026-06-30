@@ -55,6 +55,49 @@ function emptyCreds(): Credentials {
   return { host: "", port: "", user: "", password: "", database: "" };
 }
 
+// 每种类型展示的连接参数字段（按序）。
+interface CredentialField {
+  key: keyof Credentials;
+  label: string;
+  placeholder: string;
+  /** 设为 true 时使用 password 输入框 */
+  isPassword?: boolean;
+}
+
+const typeCredentialFields: Record<string, CredentialField[]> = {
+  mysql: [
+    { key: "host", label: "主机", placeholder: "host" },
+    { key: "port", label: "端口", placeholder: "3306" },
+    { key: "user", label: "用户", placeholder: "root" },
+    { key: "password", label: "密码", placeholder: "输入密码", isPassword: true },
+    { key: "database", label: "数据库", placeholder: "mysql" },
+  ],
+  redis: [
+    { key: "host", label: "主机", placeholder: "127.0.0.1" },
+    { key: "port", label: "端口", placeholder: "6379" },
+    { key: "password", label: "密码", placeholder: "输入密码", isPassword: true },
+    { key: "database", label: "DB 编号", placeholder: "0" },
+  ],
+  postgres: [
+    { key: "host", label: "主机", placeholder: "host" },
+    { key: "port", label: "端口", placeholder: "5432" },
+    { key: "user", label: "用户", placeholder: "postgres" },
+    { key: "password", label: "密码", placeholder: "输入密码", isPassword: true },
+    { key: "database", label: "数据库", placeholder: "postgres" },
+  ],
+  etcd: [
+    { key: "host", label: "端点", placeholder: "127.0.0.1:2379" },
+    { key: "user", label: "用户", placeholder: "(可选)" },
+    { key: "password", label: "密码", placeholder: "输入密码", isPassword: true },
+  ],
+  elasticsearch: [
+    { key: "host", label: "地址", placeholder: "127.0.0.1" },
+    { key: "port", label: "端口", placeholder: "9200" },
+    { key: "user", label: "用户", placeholder: "elastic" },
+    { key: "password", label: "密码", placeholder: "输入密码", isPassword: true },
+  ],
+};
+
 // 从环境变量列表反解连接参数
 function parseCredentials(type: string, env: string[]): Credentials {
   const creds = emptyCreds();
@@ -216,6 +259,9 @@ export function MCPFormModal({
         if (prefill.user) c.user = prefill.user;
         if (prefill.database) c.database = prefill.database;
         setCreds(c);
+      } else {
+        // 从类型默认环境变量预填连接参数（主机、端口等）
+        setCreds(parseCredentials(form.type, form.env));
       }
       setEditing(form);
     }
@@ -300,6 +346,7 @@ export function MCPFormModal({
   }
 
   const showCredentials = typesWithCredentials.has(editing?.type || "");
+  const credFields = typeCredentialFields[editing?.type || ""] || [];
 
   return (
     <Modal
@@ -359,53 +406,34 @@ export function MCPFormModal({
         <option value="other">其他</option>
       </select>
 
-      {/* 连接参数 */}
-      {showCredentials && (
+      {/* 连接参数 —— 按类型展示不同字段 */}
+      {showCredentials && credFields.length > 0 && (
         <fieldset className="creds-fieldset">
           <legend>连接参数</legend>
           <div className="creds-grid">
-            <label htmlFor="mcp-creds-host">主机</label>
-            <FormInput
-              id="mcp-creds-host"
-              value={creds.host}
-              onChange={(e) => updateCreds({ host: e.target.value })}
-              placeholder={editing?.type === "redis" ? "127.0.0.1" : "host"}
-            />
-
-            <label htmlFor="mcp-creds-port">端口</label>
-            <FormInput
-              id="mcp-creds-port"
-              value={creds.port}
-              onChange={(e) => updateCreds({ port: e.target.value })}
-              placeholder={editing?.type === "mysql" ? "3306" : editing?.type === "postgres" ? "5432" : "6379"}
-            />
-
-            <label htmlFor="mcp-creds-user">用户</label>
-            <FormInput
-              id="mcp-creds-user"
-              value={creds.user}
-              onChange={(e) => updateCreds({ user: e.target.value })}
-              placeholder={editing?.type === "redis" ? "(可选)" : "root"}
-            />
-
-            <label htmlFor="mcp-creds-password">密码</label>
-            <input
-              id="mcp-creds-password"
-              className="form-input"
-              type="password"
-              value={creds.password}
-              onChange={(e) => updateCreds({ password: e.target.value })}
-              placeholder="输入密码"
-              autoComplete="new-password"
-            />
-
-            <label htmlFor="mcp-creds-database">数据库</label>
-            <FormInput
-              id="mcp-creds-database"
-              value={creds.database}
-              onChange={(e) => updateCreds({ database: e.target.value })}
-              placeholder={editing?.type === "redis" ? "0" : editing?.type === "mysql" ? "mysql" : "postgres"}
-            />
+            {credFields.map((f) => (
+              <React.Fragment key={f.key}>
+                <label htmlFor={`mcp-creds-${f.key}`}>{f.label}</label>
+                {f.isPassword ? (
+                  <input
+                    id={`mcp-creds-${f.key}`}
+                    className="form-input"
+                    type="password"
+                    value={creds[f.key]}
+                    onChange={(e) => updateCreds({ [f.key]: e.target.value })}
+                    placeholder={f.placeholder}
+                    autoComplete="new-password"
+                  />
+                ) : (
+                  <FormInput
+                    id={`mcp-creds-${f.key}`}
+                    value={creds[f.key]}
+                    onChange={(e) => updateCreds({ [f.key]: e.target.value })}
+                    placeholder={f.placeholder}
+                  />
+                )}
+              </React.Fragment>
+            ))}
           </div>
         </fieldset>
       )}

@@ -145,17 +145,17 @@ export function NodeletManagementView() {
         <div className="section-header-spread">
           <h2 className="section-header">
             <Server size={18} />
-            <span>Servers</span>
+            <span>服务器</span>
           </h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>
-              {nodelets.length} server{nodelets.length !== 1 ? "s" : ""}
+              {nodelets.length} 台
             </span>
             <Button size="sm" onClick={openAdd}>
-              <Plus size={14} /> Add Server
+              <Plus size={14} /> 添加
             </Button>
             <Button size="sm" variant="ghost" onClick={handleRefresh} disabled={loading}>
-              Refresh
+              刷新
             </Button>
           </div>
         </div>
@@ -167,9 +167,9 @@ export function NodeletManagementView() {
         <div className="skeleton-block" style={{ height: 120 }} />
       ) : nodelets.length === 0 ? (
         <div className="empty-state">
-          <p>No servers configured</p>
+          <p>暂无服务器</p>
           <p style={{ color: "var(--muted)", marginTop: 4 }}>
-            Add a nodelet server to start monitoring containers.
+            添加 Nodelet 服务器以开始监控容器。
           </p>
         </div>
       ) : (
@@ -183,10 +183,10 @@ export function NodeletManagementView() {
             </colgroup>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Address</th>
-                <th>Status</th>
-                <th>Actions</th>
+                <th>名称</th>
+                <th>地址</th>
+                <th>状态</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -218,15 +218,15 @@ export function NodeletManagementView() {
                         variant="ghost"
                         iconOnly
                         onClick={() => handleRetrySingle(n.id)}
-                        title="Re-probe"
-                        aria-label={`Re-probe ${n.name || n.id}`}
+                        title="重新探测"
+                        aria-label={`重新探测 ${n.name || n.id}`}
                       >
                         <RefreshCw size={12} />
                       </Button>
-                      <Button size="xs" variant="ghost" iconOnly onClick={() => openEdit(n)} aria-label={`Edit ${n.name || n.id}`}>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => openEdit(n)} aria-label={`编辑 ${n.name || n.id}`}>
                         <Edit3 size={12} />
                       </Button>
-                      <Button size="xs" variant="ghost" iconOnly onClick={() => handleDelete(n.id)} aria-label={`Delete ${n.name || n.id}`}>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => handleDelete(n.id)} aria-label={`删除 ${n.name || n.id}`}>
                         <Trash2 size={12} />
                       </Button>
                     </div>

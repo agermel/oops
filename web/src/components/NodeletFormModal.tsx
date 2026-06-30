@@ -68,9 +68,9 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
           body: JSON.stringify(buildPayload()),
         },
       );
-      setTestResult(resp.status === "ok" ? "Connection successful" : `Failed: ${resp.error ?? "unknown"}`);
+      setTestResult(resp.status === "ok" ? "连接成功 ✓" : `失败: ${resp.error ?? "未知错误"}`);
     } catch (err) {
-      setTestResult(`Error: ${getErrorMessage(err, "test failed")}`);
+      setTestResult(`错误: ${getErrorMessage(err, "测试请求失败")}`);
     } finally {
       setTesting(false);
     }
@@ -78,15 +78,15 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
 
   return (
     <Modal
-      title={isNew ? "Add Server" : "Edit Server"}
+      title={isNew ? "添加服务器" : "编辑服务器"}
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={handleTest} disabled={testing || !canSave()}>
-            {testing ? "Testing..." : "Test Connection"}
+            {testing ? "测试中..." : "测试连接"}
           </Button>
           <Button onClick={handleSave} disabled={saving || !canSave()}>
-            {saving ? "Saving..." : "Save"}
+            {saving ? "保存中..." : "保存"}
           </Button>
         </>
       }
@@ -95,7 +95,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
         {saveError && <div className="error-banner">{saveError}</div>}
         {saveOk && <div className="success-banner">{saveOk}</div>}
         {testResult && (
-          <div className={testResult.includes("successful") ? "success-banner" : "error-banner"}>
+          <div className={testResult.includes("成功") ? "success-banner" : "error-banner"}>
             {testResult}
           </div>
         )}
@@ -106,23 +106,23 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
             className="form-input"
             value={id}
             onChange={(e) => setId(e.target.value)}
-            placeholder="e.g. prod-api-01"
+            placeholder="例: prod-api-01"
             disabled={!isNew}
           />
         </label>
 
         <label className="form-label">
-          Name
+          名称
           <input
             className="form-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. 生产环境 API 服务器"
+            placeholder="例: 生产环境 API 服务器"
           />
         </label>
 
         <label className="form-label">
-          Address
+          地址
           <input
             className="form-input form-monospace"
             value={address}
@@ -138,7 +138,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
             type="password"
             value={token}
             onChange={(e) => setToken(e.target.value)}
-            placeholder={hasExistingToken ? "•••••••• (unchanged if left empty)" : "Nodelet 启动时打印的配对 token"}
+            placeholder={hasExistingToken ? "•••••••• (留空则不修改)" : "Nodelet 启动时打印的配对 token"}
           />
         </label>
       </div>

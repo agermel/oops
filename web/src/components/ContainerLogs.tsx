@@ -90,13 +90,9 @@ export function ContainerLogs({
     }
   }, [logs.length, panelRef]);
 
-  // 切换容器日志源时重置
-  React.useEffect(() => {
-    didInitialScroll.current = false;
-    setHasMore(false);
-    userScrolledUpRef.current = false;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在 logs 引用变化时重置（新容器 = 新数组引用）
-  }, [logs]);
+  // 容器切换时由父组件通过 key={containerId} 触发完整 remount，
+  // 无需在此处监听 logs 引用变化——每次日志刷新都会创建新数组引用，
+  // 若在此重置会与 IntersectionObserver 产生竞态，导致用户上翻后又被拉回底部。
 
   function scrollToBottom() {
     sentinelRef.current?.scrollIntoView({ behavior: "smooth" });

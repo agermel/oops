@@ -3,4 +3,4 @@
 # Uses the community elasticsearch-mcp-server (Python, Apache 2.0).
 # uvx downloads and caches on first run; subsequent runs are fast.
 # https://pypi.org/project/elasticsearch-mcp-server/
-exec uvx --from elasticsearch-mcp-server elasticsearch-mcp-server "$@"
+exec uvx --python 3.12 --from elasticsearch-mcp-server elasticsearch-mcp-server "$@"

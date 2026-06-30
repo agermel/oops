@@ -3,4 +3,4 @@
 # Uses the official redis/mcp-redis community MCP server (Python, MIT).
 # uvx downloads and caches on first run; subsequent runs are fast.
 # https://github.com/redis/mcp-redis
-exec uvx --from redis-mcp-server@latest redis-mcp-server "$@"
+exec uvx --python 3.12 --from redis-mcp-server@latest redis-mcp-server "$@"

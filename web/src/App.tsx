@@ -212,11 +212,11 @@ export function App() {
             }
           }
           if (currentQuestion) {
-            const answer = currentSteps.find((s) => s.type === "answer");
+            const answerContents = currentSteps.filter((s) => s.type === "answer").map((s) => s.content);
             exchanges.push({
               question: currentQuestion,
               steps: currentSteps,
-              answer: answer?.content,
+              answer: answerContents.length > 0 ? answerContents.join("") : undefined,
             });
           }
           setChatExchanges(exchanges);
@@ -254,9 +254,8 @@ export function App() {
     try {
       const { servers: url } = projectPaths(projectID);
       const svrs = await apiRequest<ServerWithNodelet[]>(url);
-      // 合并 Prober 缓存的状态（错误信息、available 等）
-      await mergeProberStatus(svrs);
-      setServers(svrs);
+      const merged = await mergeProberStatus(svrs);
+      setServers(merged ?? svrs);
     } catch (err) {
       setServerError(getErrorMessage(err, "读取服务器列表失败"));
     } finally {
@@ -265,24 +264,27 @@ export function App() {
   }
 
   // mergeProberStatus 从 Prober 缓存同步状态到服务器列表。
-  async function mergeProberStatus(svrs?: ServerWithNodelet[]) {
+  // 传入 svrs 参数时直接返回合并后的数组（不写 state），用于初始加载避免空 state 竞态。
+  // 不传参数时通过 setServers 更新当前 state，用于定时轮询。
+  async function mergeProberStatus(svrs?: ServerWithNodelet[]): Promise<ServerWithNodelet[] | undefined> {
     const targets = svrs ?? servers;
-    if (targets.length === 0) return;
+    if (targets.length === 0) return svrs ? [] : undefined;
     try {
       const statusItems = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
       const statusMap = new Map(statusItems.map((s) => [s.nodelet.id, s]));
-      setServers((prev) =>
-        prev.map((sw) => {
-          const si = statusMap.get(sw.nodelet.id);
-          if (!si) return sw;
-          return {
-            ...sw,
-            host: { ...sw.host, available: si.status === "healthy" },
-            error: si.error || sw.error,
-          };
-        }),
-      );
+      const merged = targets.map((sw) => {
+        const si = statusMap.get(sw.nodelet.id);
+        if (!si) return sw;
+        return {
+          ...sw,
+          host: { ...sw.host, available: si.status === "healthy" },
+          error: si.error || sw.error,
+        };
+      });
+      if (svrs) return merged;
+      setServers(merged);
     } catch {
+      if (svrs) return svrs;
       // 静默处理轮询错误
     }
   }
@@ -355,6 +357,7 @@ export function App() {
 
     source.onopen = () => {
       setLogsLoading(false);
+      setLogsError(""); // 重连成功时清除之前的错误
     };
     source.onmessage = (event) => {
       try {
@@ -366,7 +369,11 @@ export function App() {
     };
     source.onerror = () => {
       setLogsLoading(false);
-      setLogsError("日志流连接失败，请检查容器是否在运行");
+      // EventSource 会自动重连，仅在首次连接失败或彻底断开时展示错误；
+      // 重连成功后 onopen 会清除此错误。
+      if (source.readyState === EventSource.CLOSED) {
+        setLogsError("日志流连接失败，请检查容器是否在运行");
+      }
     };
   }
 
@@ -387,7 +394,10 @@ export function App() {
 
   async function sendChat(question?: string) {
     const q = (question ?? chatInput).trim();
-    if (!q || chatLoadingRef.current) return;
+    if (!q) return;
+    // 自愈：若 UI 已不显示 loading 但 ref 泄漏（如导航中途离开聊天页），则重置
+    if (!chatLoading) chatLoadingRef.current = false;
+    if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
     setChatInput("");
     setChatError("");
@@ -422,12 +432,13 @@ export function App() {
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
         for (const line of lines) {
-          if (line === "data: [DONE]") { streamDone = true; break; }
+          if (line.startsWith("data: [DONE]")) { streamDone = true; break; }
           if (line.startsWith("data: ")) {
             try {
               const evt: StepEvent = JSON.parse(line.slice(6));
               if (evt.type === "session" && evt.content) {
                 setSessionId(evt.content);
+                setSessionLoaded(true);
                 localStorage.setItem("oops_session_id", evt.content);
                 if (evt.agentType) setAgentType(evt.agentType);
                 if (evt.maxStep) setMaxStep(evt.maxStep);
@@ -445,9 +456,10 @@ export function App() {
       }
 
       const steps = chatStepsRef.current;
-      const answer = steps.find((s) => s.type === "answer");
-      const errStep = steps.find((s) => s.type === "error");
-      setChatExchanges((prev) => [...prev, { question: q, steps, answer: answer?.content, error: errStep?.content }]);
+      const answerContents = steps.filter((s) => s.type === "answer").map((s) => s.content);
+      const fullAnswer = answerContents.length > 0 ? answerContents.join("") : undefined;
+      const errStep = steps.filter((s) => s.type === "error").pop();
+      setChatExchanges((prev) => [...prev, { question: q, steps, answer: fullAnswer, error: errStep?.content }]);
       chatStepsRef.current = [];
       setCurrentSteps([]);
       setCurrentQuestion("");
@@ -455,7 +467,10 @@ export function App() {
       chatLoadingRef.current = false;
       loadSessions();
     } catch (err) {
-      setChatError(getErrorMessage(err, "聊天请求失败"));
+      const errorMessage = getErrorMessage(err, "聊天请求失败");
+      // 保存失败的 exchange，让用户能看到自己提的问题和错误信息；
+      // 不再设 chatError，避免与 exchange 内的 error 重复显示。
+      setChatExchanges((prev) => [...prev, { question: q, steps: [], error: errorMessage }]);
       setCurrentQuestion("");
       setCurrentSteps([]);
       chatStepsRef.current = [];
@@ -493,11 +508,14 @@ export function App() {
     setAgentType("");
     setMaxStep(0);
     setTokenStats(null);
+    setChatLoading(false);
+    chatLoadingRef.current = false;
   }
 
   async function switchSession(id: string) {
     if (chatLoadingRef.current) return; // 正在流式传输中不切换
-    closeLogStream();
+    setChatLoading(true); // 用 chatLoading 指示会话切换中
+    setChatError("");
     try {
       const detail = await apiRequest<SessionDetail>(
         sessionPaths(id).get + "?include_messages=true"
@@ -535,11 +553,11 @@ export function App() {
           }
         }
         if (currentQuestion) {
-          const answer = currentSteps.find((s) => s.type === "answer");
+          const answerContents = currentSteps.filter((s) => s.type === "answer").map((s) => s.content);
           exchanges.push({
             question: currentQuestion,
             steps: currentSteps,
-            answer: answer?.content,
+            answer: answerContents.length > 0 ? answerContents.join("") : undefined,
           });
         }
         setChatExchanges(exchanges);
@@ -557,6 +575,8 @@ export function App() {
       }
     } catch (err) {
       setChatError(getErrorMessage(err, "加载会话失败"));
+    } finally {
+      setChatLoading(false);
     }
   }
 
@@ -585,11 +605,14 @@ export function App() {
     setAgentType("");
     setMaxStep(0);
     setTokenStats(null);
+    setChatLoading(false);
+    chatLoadingRef.current = false;
   }
 
   React.useEffect(() => {
     if (!authenticated) return;
-    if (sessionId && sessionLoaded) {
+    // 切换项目时仅当用户在聊天页面才重置会话
+    if (sessionId && sessionLoaded && route.view === "project-chat") {
       startNewChat();
     }
     loadSessions();
@@ -666,7 +689,9 @@ export function App() {
   // Effect C: 选中 container → 加载详情+日志
   React.useEffect(() => {
     if (!authenticated || !selectedNodeletID || !selectedContainerID) return;
-    if (containerDetail && containerDetail.container.id === selectedContainerID) return;
+    if (containerDetail
+      && containerDetail.container.id === selectedContainerID
+      && containerDetail.container.hostId === selectedNodeletID) return;
     selectContainer(selectedProjectID, selectedNodeletID, selectedContainerID);
   }, [authenticated, selectedNodeletID, selectedContainerID, selectedProjectID]);
 
@@ -747,7 +772,10 @@ export function App() {
       <Header activeNav={activeNav} onNavChange={(id: string) => {
         if (id === "servers") navigate({ view: "servers" });
         else if (id === "console") navigate({ view: "console" });
-        // 全局视图下的 chat/projects 都导航到项目列表
+        else if (id === "chat") {
+          if (selectedProjectID) navigate({ view: "project-chat", projectId: selectedProjectID });
+          else navigate({ view: "projects" });
+        }
         else navigate({ view: "projects" });
       }} />
       <SideRail

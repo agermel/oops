@@ -34,6 +34,7 @@ export function ContainerDetailView({
   nodeletId,
   containerId,
   projectId,
+  nodeletAddress,
   onMCPChanged,
 }: {
   detail?: ContainerDetailType;
@@ -52,6 +53,7 @@ export function ContainerDetailView({
   nodeletId: string;
   containerId: string;
   projectId: string;
+  nodeletAddress?: string;
   onMCPChanged: () => void;
 }) {
   const [activeTab, setActiveTab] = React.useState<TabID>("overview");
@@ -80,7 +82,7 @@ export function ContainerDetailView({
 
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Tab content */}
+      {/* Tab content —— 懒加载：仅当前活跃 tab 挂载组件，避免隐藏 tab 无谓发 API */}
       <div className="detail-body">
         {loading && !detail ? (
           <div className="loading-overlay"><span className="spinner" /> 加载容器详情...</div>
@@ -88,16 +90,16 @@ export function ContainerDetailView({
           <div className="empty-state">从左侧选择一个容器查看详情</div>
         ) : (
           <>
-            <div role="tabpanel" hidden={activeTab !== "overview"}>
-              {activeTab === "overview" && <ContainerOverview detail={detail} onEditDSN={handleEditDSN} />}
-            </div>
-            <div role="tabpanel" hidden={activeTab !== "health"}>
-              {activeTab === "health" && (
+            {activeTab === "overview" && (
+              <div role="tabpanel"><ContainerOverview detail={detail} onEditDSN={handleEditDSN} /></div>
+            )}
+            {activeTab === "health" && (
+              <div role="tabpanel">
                 <ContainerHealth health={health || detail.health} loading={healthLoading} onCheck={onHealthCheck} />
-              )}
-            </div>
-            <div role="tabpanel" hidden={activeTab !== "dsn"}>
-              {activeTab === "dsn" && (
+              </div>
+            )}
+            {activeTab === "dsn" && (
+              <div role="tabpanel">
                 <ContainerDSN
                   projectId={projectId}
                   nodeletId={nodeletId}
@@ -105,10 +107,10 @@ export function ContainerDetailView({
                   serviceType={detail.serviceType}
                   onChanged={onMCPChanged}
                 />
-              )}
-            </div>
-            <div role="tabpanel" hidden={activeTab !== "mcp"}>
-              {activeTab === "mcp" && (
+              </div>
+            )}
+            {activeTab === "mcp" && (
+              <div role="tabpanel">
                 <ContainerMCP
                   mcp={detail.mcp}
                   projectId={projectId}
@@ -117,13 +119,16 @@ export function ContainerDetailView({
                   containerName={detail.container.name}
                   serviceType={detail.serviceType}
                   dsn={detail.dsn}
+                  nodeletAddress={nodeletAddress}
+                  containerPorts={detail.container.ports}
                   onMCPChanged={onMCPChanged}
                 />
-              )}
-            </div>
-            <div role="tabpanel" hidden={activeTab !== "logs"}>
-              {activeTab === "logs" && (
+              </div>
+            )}
+            {activeTab === "logs" && (
+              <div role="tabpanel">
                 <ContainerLogs
+                  key={containerId}
                   logs={logs}
                   loading={logsLoading}
                   error={logsError}
@@ -132,8 +137,8 @@ export function ContainerDetailView({
                   onClear={onClearLogs}
                   panelRef={logsPanelRef}
                 />
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
       </div>

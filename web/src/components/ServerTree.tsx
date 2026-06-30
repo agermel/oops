@@ -38,6 +38,7 @@ export function ServerTree({
   const [nodeletsLoading, setNodeletsLoading] = React.useState(false);
   const [addError, setAddError] = React.useState("");
   const [addingID, setAddingID] = React.useState("");
+  const [removeError, setRemoveError] = React.useState("");
 
   const paths = projectPaths(projectId);
 
@@ -60,11 +61,12 @@ export function ServerTree({
 
   async function removeServer(nodeletID: string) {
     if (!window.confirm(`确定要从项目中移除服务器吗？`)) return;
+    setRemoveError("");
     try {
       await apiRequest(`${paths.servers}/${encodeURIComponent(nodeletID)}`, { method: "DELETE" });
       onServersChanged();
     } catch (err) {
-      alert(getErrorMessage(err, "移除失败"));
+      setRemoveError(getErrorMessage(err, "移除失败"));
     }
   }
 
@@ -99,6 +101,7 @@ export function ServerTree({
       </div>
 
       {serverError && <div className="error-banner">{serverError}</div>}
+      {removeError && <div className="error-banner">{removeError}</div>}
 
       <div className="tree-list">
         {serversLoading && servers.length === 0 && (
@@ -118,11 +121,10 @@ export function ServerTree({
             const isStatusUnknown = !sw.host?.available && !sw.error && !hasContainerResult;
             return (
               <div key={sw.nodelet.id} className="tree-node">
-                <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                <div className="tree-node-main">
                   <button
                     className={`tree-server ${sw.host?.available ? "alive" : "dead"}`}
                     onClick={() => onToggleServer(sw.nodelet.id)}
-                    style={{ flex: 1 }}
                   >
                     {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     <Server size={15} />
@@ -132,15 +134,14 @@ export function ServerTree({
                     </div>
                     <StatusDot alive={sw.host?.available ?? false} loading={isContainerLoading} unknown={isStatusUnknown} />
                   </button>
-                  <Button size="xs" variant="ghost" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
+                  <Button size="xs" variant="ghost" className="tree-remove-btn" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
                     <Trash2 size={12} />
                   </Button>
                 </div>
 
-                {sw.error && <div className="tree-node-error">{sw.error}</div>}
-
                 {isExpanded && (
-                  <div className="tree-containers">
+                  <div className="tree-node-detail">
+                    {sw.error && <div className="tree-node-error">{sw.error}</div>}
                     {isContainerLoading && conts.length === 0 && (
                       <div className="loading-overlay"><span className="spinner spinner-sm" /> 加载中...</div>
                     )}

@@ -54,9 +54,9 @@ export function useTypewriter(text: string, enabled: boolean): string {
     else if (remaining <= 96) chunk = 8;
     else chunk = Math.min(256, Math.ceil(remaining / 4));
 
-    // 标点对齐：在 chunk 附近找标点或空格，停顿更自然。
+    // 标点对齐：在 chunk 附近找标点或空格，停顿更自然（含中英文标点）。
     const end = Math.min(displayed.length + chunk, text.length);
-    const snapPat = /[\s.,!?;:)\]]/;
+    const snapPat = /[\s.,!?;:)\]，。！？；：）】、》""]/;
     let snap = end;
     for (let i = end; i < Math.min(end + 8, text.length); i++) {
       if (snapPat.test(text[i])) { snap = i + 1; break; }

@@ -32,6 +32,7 @@ export function ProjectsView({
   const [isNew, setIsNew] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [formError, setFormError] = React.useState("");
+  const [deleteError, setDeleteError] = React.useState("");
 
   function openAdd() {
     setIsNew(true);
@@ -81,11 +82,12 @@ export function ProjectsView({
 
   async function handleDelete(id: string) {
     if (!window.confirm(`确定要删除该项目吗？`)) return;
+    setDeleteError("");
     try {
       await apiRequest(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
       onRefresh();
     } catch (err) {
-      alert(getErrorMessage(err, "删除失败"));
+      setDeleteError(getErrorMessage(err, "删除失败"));
     }
   }
 
@@ -101,6 +103,7 @@ export function ProjectsView({
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {deleteError && <div className="error-banner">{deleteError}</div>}
 
       <div className="project-grid">
         {projects.map((p) => (

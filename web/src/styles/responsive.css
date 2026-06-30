@@ -61,6 +61,10 @@
     padding: var(--space-5);
   }
 
+  .chat-workspace {
+    height: calc(100dvh - 54px - (var(--space-3) * 2));
+  }
+
   .workspace-head {
     flex-direction: column;
   }

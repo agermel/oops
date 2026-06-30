@@ -1,5 +1,5 @@
 import React from "react";
-import { Sparkles, Send, Bot, User, Trash2, Plus, MessageSquare, ChevronDown, ChevronUp, Stethoscope, ClipboardCheck, X } from "lucide-react";
+import { Sparkles, Send, Bot, User, Trash2, Plus, MessageSquare, ChevronDown, ChevronUp, Stethoscope, ClipboardCheck } from "lucide-react";
 import type { ChatExchange, StepEvent, SessionInfo } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
@@ -160,11 +160,11 @@ export function ChatView({
         </div>
       )}
       <div className="chat-body" role="log" aria-live="polite">
-        {chatExchanges.length === 0 && currentSteps.length === 0 && !chatLoading && !currentQuestion && !chatError && (
+        {chatExchanges.length === 0 && currentSteps.length === 0 && !chatLoading && !currentQuestion && (
           <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>
         )}
         {processedExchanges.map((ex, i) => (
-          <div key={i} className="chat-exchange">
+          <div key={`${ex.question.slice(0, 40)}-${i}`} className="chat-exchange">
             <div className="chat-msg user">
               <div className="chat-avatar"><User size={16} /></div>
               <div className="chat-content">{ex.question}</div>
@@ -183,9 +183,9 @@ export function ChatView({
               <div className="chat-content">{currentQuestion}</div>
             </div>
             {visibleCurrentSteps.map((step, j) => {
-              // 仅当某个 tool_call 已有对应的 tool_result，或该 step 自身是 error 时才停止动画
               const hasResult =
                 step.type === "error" ||
+                streamError ||
                 visibleCurrentSteps.slice(j + 1).some(
                   (s) =>
                     s.type === "tool_result" &&
@@ -195,21 +195,24 @@ export function ChatView({
             })}
             {currentSteps.some((s) => s.type === "answer") && (
               <AnswerBlock
-                content={currentSteps.find((s) => s.type === "answer")!.content}
+                content={currentSteps.filter((s) => s.type === "answer").map((s) => s.content).join("")}
                 animate
               />
             )}
             {!currentSteps.some((s) => s.type === "answer") &&
               !streamError &&
+              !currentSteps.some((s) => s.type === "thinking") &&
               chatLoading && (
                 <div className="chat-msg assistant">
                   <div className="chat-avatar"><Bot size={16} /></div>
-                  <div className="chat-content chat-thinking">Thinking…</div>
+                  <div className="chat-content chat-thinking">
+                    {currentQuestion ? "Thinking…" : "加载中…"}
+                  </div>
                 </div>
               )}
             {streamError && (
               <div className="chat-error">
-                {currentSteps.find((s) => s.type === "error")!.content}
+                {currentSteps.find((s) => s.type === "error")?.content || "未知错误"}
               </div>
             )}
           </div>

@@ -20,6 +20,9 @@
 
 .console-stat.error { color: var(--error-text); }
 .console-stat.warn { color: var(--warning-text); }
+.console-stat.conn-open { color: var(--success-text, #5cb85c); }
+.console-stat.conn-connecting { color: var(--warning-text); }
+.console-stat.conn-error { color: var(--error-text); }
 
 .console-filters {
   display: flex;

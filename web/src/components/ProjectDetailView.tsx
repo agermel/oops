@@ -69,6 +69,8 @@ export function ProjectDetailView({
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
   onMCPChanged: () => void;
 }) {
+  const nodeletAddress = servers.find((s) => s.nodelet.id === selectedNodeletID)?.nodelet.address;
+
   return (
     <div className="project-detail">
       {/* 面包屑 */}
@@ -114,6 +116,7 @@ export function ProjectDetailView({
           nodeletId={selectedNodeletID}
           containerId={selectedContainerID}
           projectId={project.id}
+          nodeletAddress={nodeletAddress}
           onMCPChanged={onMCPChanged}
         />
       </div>
