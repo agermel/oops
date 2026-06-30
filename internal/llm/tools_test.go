@@ -47,7 +47,7 @@ func mustJSON(v any) string {
 // TestNewTools 验证四个工具全部创建成功。
 func TestNewTools(t *testing.T) {
 	ops := &fakeOpsData{}
-	tools, err := NewTools(ops)
+	tools, err := NewTools(ops, nil)
 	if err != nil {
 		t.Fatalf("NewTools() error = %v", err)
 	}

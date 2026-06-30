@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"oops/internal/nodelet"
 
@@ -170,10 +171,50 @@ func NewCheckConnectionsTool(ops OpsData) (tool.InvokableTool, error) {
 		})
 }
 
+// ---------- skill 工具 ----------
+
+type skillInput struct {
+	Name string `json:"name" jsonschema:"required,description=要加载的技能名称"`
+}
+
+// NewSkillTool 创建 skill 工具——加载指定技能的详细指导内容。
+// LLM 在判断用户意图后自主调用，无需预路由。
+func NewSkillTool(store *SkillStore) (tool.InvokableTool, error) {
+	return utils.InferTool("skill",
+		"Load a specialized skill when the task at hand matches one of the available skills listed in the system prompt. "+
+			"Use this tool to inject the skill's instructions into the current conversation. "+
+			"The skill name must match one of the available skills.",
+		func(ctx context.Context, input *skillInput) (string, error) {
+			skill, ok := store.Get(input.Name)
+			if !ok {
+				var names []string
+				for _, s := range store.Enabled() {
+					names = append(names, s.Name)
+				}
+				return fmt.Sprintf("Skill %q not found. Available skills: %s", input.Name, strings.Join(names, ", ")), nil
+			}
+			if !skill.Enabled {
+				return fmt.Sprintf("Skill %q is disabled.", input.Name), nil
+			}
+			return formatSkillContent(skill), nil
+		})
+}
+
+// formatSkillContent 按 OpenCode 风格将 Skill 内容格式化为 XML。
+func formatSkillContent(skill *Skill) string {
+	return strings.Join([]string{
+		"<skill_content name=\"" + skill.Name + "\">",
+		"# Skill: " + skill.Name,
+		"",
+		skill.Content,
+		"</skill_content>",
+	}, "\n")
+}
+
 // ---------- 组合入口 ----------
 
-// NewTools 创建所有 LLM 可调用的运维工具。
-func NewTools(ops OpsData) ([]tool.InvokableTool, error) {
+// NewTools 创建所有 LLM 可调用的运维工具（含 skill 工具）。
+func NewTools(ops OpsData, store *SkillStore) ([]tool.InvokableTool, error) {
 	factories := []func(OpsData) (tool.InvokableTool, error){
 		NewListNodeletsTool,
 		NewListContainersTool,
@@ -181,15 +222,24 @@ func NewTools(ops OpsData) ([]tool.InvokableTool, error) {
 		NewCheckConnectionsTool,
 	}
 
-	tools := make([]tool.InvokableTool, 0, len(factories))
+	toolList := make([]tool.InvokableTool, 0, len(factories)+1)
 	for _, fn := range factories {
 		t, err := fn(ops)
 		if err != nil {
 			return nil, err
 		}
-		tools = append(tools, t)
+		toolList = append(toolList, t)
 	}
-	return tools, nil
+
+	if store != nil {
+		skillTool, err := NewSkillTool(store)
+		if err != nil {
+			return nil, err
+		}
+		toolList = append(toolList, skillTool)
+	}
+
+	return toolList, nil
 }
 
 // ---------- 工具函数 ----------

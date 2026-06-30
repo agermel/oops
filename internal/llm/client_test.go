@@ -21,7 +21,7 @@ func TestClientNew(t *testing.T) {
 		APIKey:  "test-key",
 	}
 
-	tools, err := NewTools(ops)
+	tools, err := NewTools(ops, nil)
 	if err != nil {
 		t.Fatalf("NewTools() error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestClientAskSkipped(t *testing.T) {
 		APIKey:  os.Getenv("OOPS_LLM_TEST_API_KEY"),
 	}
 
-	tools, err := NewTools(ops)
+	tools, err := NewTools(ops, nil)
 	if err != nil {
 		t.Fatalf("NewTools() error = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestClientAskSkipped(t *testing.T) {
 	defer cancel()
 
 	messages := []*schema.Message{
-		schema.SystemMessage(SystemPrompt),
+		schema.SystemMessage(BasePrompt),
 		schema.UserMessage("有哪些机器？如果不止一台，请列出它们的名称。"),
 	}
 	events, err := client.Ask(ctx, messages, nil, 15)

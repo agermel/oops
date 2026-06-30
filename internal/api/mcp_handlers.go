@@ -72,7 +72,7 @@ func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
 		return
 	}
 
-	nativeTools, err := llm.NewTools(s)
+	nativeTools, err := llm.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return
@@ -121,7 +121,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 原生工具。
-	nativeTools, err := llm.NewTools(s)
+	nativeTools, err := llm.NewTools(s, s.skillStore)
 	if err == nil {
 		for _, t := range nativeTools {
 			info, err := t.Info(r.Context())

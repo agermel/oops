@@ -135,20 +135,17 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		sess = s.sessionStore.Create(projectID)
 	}
 
-	// 路由选择 Agent 配置（prompt + maxStep）。
-	var agentCfg llm.AgentConfig
-	if s.agentRouter != nil {
-		agentCfg = s.agentRouter.Route(req.Question)
-	}
-	if agentCfg.Prompt == "" {
-		agentCfg.Prompt = llm.SystemPrompt // 回退到硬编码 prompt
-	}
-	if agentCfg.MaxStep <= 0 {
-		agentCfg.MaxStep = llm.MaxStep
+	// 构建系统提示词：Base prompt + 可用 Skill 列表。
+	maxStep := 15
+	systemPrompt := llm.BasePrompt
+	if s.skillStore != nil {
+		available := s.skillStore.RenderAvailable()
+		if available != "" {
+			systemPrompt = systemPrompt + "\n\n" + available
+		}
 	}
 
-	// 构建消息列表。
-	systemMsg := schema.SystemMessage(agentCfg.Prompt)
+	systemMsg := schema.SystemMessage(systemPrompt)
 	messages := []*schema.Message{systemMsg}
 	messages = append(messages, sess.Messages...)
 	userMsg := schema.UserMessage(req.Question)
@@ -198,7 +195,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		return nil
 	}
 
-	events, err := s.llmClient.Ask(ctx, messages, onMessage, agentCfg.MaxStep)
+	events, err := s.llmClient.Ask(ctx, messages, onMessage, maxStep)
 	if err != nil {
 		sanitizedError(w, "chat ask", err, http.StatusInternalServerError)
 		return
@@ -221,8 +218,8 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	sessionEvt := llm.StepEvent{
 		Type:      "session",
 		Content:   sess.ID,
-		AgentType: string(agentCfg.Type),
-		MaxStep:   agentCfg.MaxStep,
+		AgentType: "default",
+		MaxStep:   maxStep,
 	}
 	data, _ := json.Marshal(sessionEvt)
 	fmt.Fprintf(w, "data: %s\n\n", data)

@@ -32,8 +32,8 @@ func sanitizeError(raw string) string {
 	return s
 }
 
-// SystemPrompt 是 Agent 的系统提示词。调用方应在构建消息列表时将其作为首条消息。
-const SystemPrompt = `你是一个基础设施运维助手，负责回答当前监控环境中的问题。
+// BasePrompt 是 Agent 的默认系统提示词。调用方应在构建消息列表时优先使用 SkillStore。
+const BasePrompt = `你是一个基础设施运维助手，负责回答当前监控环境中的问题。
 
 你可以使用工具查询实时运维数据。回答时：
 - 先调用工具获取最新数据，不要猜测

@@ -11,6 +11,7 @@ import {
   Layers,
   Terminal,
   Cog,
+  BookOpen,
 } from "lucide-react";
 
 // ---- 项目 ----
@@ -239,6 +240,18 @@ export type SessionDetail = SessionInfo & {
   messages: SessionMessage[];
 };
 
+// ---- Skills ----
+
+export type Skill = {
+  name: string;
+  description: string;
+  content: string;
+  icon: string;
+  label: string;
+  color: string;
+  enabled: boolean;
+};
+
 // ---- Nodelet 选择项 (添加服务器弹窗用) ----
 
 export type NodeletItem = ServerWithNodelet;
@@ -257,6 +270,7 @@ export const projectNavigation = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
   { id: "mcp", label: "MCP 连接", icon: Wrench },
   { id: "tools", label: "工具管理", icon: Cog },
+  { id: "skills", label: "技能管理", icon: BookOpen },
   { id: "chat", label: "助手", icon: Sparkles },
   { id: "console", label: "控制台", icon: Terminal },
 ] as const;

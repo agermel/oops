@@ -1,5 +1,7 @@
 import React from "react";
-import { Sparkles, Send, Bot, User, Trash2, Plus, MessageSquare, ChevronDown, ChevronUp, Stethoscope, ClipboardCheck } from "lucide-react";
+import { Sparkles, Send, Bot, User, Trash2, Plus, MessageSquare, ChevronDown, ChevronUp } from "lucide-react";
+import * as Icons from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { ChatExchange, StepEvent, SessionInfo } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
@@ -9,12 +11,39 @@ import { Button } from "./ui/Button";
 // 工具事件类型（展示用），不含 answer/error/session/stats 等终端事件。
 const displayEventTypes = new Set(["thinking", "tool_call", "tool_result"]);
 
-// agentType 配置：标签、图标、颜色类
-const agentMeta: Record<string, { label: string; icon: React.ReactNode; cls: string }> = {
-  diagnose: { label: "诊断", icon: <Stethoscope size={14} />, cls: "agent-badge-diagnose" },
-  inspect: { label: "巡检", icon: <ClipboardCheck size={14} />, cls: "agent-badge-inspect" },
-  default: { label: "通用", icon: <Sparkles size={14} />, cls: "agent-badge-default" },
+// 已知图标名 → lucide 组件映射。
+const knownIcons: Record<string, LucideIcon> = {
+  Stethoscope: Icons.Stethoscope,
+  ClipboardCheck: Icons.ClipboardCheck,
+  Sparkles: Icons.Sparkles,
+  Wrench: Icons.Wrench,
+  Cog: Icons.Cog,
+  Search: Icons.Search,
+  BookOpen: Icons.BookOpen,
+  Zap: Icons.Zap,
+  Bug: Icons.Bug,
+  Shield: Icons.Shield,
+  Eye: Icons.Eye,
 };
+
+function getIcon(name: string): LucideIcon {
+  return knownIcons[name] || Icons.Sparkles;
+}
+
+type SkillMeta = { label: string; iconName: string; color: string };
+
+// 从当前步骤中检测最近的 skill 工具调用，返回技能名称。
+function detectActiveSkill(steps: StepEvent[]): string | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].type === "tool_call" && steps[i].toolName === "skill" && steps[i].toolArgs) {
+      try {
+        const args = JSON.parse(steps[i].toolArgs!);
+        if (args.name) return args.name;
+      } catch { /* ignore */ }
+    }
+  }
+  return null;
+}
 
 function withToolNames(steps: StepEvent[]): StepEvent[] {
   const names = new Map<string, string>();
@@ -54,6 +83,7 @@ export function ChatView({
   agentType,
   maxStep,
   tokenStats,
+  agentMeta,
   onInputChange,
   onSend,
   onClear,
@@ -71,6 +101,7 @@ export function ChatView({
   agentType: string;
   maxStep: number;
   tokenStats: { tokens: number; trimmed: number } | null;
+  agentMeta: Record<string, SkillMeta>;
   onInputChange: (value: string) => void;
   onSend: () => void;
   onClear: () => void;
@@ -103,7 +134,21 @@ export function ChatView({
   const hasContent = chatExchanges.length > 0 || currentSteps.length > 0;
   const otherSessions = sessions.filter((s) => s.id !== sessionId);
   const stepCount = countAgentSteps(currentSteps);
-  const meta = agentType ? agentMeta[agentType] : null;
+  // 优先从当前步骤中检测 skill 工具调用，回退到 session 中的 agentType。
+  const activeSkill = detectActiveSkill(currentSteps);
+  const displayType = activeSkill || agentType;
+  const meta: { label: string; icon: React.ReactNode; cls: string } | null = (() => {
+    const sm = displayType ? agentMeta[displayType] : null;
+    if (sm) {
+      const IconComponent = getIcon(sm.iconName);
+      return { label: sm.label, icon: <IconComponent size={14} />, cls: `agent-badge-${sm.color}` };
+    }
+    // 回退到旧硬编码列表。
+    if (displayType === "diagnose") return { label: "诊断", icon: <Icons.Stethoscope size={14} />, cls: "agent-badge-diagnose" };
+    if (displayType === "inspect") return { label: "巡检", icon: <Icons.ClipboardCheck size={14} />, cls: "agent-badge-inspect" };
+    if (displayType) return { label: displayType, icon: <Sparkles size={14} />, cls: "agent-badge-custom" };
+    return null;
+  })();
 
   return (
     <section className="chat-panel" id="chat-section">

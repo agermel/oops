@@ -79,11 +79,14 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 	// MCP 子进程 stderr 同时输出到控制台（实时可见）和 buffer（错误时回显）。
 	stderrReader, hasStderr := mcpclient.GetStderr(c)
 	if hasStderr {
+		pipeWriter := console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command))
 		go func() {
-			_, _ = io.Copy(io.MultiWriter(
-				console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command)),
-				stderrBuf,
-			), stderrReader)
+			_, _ = io.Copy(io.MultiWriter(pipeWriter, stderrBuf), stderrReader)
+			// 关闭 pipe writer，让 NewLineWriter 内部的 scanner goroutine
+			// 收到 EOF 后正常退出，避免 goroutine 泄漏。
+			if closer, ok := pipeWriter.(io.Closer); ok {
+				_ = closer.Close()
+			}
 			close(exitCh) // stderr pipe closed ⟹ process exited
 		}()
 	} else {
@@ -95,6 +98,10 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 	select {
 	case <-ctx.Done():
 		c.Close()
+		stderr := stderrBuf.String()
+		if stderr != "" {
+			return nil, nil, nil, nil, stderrBuf, fmt.Errorf("stdio: startup timeout: %w\nstderr: %s", ctx.Err(), stderr)
+		}
 		return nil, nil, nil, nil, stderrBuf, ctx.Err()
 	case <-time.After(2 * time.Second):
 	}
@@ -243,12 +250,12 @@ func Verify(ctx context.Context, session MCPSession, tools []tool.BaseTool) erro
 }
 
 func joinStrings(ss []string, sep string) string {
-	r := ""
+	var b strings.Builder
 	for i, s := range ss {
 		if i > 0 {
-			r += sep
+			b.WriteString(sep)
 		}
-		r += s
+		b.WriteString(s)
 	}
-	return r
+	return b.String()
 }

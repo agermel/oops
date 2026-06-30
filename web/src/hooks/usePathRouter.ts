@@ -10,7 +10,8 @@ export type Route =
   | { view: "project-mcp"; projectId: string }
   | { view: "project-chat"; projectId: string }
   | { view: "project-console"; projectId: string }
-  | { view: "project-tools"; projectId: string };
+  | { view: "project-tools"; projectId: string }
+  | { view: "project-skills"; projectId: string };
 
 // ---- 解析 & 序列化 ----
 
@@ -65,6 +66,11 @@ export function parsePathRoute(pathname: string): Route {
     return { view: "project-tools", projectId };
   }
 
+  // /projects/:pid/skills
+  if (segs[2] === "skills") {
+    return { view: "project-skills", projectId };
+  }
+
   // 其他 /projects/:pid/... 回退到概览
   return { view: "project-overview", projectId };
 }
@@ -87,6 +93,8 @@ export function routeToPath(route: Route): string {
       return `/projects/${encodeURIComponent(route.projectId)}/console`;
     case "project-tools":
       return `/projects/${encodeURIComponent(route.projectId)}/tools`;
+    case "project-skills":
+      return `/projects/${encodeURIComponent(route.projectId)}/skills`;
   }
 }
 

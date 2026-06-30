@@ -41,7 +41,7 @@ func allowedCommands() []string {
 		return nil
 	}
 	var cmds []string
-	for _, cmd := range strings.Split(extra, ",") {
+	for cmd := range strings.SplitSeq(extra, ",") {
 		cmd = strings.TrimSpace(cmd)
 		if cmd != "" {
 			cmds = append(cmds, cmd)
@@ -560,13 +560,9 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, _, closer, _, stderrBuf, err := Connect(ctx, mcpCfg)
+	_, _, closer, _, _, err := Connect(ctx, mcpCfg)
 	if err != nil {
-		if stderrBuf != nil {
-			if s := stderrBuf.String(); s != "" {
-				return fmt.Errorf("test connect: %w\nstderr: %s", err, s)
-			}
-		}
+		// stderr 已由 Connect/connectStdio 附在 error 中，此处不再重复拼接。
 		return fmt.Errorf("test connect: %w", err)
 	}
 	closer()

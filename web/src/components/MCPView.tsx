@@ -248,7 +248,9 @@ export function MCPView() {
                           <span>{item.toolCount}</span>
                         </button>
                       </td>
-                      <td className="mono">{item.command}</td>
+                      <td className="mono">
+                        <span className="mcp-command-text" title={item.command}>{item.command}</span>
+                      </td>
                       <td className="mcp-toggle-cell">
                         <ToggleSwitch
                           checked={item.enabled}

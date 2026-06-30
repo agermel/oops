@@ -11,6 +11,7 @@ import type {
   ChatExchange,
   SessionInfo,
   SessionDetail,
+  Skill,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { usePathRouter } from "./hooks/usePathRouter";
@@ -26,6 +27,7 @@ import { NodeletManagementView } from "./components/NodeletManagementView";
 import { ChatView } from "./components/ChatView";
 import { MCPView } from "./components/MCPView";
 import { ToolsView } from "./components/ToolsView";
+import { SkillsView } from "./components/SkillsView";
 import { ConsolePanel } from "./components/ConsolePanel";
 import { LoginPage } from "./components/LoginPage";
 import "./styles.css";
@@ -61,6 +63,7 @@ export function App() {
     route.view === "project-chat" ? "chat" :
     route.view === "project-console" ? "console" :
     route.view === "project-tools" ? "tools" :
+    route.view === "project-skills" ? "skills" :
     route.view === "project-overview" ? "overview" :
     "overview";
   const [selectedNodeletID, setSelectedNodeletID] = React.useState("");
@@ -118,6 +121,8 @@ export function App() {
   const [agentType, setAgentType] = React.useState<string>("");
   const [maxStep, setMaxStep] = React.useState<number>(0);
   const [tokenStats, setTokenStats] = React.useState<{ tokens: number; trimmed: number } | null>(null);
+  const [skills, setSkills] = React.useState<Skill[]>([]);
+  const [agentMeta, setAgentMeta] = React.useState<Record<string, { label: string; iconName: string; color: string }>>({});
 
   // ---- 日志缓冲区 ----
   const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -493,6 +498,7 @@ export function App() {
     else if (section === "chat") navigate({ view: "project-chat", projectId: selectedProjectID });
     else if (section === "console") navigate({ view: "project-console", projectId: selectedProjectID });
     else if (section === "tools") navigate({ view: "project-tools", projectId: selectedProjectID });
+    else if (section === "skills") navigate({ view: "project-skills", projectId: selectedProjectID });
     else navigate({ view: "project-overview", projectId: selectedProjectID });
   }
 
@@ -587,6 +593,20 @@ export function App() {
       );
       setSessions(list || []);
     } catch { /* 会话列表加载失败不影响主流程 */ }
+  }
+
+  async function fetchSkills() {
+    try {
+      const list = await apiRequest<Skill[]>("/api/skills");
+      setSkills(list || []);
+      const meta: Record<string, { label: string; iconName: string; color: string }> = {};
+      for (const s of list || []) {
+        if (s.enabled) {
+          meta[s.name] = { label: s.label, iconName: s.icon, color: s.color };
+        }
+      }
+      setAgentMeta(meta);
+    } catch { /* silent */ }
   }
 
   function clearChat() {
@@ -731,6 +751,7 @@ export function App() {
   React.useEffect(() => {
     if (!authenticated) return;
     fetchProjects();
+    fetchSkills();
   }, [authenticated]);
 
   React.useEffect(() => {
@@ -747,6 +768,7 @@ export function App() {
     if (selectedProject) parts.push(selectedProject.name);
     if (selectedProject && projectSection === "mcp") parts.push("MCP 管理");
     if (selectedProject && projectSection === "tools") parts.push("工具管理");
+    if (selectedProject && projectSection === "skills") parts.push("技能管理");
     if (selectedProject && projectSection === "chat") parts.push("助手");
     if (selectedProject && projectSection === "console") parts.push("控制台");
     document.title = parts.length > 0 ? `${parts.join(" · ")} — Oops` : "Oops";
@@ -890,6 +912,18 @@ export function App() {
           </section>
         )}
 
+        {activeNav === "projects" && selectedProject && projectSection === "skills" && (
+          <section className="workspace-card">
+            <div className="workspace-head">
+              <div>
+                <h1>技能管理</h1>
+                <p>管理 LLM Agent 的技能定义。技能是专业性工作流程指导，Agent 在需要时通过 skill 工具自主加载。</p>
+              </div>
+            </div>
+            <SkillsView skills={skills} onRefresh={fetchSkills} />
+          </section>
+        )}
+
         {activeNav === "projects" && selectedProject && projectSection === "chat" && (
           <section className="workspace-card chat-workspace">
             <ChatView
@@ -904,6 +938,7 @@ export function App() {
               agentType={agentType}
               maxStep={maxStep}
               tokenStats={tokenStats}
+              agentMeta={agentMeta}
               onInputChange={setChatInput}
               onSend={() => sendChat()}
               onClear={clearChat}

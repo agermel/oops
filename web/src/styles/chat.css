@@ -400,6 +400,12 @@
   border: 1px solid var(--primary);
 }
 
+.agent-badge-custom {
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
 /* ---- Agent Step Counter ---- */
 
 .agent-step-counter {

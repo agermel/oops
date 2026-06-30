@@ -59,8 +59,7 @@ type Server struct {
 	nodeletClient  NodeletClient
 	registry       *connection.Registry
 	llmClient      *llm.Client
-	promptStore    *llm.PromptStore
-	agentRouter    *llm.Router
+	skillStore     *llm.SkillStore
 	eventStore     *llm.EventStore
 	mcpManager     *mcp.Manager
 	projectStore   *config.ProjectStore
@@ -159,7 +158,7 @@ func New(options Options) *Server {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		nativeTools, err := llm.NewTools(s)
+		nativeTools, err := llm.NewTools(s, nil) // SkillStore 在后续初始化，此处传 nil，skill 工具后续由 onMCPToolsChanged 补上
 		if err != nil {
 			logutil.Error("llm: create tools", zap.Error(err))
 			return s
@@ -174,13 +173,13 @@ func New(options Options) *Server {
 		}
 	}
 
-	// Prompt 外部化管理（LLM 未启用时也初始化，供后续启用时使用）。
-	ps, err := llm.NewPromptStore("config/prompts")
+	// SkillStore 管理 Agent 技能（替换旧 PromptStore + Router）。
+	// 即使 LLM 未启用也初始化，供后续启用时使用。
+	ss, err := llm.NewSkillStore("config/skills")
 	if err != nil {
-		logutil.Warn("llm: prompt store", zap.Error(err))
+		logutil.Warn("llm: skill store", zap.Error(err))
 	} else {
-		s.promptStore = ps
-		s.agentRouter = llm.NewRouter(ps)
+		s.skillStore = ss
 	}
 
 	// SQLite 事件持久化。
@@ -254,6 +253,11 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	// ---- Tools ----
 	mux.HandleFunc("GET /api/tools", authed(s.handleTools))
 	mux.HandleFunc("PUT /api/tools/{name}", authed(s.handleToolToggle))
+
+	// ---- Skills ----
+	mux.HandleFunc("GET /api/skills", authed(s.handleSkillsList))
+	mux.HandleFunc("PUT /api/skills/{name}", authed(s.handleSkillsUpdate))
+	mux.HandleFunc("DELETE /api/skills/{name}", authed(s.handleSkillsDelete))
 
 	// ---- Console SSE ----
 	mux.HandleFunc("GET /api/console/stream", securityHeaders(s.authMiddleware(console.Default().SSEHandler)))
