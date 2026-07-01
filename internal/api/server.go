@@ -60,6 +60,7 @@ type Server struct {
 	registry       *connection.Registry
 	llmClient      *llm.Client
 	skillStore     *llm.SkillStore
+	contextBuilder *llm.ContextBuilder
 	eventStore     *llm.EventStore
 	mcpManager     *mcp.Manager
 	projectStore   *config.ProjectStore
@@ -143,15 +144,22 @@ func New(options Options) *Server {
 		options.Registry = checker.NewDefaultRegistry()
 	}
 
+	// JSONL-backed session store（重启后会话可恢复）。
+	sessionStore, err := llm.OpenSessionStore("data/sessions")
+	if err != nil {
+		logutil.Warn("session: open store, falling back to memory-only", zap.Error(err))
+		sessionStore = llm.NewSessionStore()
+	}
+
 	s := &Server{
 		connections:    options.Connections,
 		nodeletManager: options.NodeletManager,
 		nodeletClient:  options.NodeletClient,
-		registry:      options.Registry,
-		sessionStore:  llm.NewSessionStore(),
-		UserStore:     options.UserStore,
-		TokenService:  options.TokenService,
-		tokenTTL:      options.TokenTTL,
+		registry:       options.Registry,
+		sessionStore:   sessionStore,
+		UserStore:      options.UserStore,
+		TokenService:   options.TokenService,
+		tokenTTL:       options.TokenTTL,
 	}
 
 	if options.LLMEnabled {
@@ -180,6 +188,12 @@ func New(options Options) *Server {
 		logutil.Warn("llm: skill store", zap.Error(err))
 	} else {
 		s.skillStore = ss
+	}
+
+	// ContextBuilder：上下文工程引擎（compaction + system prompt + skills 注入）。
+	if s.llmClient != nil && s.skillStore != nil {
+		s.contextBuilder = llm.NewContextBuilder(s.sessionStore, s.skillStore, s.llmClient)
+		logutil.Info("context: builder ready")
 	}
 
 	// SQLite 事件持久化。

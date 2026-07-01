@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"oops/internal/llm"
-	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino/schema"
 )
@@ -135,32 +134,43 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		sess = s.sessionStore.Create(projectID)
 	}
 
-	// 构建系统提示词：Base prompt + 可用 Skill 列表。
-	maxStep := 15
-	systemPrompt := llm.BasePrompt
-	if s.skillStore != nil {
-		available := s.skillStore.RenderAvailable()
-		if available != "" {
-			systemPrompt = systemPrompt + "\n\n" + available
-		}
-	}
+	// 使用 ContextBuilder 构建上下文（compaction + system prompt + skills）。
+	// BuildContext → compactIfNeeded → 注入摘要 → 组装。
+	var messages []*schema.Message
+	var trimmed int
+	var totalTokens int
 
-	systemMsg := schema.SystemMessage(systemPrompt)
-	messages := []*schema.Message{systemMsg}
-	messages = append(messages, sess.Messages...)
 	userMsg := schema.UserMessage(req.Question)
-	messages = append(messages, userMsg)
 
-	// Context 窗口裁剪。
-	trimResult := llm.TrimToBudget(messages, llm.DefaultBudget)
-	if trimResult.Trimmed > 0 {
-		logutil.Infof("chat: trimmed %d messages, tokens: %d → %d",
-			trimResult.Trimmed, llm.EstimateTokens(messages), trimResult.TotalTokens)
+	if s.contextBuilder != nil {
+		buildResult := s.contextBuilder.Build(ctx, llm.BuildOptions{
+			Session:  sess,
+			Question: req.Question,
+		})
+		messages = buildResult.Messages
+		trimmed = buildResult.Trimmed
+		totalTokens = buildResult.Tokens
+	} else {
+		// 回退：手动组装（contextBuilder 未初始化时，如 skillStore 加载失败）。
+		systemPrompt := llm.BasePrompt
+		if s.skillStore != nil {
+			if available := s.skillStore.RenderAvailable(); available != "" {
+				systemPrompt = systemPrompt + "\n\n" + available
+			}
+		}
+		systemMsg := schema.SystemMessage(systemPrompt)
+		msgs := []*schema.Message{systemMsg}
+		msgs = append(msgs, sess.Messages...)
+		msgs = append(msgs, userMsg)
+		trimResult := llm.TrimToBudget(msgs, llm.DefaultBudget)
+		messages = trimResult.Messages
+		trimmed = trimResult.Trimmed
+		totalTokens = trimResult.TotalTokens
 	}
-	messages = trimResult.Messages
 
-	// 用户消息先写入 session。
+	// 用户消息写入 session（Build 不修改 session，这里追加）。
 	s.sessionStore.AppendMessage(sess.ID, userMsg)
+	maxStep := 15
 
 	// 生成 run ID（用于事件持久化）。
 	runID := sess.ID + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
@@ -239,8 +249,8 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	// 末尾事件：token 用量统计。
 	statsEvt := llm.StepEvent{
 		Type:    "stats",
-		Tokens:  trimResult.TotalTokens,
-		Trimmed: trimResult.Trimmed,
+		Tokens:  totalTokens,
+		Trimmed: trimmed,
 	}
 	statsData, _ := json.Marshal(statsEvt)
 	fmt.Fprintf(w, "data: %s\n\n", statsData)

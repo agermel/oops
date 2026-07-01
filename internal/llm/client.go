@@ -96,3 +96,13 @@ func (c *Client) Ask(ctx context.Context, messages []*schema.Message, onMessage 
 	c.toolsMu.RUnlock()
 	return Ask(ctx, c.model, tools, messages, onMessage, maxStep)
 }
+
+// Complete 发送无工具调用的简单补全请求（用于 compaction 摘要等场景）。
+// 返回模型的纯文本回复。
+func (c *Client) Complete(ctx context.Context, messages []*schema.Message) (string, error) {
+	resp, err := c.model.Generate(ctx, messages)
+	if err != nil {
+		return "", err
+	}
+	return resp.Content, nil
+}

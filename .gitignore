@@ -8,4 +8,6 @@ config/mcp_connections.json
 config/projects.json
 data/users.yml
 data/events.db
+data/sessions/
+internal/api/data/
 bin/
