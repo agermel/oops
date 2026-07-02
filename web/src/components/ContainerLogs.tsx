@@ -27,6 +27,10 @@ export function ContainerLogs({
   // 跟踪用户是否手动关闭了自动滚动（避免 IntersectionObserver 反复切换）
   const userScrolledUpRef = React.useRef(false);
 
+  // 用 ref 持有最新 onAutoScrollChange，避免 IntersectionObserver 因 prop 变化而频繁重建
+  const onAutoScrollChangeRef = React.useRef(onAutoScrollChange);
+  onAutoScrollChangeRef.current = onAutoScrollChange;
+
   // ---- IntersectionObserver：哨兵可见 → 用户在底部 ----
   React.useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -35,30 +39,29 @@ export function ContainerLogs({
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        // 哨兵可见（即使部分可见）→ 用户在底部附近 → 打开自动滚动
+        // 哨兵可见 → 用户在底部附近 → 打开自动滚动
         if (entry.isIntersecting) {
           if (userScrolledUpRef.current) {
-            // 用户之前翻上去，现在回来了 → 恢复自动滚动
             userScrolledUpRef.current = false;
           }
-          onAutoScrollChange(true);
+          onAutoScrollChangeRef.current(true);
           setHasMore(false);
         } else {
-          // 哨兵完全不可见 → 用户已上翻
+          // 哨兵不可见 → 用户已上翻
           userScrolledUpRef.current = true;
-          onAutoScrollChange(false);
+          onAutoScrollChangeRef.current(false);
         }
       },
       {
         root: panel,
-        threshold: [0, 1],
+        threshold: 0, // 哨兵任意部分可见即触发（避免 [0,1] 导致的双次回调）
         rootMargin: "40px 0px",
       }
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [panelRef, onAutoScrollChange]);
+  }, [panelRef]); // onAutoScrollChange 通过 ref 访问，无需重订阅
 
   // ---- MutationObserver：新内容追加时，自动滚到底部或显示"回到底部" ----
   // 使用 ref 持有最新 autoScroll 值，避免 MutationObserver 因 autoScroll 变化而反复重建

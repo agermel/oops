@@ -19,11 +19,6 @@ function mergedToDSNInfo(merged: Record<string, string>, detected: Record<string
 
 type KVRow = { key: string; value: string; id: number };
 
-let idCounter = 0;
-function newRow(key?: string, value?: string): KVRow {
-  return { id: ++idCounter, key: key || "", value: value || "" };
-}
-
 function pairsToRecord(rows: KVRow[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const r of rows) {
@@ -32,11 +27,6 @@ function pairsToRecord(rows: KVRow[]): Record<string, string> {
     }
   }
   return out;
-}
-
-function recordToRows(rec: Record<string, string> | undefined | null): KVRow[] {
-  if (!rec || Object.keys(rec).length === 0) return [newRow()];
-  return Object.entries(rec).map(([k, v]) => newRow(k, v));
 }
 
 export function ContainerDSN({
@@ -54,6 +44,15 @@ export function ContainerDSN({
 }) {
   const paths = serverPaths(projectId, nodeletId);
   const dsnURL = paths.containerDSN(containerId);
+
+  const idCounter = React.useRef(0);
+  function newRow(key?: string, value?: string): KVRow {
+    return { id: ++idCounter.current, key: key || "", value: value || "" };
+  }
+  function recordToRows(rec: Record<string, string> | undefined | null): KVRow[] {
+    if (!rec || Object.keys(rec).length === 0) return [newRow()];
+    return Object.entries(rec).map(([k, v]) => newRow(k, v));
+  }
 
   const [dsnConfig, setDsnConfig] = React.useState<DSNConfig | null>(null);
   const [rows, setRows] = React.useState<KVRow[]>([newRow()]);

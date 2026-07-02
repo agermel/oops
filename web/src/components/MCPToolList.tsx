@@ -36,6 +36,11 @@ export function MCPToolList({
   // 用 ref 保留测试结果，父组件刷新时不清除。
   const toolTestsRef = React.useRef<Record<string, ToolTestResult>>({});
 
+  // Keep ref in sync with state — no side effects inside setState updaters.
+  React.useEffect(() => {
+    toolTestsRef.current = toolTests;
+  }, [toolTests]);
+
   async function testTool(toolName: string) {
     const key = `${connectionId}:${toolName}`;
     setTestingTools((prev) => new Set(prev).add(key));
@@ -53,17 +58,17 @@ export function MCPToolList({
           status: isTransport ? "transport_error" : (data?.status || "error"),
           error: data?.error || `HTTP ${resp.status}`,
         };
-        setToolTests((prev) => { const next = { ...prev, [key]: result }; toolTestsRef.current = next; return next; });
+        setToolTests((prev) => ({ ...prev, [key]: result }));
         return;
       }
       const result: ToolTestResult = data?.status === "ok"
         ? { status: "ok", output: data.output }
         : { status: data?.status || "error", error: data?.error || "未知错误" };
-      setToolTests((prev) => { const next = { ...prev, [key]: result }; toolTestsRef.current = next; return next; });
+      setToolTests((prev) => ({ ...prev, [key]: result }));
     } catch (err) {
       // fetch 本身抛出的异常（网络断开等）→ 传输层错误
       const result: ToolTestResult = { status: "transport_error", error: getErrorMessage(err, "网络请求失败") };
-      setToolTests((prev) => { const next = { ...prev, [key]: result }; toolTestsRef.current = next; return next; });
+      setToolTests((prev) => ({ ...prev, [key]: result }));
     } finally {
       setTestingTools((prev) => {
         const next = new Set(prev);

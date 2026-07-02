@@ -209,13 +209,13 @@ export function ChatView({
           <div className="chat-empty">问我任何关于当前环境的问题，例如"哪些容器在运行？"或"Redis 是否正常？"</div>
         )}
         {processedExchanges.map((ex, i) => (
-          <div key={`${ex.question.slice(0, 40)}-${i}`} className="chat-exchange">
+          <div key={`${i}-${ex.question.length}-${ex.question.slice(0, 20)}`} className="chat-exchange">
             <div className="chat-msg user">
               <div className="chat-avatar"><User size={16} /></div>
               <div className="chat-content">{ex.question}</div>
             </div>
             {ex.displaySteps.map((step, j) => (
-              <StepBlock key={j} step={step} forceExpand={expandAll} />
+              <StepBlock key={step.toolCallId || `${step.type}-${j}`} step={step} forceExpand={expandAll} />
             ))}
             {ex.answer && <AnswerBlock content={ex.answer} animate={false} />}
             {ex.error && <div className="chat-error">{ex.error}</div>}
@@ -236,7 +236,7 @@ export function ChatView({
                     s.type === "tool_result" &&
                     (!step.toolCallId || s.toolCallId === step.toolCallId),
                 );
-              return <StepBlock key={j} step={step} animate hasResult={hasResult} forceExpand={expandAll} />;
+              return <StepBlock key={step.toolCallId || `${step.type}-${j}`} step={step} animate hasResult={hasResult} forceExpand={expandAll} />;
             })}
             {currentSteps.some((s) => s.type === "answer") && (
               <AnswerBlock

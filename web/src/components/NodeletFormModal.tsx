@@ -27,6 +27,10 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
   const [testResult, setTestResult] = React.useState("");
 
   function buildPayload() {
+    // 编辑已有 Nodelet 时，token 留空表示不修改
+    if (!isNew && hasExistingToken && !token) {
+      return { name, address };
+    }
     return { name, address, token };
   }
 

@@ -12,7 +12,7 @@ export function useSessions(projectId?: string) {
       const list = await apiRequest<SessionInfo[]>(`/api/sessions${qs}`);
       return list || [];
     },
-    enabled: projectId !== undefined,
+    enabled: !!projectId,
   });
 }
 

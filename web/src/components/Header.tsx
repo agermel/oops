@@ -3,7 +3,11 @@ import { navigation } from "../types";
 
 export function Header({ activeNav, onNavChange }: { activeNav: string; onNavChange: (id: string) => void }) {
   async function handleLogout() {
-    await fetch("/api/token", { method: "DELETE" });
+    try {
+      await fetch("/api/token", { method: "DELETE" });
+    } catch {
+      // 即使请求失败也清除本地状态，token 可能已过期或基于 cookie
+    }
     window.location.reload();
   }
   return (

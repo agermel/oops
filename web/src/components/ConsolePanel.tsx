@@ -142,7 +142,7 @@ export function ConsolePanel() {
           <div className="console-empty">暂无日志输出，等待后端推送…</div>
         ) : (
           filtered.map((e, i) => (
-            <div key={i} className={`console-line level-${e.level}`}>
+            <div key={`${e.timestamp}-${i}`} className={`console-line level-${e.level}`}>
               <span className="console-ts">{e.timestamp.slice(11, 19)}</span>
               <span className="console-level-tag">{e.level}</span>
               <span className="console-msg" dangerouslySetInnerHTML={{ __html: sanitize(ansi.toHtml(e.message)) }} />

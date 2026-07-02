@@ -87,6 +87,8 @@ export function MCPView({
     fetchConnections();
     const interval = setInterval(refreshConnectionsQuietly, 30_000);
     return () => { clearInterval(interval); };
+    // fetchConnections / refreshConnectionsQuietly close over stable React setters only — safe to exclude.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   React.useEffect(() => {

@@ -108,7 +108,9 @@ export function App() {
   const { data: skills = [] } = useSkills();
   const {
     data: sessions = [],
-  } = useSessions(selectedProjectID_clean || undefined);
+  } = useSessions(selectedProjectID_clean || "");
+
+  const queryClient = useQueryClient();
 
   // agentMeta: 从 skills 派生
   const agentMeta = React.useMemo(() => {
@@ -166,6 +168,7 @@ export function App() {
   const [chatError, setChatError] = React.useState("");
   const chatLoadingRef = React.useRef(false);
   const chatStepsRef = React.useRef<StepEvent[]>([]);
+  const chatAbortRef = React.useRef<AbortController | null>(null);
   const [sessionId, setSessionId] = React.useState<string>(() => {
     return localStorage.getItem("oops_session_id") || "";
   });
@@ -350,7 +353,7 @@ export function App() {
     };
     source.onmessage = (event) => {
       try {
-        logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry];
+        logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry].slice(-MAX_LOGS);
         flushLogs();
       } catch {
         // 跳过无法解析的日志行
@@ -387,6 +390,12 @@ export function App() {
     // 自愈：若 UI 已不显示 loading 但 ref 泄漏（如导航中途离开聊天页），则重置
     if (!chatLoading) chatLoadingRef.current = false;
     if (chatLoadingRef.current) return;
+
+    // Abort any in-flight request
+    chatAbortRef.current?.abort();
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+
     chatLoadingRef.current = true;
     setChatInput("");
     setChatError("");
@@ -403,6 +412,7 @@ export function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId || undefined, question: q }),
+        signal: controller.signal,
       });
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
@@ -487,6 +497,7 @@ export function App() {
   }
 
   function startNewChat() {
+    chatAbortRef.current?.abort();
     localStorage.removeItem("oops_session_id");
     setChatExchanges([]);
     setCurrentSteps([]);
@@ -570,13 +581,24 @@ export function App() {
     }
   }
 
-  const queryClient = useQueryClient();
 
-  function clearChat() {
+  async function clearChat() {
+    chatAbortRef.current?.abort();
+    let deleted = false;
     if (sessionId) {
-      fetch(sessionPaths(sessionId).delete, { method: "DELETE" }).catch(() => {});
-      localStorage.removeItem("oops_session_id");
+      try {
+        const resp = await fetch(sessionPaths(sessionId).delete, { method: "DELETE" });
+        if (resp.ok || resp.status === 404) deleted = true;
+      } catch {
+        // 网络错误：仍然清除本地状态，但保留 sessionId 以便重试
+      }
     }
+    if (sessionId && !deleted) {
+      // 删除失败：不清除 localStorage 和 sessionId，用户可重试
+      setChatError("清除会话失败，请重试");
+      return;
+    }
+    localStorage.removeItem("oops_session_id");
     setChatExchanges([]);
     setCurrentSteps([]);
     chatStepsRef.current = [];
@@ -594,8 +616,9 @@ export function App() {
 
   React.useEffect(() => {
     if (!authenticated) return;
-    // 切换项目时仅当用户在聊天页面才重置会话（通过 ref 读取最新值避免过期闭包）
-    if (sessionIdRef.current && sessionLoadedRef.current && routeViewRef.current === "project-chat") {
+    // 切换项目时中止进行中的请求并重置会话
+    chatAbortRef.current?.abort();
+    if (sessionIdRef.current && sessionLoadedRef.current) {
       startNewChat();
     }
     queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
@@ -711,8 +734,10 @@ export function App() {
   // projects / skills 数据由 TanStack Query hooks 自动管理，无需手动 fetch
 
   React.useEffect(() => {
-    return () => closeLogStream();
-    // flushLogs is useCallback([], []) — stable across renders
+    return () => {
+      closeLogStream();
+      chatAbortRef.current?.abort();
+    };
   }, []);
 
   // ---- 标题 ----

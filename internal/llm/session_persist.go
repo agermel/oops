@@ -116,7 +116,7 @@ func loadSessionFile(store *SessionStore, sessionID, path string) error {
 			Type             string          `json:"type"`
 			ID               string          `json:"id"`
 			ParentID         string          `json:"parentId"`
-			Timestamp        int64           `json:"timestamp"`
+			Timestamp        json.RawMessage `json:"timestamp"`
 			ProjectID        string          `json:"projectId"`
 			Message          json.RawMessage `json:"message"`
 			Summary          string          `json:"summary"`

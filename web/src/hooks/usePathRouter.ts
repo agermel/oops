@@ -39,7 +39,14 @@ export function parsePathRoute(pathname: string): Route {
     return { view: "projects" };
   }
 
-  const projectId = decodeURIComponent(segs[1]);
+  let projectId: string;
+  try {
+    projectId = decodeURIComponent(segs[1]);
+  } catch {
+    // malformed percent-encoding → fall back to project list
+    return { view: "projects" };
+  }
+  if (!projectId) return { view: "projects" };
 
   // /projects/:pid
   if (segs.length === 2) {

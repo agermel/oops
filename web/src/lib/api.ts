@@ -21,5 +21,15 @@ export async function apiRequest<T = any>(
     const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
     throw new ApiError(data.error || `HTTP ${resp.status}`, resp.status);
   }
-  return resp.json();
+  // 204 No Content / empty body — e.g. DELETE operations
+  if (resp.status === 204 || resp.headers.get("content-length") === "0") {
+    return undefined as unknown as T;
+  }
+  const text = await resp.text();
+  if (!text) return undefined as unknown as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return text as unknown as T;
+  }
 }

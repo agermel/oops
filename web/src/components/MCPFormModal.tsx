@@ -243,6 +243,9 @@ export function MCPFormModal({
   const [testing, setTesting] = React.useState(false);
   const [creds, setCreds] = React.useState<Credentials>(emptyCreds());
 
+  // Track meaningful prefill identity to avoid re-init on every render.
+  const prefillKey = prefill ? `${prefill.containerId || ""}:${prefill.nodeletId || ""}:${prefill.name || ""}` : "";
+
   // 初始化：editItem 优先（编辑模式），否则 prefill 或空白（新建模式）
   React.useEffect(() => {
     if (editItem) {
@@ -271,8 +274,7 @@ export function MCPFormModal({
     }
     setTestResult("");
     setSaveError("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [editItem, prefillKey]);
 
   function closeForm() {
     if (saving) return;
@@ -281,17 +283,17 @@ export function MCPFormModal({
 
   // 连接参数变化时，自动同步到 env
   function updateCreds(partial: Partial<Credentials>) {
-    setCreds((prev) => {
-      const next = { ...prev, ...partial };
-      setEditing((form) => {
-        if (!form) return form;
-        const generated = credentialsToEnv(form.type, next);
-        if (generated.length === 0) return form;
-        const genKeys = new Set(generated.map((e) => e.split("=")[0]));
-        const kept = form.env.filter((e) => !genKeys.has(e.split("=")[0]));
-        return { ...form, env: [...generated, ...kept] };
-      });
-      return next;
+    setCreds((prev) => ({ ...prev, ...partial }));
+    // Sync editing.env based on new creds values (React 18 batches both setStates).
+    setEditing((form) => {
+      if (!form) return form;
+      // Read latest creds via functional updater that merges the partial
+      const nextCreds = { ...creds, ...partial };
+      const generated = credentialsToEnv(form.type, nextCreds);
+      if (generated.length === 0) return form;
+      const genKeys = new Set(generated.map((e) => e.split("=")[0]));
+      const kept = form.env.filter((e) => !genKeys.has(e.split("=")[0]));
+      return { ...form, env: [...generated, ...kept] };
     });
   }
 
