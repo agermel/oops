@@ -1,12 +1,11 @@
 package auth
 
 import (
+	"bufio"
 	"fmt"
 	"os"
-	"sync"
-	"time"
-
-	"oops/internal/logutil"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -15,128 +14,104 @@ import (
 // DefaultPath is the default path for the user credentials YAML file.
 const DefaultPath = "data/users.yml"
 
-// User 表示一个可登录的用户。
+// User 表示可登录的用户。
 type User struct {
-	Username string `yaml:"-"`      // 登录用户名（YAML map 的 key），不在 YAML 中序列化
-	Name     string `yaml:"name"`    // 显示名称
+	Username string `yaml:"username"`
+	Name     string `yaml:"name"`
 	Password string `yaml:"password"` // bcrypt hash
 }
 
-// Store 管理用户凭证，从 YAML 文件加载，支持热加载。
+// Store 管理单用户凭证。
 type Store struct {
-	mu      sync.RWMutex
-	path    string
-	modTime time.Time
-	Users   map[string]*User `yaml:"users"` // username → User
+	User *User
 }
 
-// NewStore 从 YAML 文件加载用户。文件不存在时返回空 store。
+// NewStore 从 YAML 文件加载用户。文件不存在时交互式创建。
 func NewStore(path string) (*Store, error) {
-	s := &Store{path: path, Users: make(map[string]*User)}
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return s, nil
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return promptAndSave(path)
 	}
-	if err := s.load(); err != nil {
-		return nil, err
+	if err != nil {
+		return nil, fmt.Errorf("read users.yml: %w", err)
 	}
-	return s, nil
+
+	var u User
+	if err := yaml.Unmarshal(data, &u); err != nil {
+		return nil, fmt.Errorf("parse users.yml: %w", err)
+	}
+	if u.Username == "" || u.Password == "" {
+		return nil, fmt.Errorf("users.yml: username and password are required")
+	}
+	return &Store{User: &u}, nil
 }
 
-// IsEmpty 返回 store 中是否没有配置任何用户。带读锁保护，可安全跨 goroutine 使用。
-func (s *Store) IsEmpty() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.Users) == 0
-}
-
-// Validate 验证用户名和密码。返回用户信息或错误。
+// Validate 验证用户名和密码。
 func (s *Store) Validate(username, password string) (*User, error) {
-	if err := s.reloadIfChanged(); err != nil {
-		return nil, fmt.Errorf("reload users: %w", err)
+	if s.User == nil {
+		return nil, fmt.Errorf("no user configured")
 	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	u, ok := s.Users[username]
-	if !ok {
+	if username != s.User.Username {
 		return nil, fmt.Errorf("invalid username or password")
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(s.User.Password), []byte(password)); err != nil {
 		return nil, fmt.Errorf("invalid username or password")
 	}
-	u.Username = username // 确保 Username 字段被填充（防御性编程）
-	return u, nil
+	return s.User, nil
 }
 
-// Find 按用户名查找用户（不验证密码）。
-func (s *Store) Find(username string) *User {
-	if err := s.reloadIfChanged(); err != nil {
-		logutil.Errorf("auth: reload users failed: %v", err)
-	}
+// promptAndSave 交互式创建用户并写入 YAML。
+func promptAndSave(path string) (*Store, error) {
+	reader := bufio.NewReader(os.Stdin)
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.Users[username]
-}
-
-// reloadIfChanged 在文件 mtime 变化时重新加载。
-func (s *Store) reloadIfChanged() error {
-	info, err := os.Stat(s.path)
+	fmt.Print("Username: ")
+	username, err := reader.ReadString('\n')
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return nil, fmt.Errorf("read username: %w", err)
 	}
+	username = strings.TrimSpace(username)
 
-	// 读锁保护 s.modTime，避免与 load() 中的写锁并发造成 data race。
-	s.mu.RLock()
-	changed := info.ModTime().After(s.modTime)
-	s.mu.RUnlock()
-
-	if !changed {
-		return nil
-	}
-	return s.load()
-}
-
-func (s *Store) load() error {
-	data, err := os.ReadFile(s.path)
+	fmt.Print("Name: ")
+	name, err := reader.ReadString('\n')
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("read name: %w", err)
+	}
+	name = strings.TrimSpace(name)
+
+	fmt.Print("Password: ")
+	password, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read password: %w", err)
+	}
+	password = strings.TrimSpace(password)
+
+	if username == "" || password == "" {
+		return nil, fmt.Errorf("username and password cannot be empty")
 	}
 
-	var raw struct {
-		Users map[string]*User `yaml:"users"`
-	}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("parse users.yml: %w", err)
-	}
-
-	info, _ := os.Stat(s.path)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Users = raw.Users
-	if s.Users == nil {
-		s.Users = make(map[string]*User)
-	}
-	// 填充 Username 字段（YAML map 的 key）。
-	for username, u := range s.Users {
-		u.Username = username
-	}
-	if info != nil {
-		s.modTime = info.ModTime()
-	}
-	return nil
-}
-
-// HashPassword 生成 bcrypt hash。
-func HashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("hash password: %w", err)
 	}
-	return string(hash), nil
+
+	u := &User{
+		Username: username,
+		Name:     name,
+		Password: string(hash),
+	}
+
+	data, err := yaml.Marshal(u)
+	if err != nil {
+		return nil, fmt.Errorf("marshal user: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create data dir: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return nil, fmt.Errorf("write users.yml: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "User %q created and saved to %s\n", username, path)
+	return &Store{User: u}, nil
 }

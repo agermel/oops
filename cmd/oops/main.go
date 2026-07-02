@@ -1,13 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"oops/internal/api"
-	"oops/internal/auth"
 	"oops/internal/common"
 	"oops/internal/config"
 	"oops/internal/console"
@@ -18,19 +15,6 @@ import (
 )
 
 func main() {
-	// hash-password 子命令。
-	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
-		fmt.Print("Password: ")
-		var password string
-		fmt.Scanln(&password)
-		hash, err := auth.HashPassword(password)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println(hash)
-		return
-	}
 	// 初始化结构化日志：同时输出到 stderr 和 web 控制台 hub。
 	logutil.Init(true, zapcore.AddSync(console.Default()), "")
 
@@ -43,7 +27,7 @@ func main() {
 	server := api.NewFromConfig(cfg)
 	mux := http.NewServeMux()
 	server.Mount(mux)
-	handler := web.MountStatic(mux, "web/dist", server.UserStore, server.TokenService)
+	handler := web.MountStatic(mux, "web/dist", server.TokenService)
 
 	addr := common.EnvOrDefault("OOPS_ADDR", ":8081")
 

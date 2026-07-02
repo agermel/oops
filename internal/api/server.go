@@ -128,7 +128,7 @@ func NewFromConfig(cfg config.Config) *Server {
 		logutil.Error("auth: user store", zap.Error(err))
 	} else {
 		s.UserStore = userStore
-		s.TokenService = auth.NewTokenService(userStore.Users, 24*time.Hour)
+		s.TokenService = auth.NewTokenService(userStore.User.Password, 24*time.Hour)
 		s.tokenTTL = 24 * time.Hour
 	}
 

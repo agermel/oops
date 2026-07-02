@@ -24,7 +24,6 @@ type pageUser struct {
 // spaHandler 处理 SPA 请求：文件优先 → index.html fallback + config 注入 + auth 重定向。
 type spaHandler struct {
 	staticDir    string
-	userStore    *auth.Store
 	tokenService *auth.TokenService
 	indexHTML    []byte // 缓存的 index.html 原始内容
 }
@@ -118,7 +117,7 @@ func (h *spaHandler) serveIndexWithConfig(w http.ResponseWriter, provider string
 
 // MountStatic 返回一个组合 handler：API 路径走 mux，其他路径走 SPA handler。
 // 必须在 API 路由已注册到 mux 之后调用。
-func MountStatic(mux *http.ServeMux, staticDir string, userStore *auth.Store, tokenService *auth.TokenService) http.Handler {
+func MountStatic(mux *http.ServeMux, staticDir string, tokenService *auth.TokenService) http.Handler {
 	absDir, err := filepath.Abs(staticDir)
 	if err != nil {
 		absDir = staticDir
@@ -126,7 +125,6 @@ func MountStatic(mux *http.ServeMux, staticDir string, userStore *auth.Store, to
 
 	spa := &spaHandler{
 		staticDir:    absDir,
-		userStore:    userStore,
 		tokenService: tokenService,
 	}
 
