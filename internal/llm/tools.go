@@ -26,6 +26,10 @@ type OpsData interface {
 
 	// CheckConnections 执行所有连接健康检查。
 	CheckConnections(ctx context.Context) ([]ConnectionStatus, error)
+
+	// GetProjectRepo 返回指定项目的 GitHub 仓库 URL。
+	// projectID 不存在或未配置仓库时返回空字符串和错误。
+	GetProjectRepo(ctx context.Context, projectID string) (string, error)
 }
 
 // NodeletSummary 是 LLM 可见的 Nodelet 概要。
@@ -220,6 +224,10 @@ func NewTools(ops OpsData, store *SkillStore) ([]tool.InvokableTool, error) {
 		NewListContainersTool,
 		NewGetLogsTool,
 		NewCheckConnectionsTool,
+		NewRepoSyncTool,
+		NewRepoListDirTool,
+		NewRepoReadFileTool,
+		NewRepoFetchTool,
 	}
 
 	toolList := make([]tool.InvokableTool, 0, len(factories)+1)

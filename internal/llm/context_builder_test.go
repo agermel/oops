@@ -288,7 +288,7 @@ func TestContextBuilder_prependSystemPrompt(t *testing.T) {
 		schema.UserMessage("hello"),
 	}
 
-	result := cb.prependSystemPrompt(msgs)
+	result := cb.prependSystemPrompt(msgs, nil)
 	if len(result) != 2 {
 		t.Fatalf("len = %d, want 2", len(result))
 	}
@@ -297,5 +297,36 @@ func TestContextBuilder_prependSystemPrompt(t *testing.T) {
 	}
 	if !strings.Contains(result[0].Content, "基础设施运维助手") {
 		t.Error("system prompt should contain BasePrompt")
+	}
+}
+
+func TestContextBuilder_prependSystemPrompt_WithProject(t *testing.T) {
+	cb := NewContextBuilder(NewSessionStore(), nil, nil)
+	msgs := []*schema.Message{
+		schema.UserMessage("hello"),
+	}
+
+	project := &ProjectContext{
+		Name:        "TestProject",
+		Description: "A test project",
+		GitHubRepo:  "https://github.com/user/repo",
+		NodeletIDs:  []string{"node1", "node2"},
+	}
+
+	result := cb.prependSystemPrompt(msgs, project)
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2", len(result))
+	}
+	if !strings.Contains(result[0].Content, "TestProject") {
+		t.Error("system prompt should contain project name")
+	}
+	if !strings.Contains(result[0].Content, "https://github.com/user/repo") {
+		t.Error("system prompt should contain GitHub repo URL")
+	}
+	if !strings.Contains(result[0].Content, "node1") {
+		t.Error("system prompt should contain nodelet IDs")
+	}
+	if !strings.Contains(result[0].Content, "repo_sync") {
+		t.Error("system prompt should mention repo tools when repo is set")
 	}
 }

@@ -134,6 +134,19 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		sess = s.sessionStore.Create(projectID)
 	}
 
+	// 查项目元数据，注入 system prompt。
+	var projectCtx *llm.ProjectContext
+	if projectID != "" && s.projectStore != nil {
+		if p := s.projectStore.Get(projectID); p != nil {
+			projectCtx = &llm.ProjectContext{
+				Name:        p.Name,
+				Description: p.Description,
+				GitHubRepo:  p.GitHubRepo,
+				NodeletIDs:  p.NodeletIDs,
+			}
+		}
+	}
+
 	// 使用 ContextBuilder 构建上下文（compaction + system prompt + skills）。
 	// BuildContext → compactIfNeeded → 注入摘要 → 组装。
 	var messages []*schema.Message
@@ -146,6 +159,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		buildResult := s.contextBuilder.Build(ctx, llm.BuildOptions{
 			Session:  sess,
 			Question: req.Question,
+			Project:  projectCtx,
 		})
 		messages = buildResult.Messages
 		trimmed = buildResult.Trimmed
@@ -153,6 +167,9 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	} else {
 		// 回退：手动组装（contextBuilder 未初始化时，如 skillStore 加载失败）。
 		systemPrompt := llm.BasePrompt
+		if projectCtx != nil {
+			systemPrompt = systemPrompt + "\n\n" + llm.FormatProjectContext(projectCtx)
+		}
 		if s.skillStore != nil {
 			if available := s.skillStore.RenderAvailable(); available != "" {
 				systemPrompt = systemPrompt + "\n\n" + available

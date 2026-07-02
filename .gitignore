@@ -6,8 +6,11 @@ web/dist/
 /oops-nodelet
 config/mcp_connections.json
 config/projects.json
+config/nodelets.json
+config/container_dsn.json
 data/users.yml
 data/events.db
 data/sessions/
 internal/api/data/
 bin/
+.DS_Store

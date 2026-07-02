@@ -5,12 +5,12 @@ interface FormInputProps extends React.InputHTMLAttributes<HTMLInputElement | HT
   monospace?: boolean;
 }
 
-export function FormInput({
+export const FormInput = React.forwardRef<HTMLInputElement | HTMLTextAreaElement, FormInputProps>(function FormInput({
   multiline = false,
   monospace = false,
   className = "",
   ...rest
-}: FormInputProps) {
+}, ref) {
   const cls = [
     "form-input",
     multiline && "form-textarea",
@@ -21,8 +21,8 @@ export function FormInput({
     .join(" ");
 
   if (multiline) {
-    return <textarea className={cls} rows={3} {...rest} />;
+    return <textarea className={cls} rows={3} {...rest} ref={ref as React.Ref<HTMLTextAreaElement>} />;
   }
 
-  return <input className={cls} {...rest} />;
-}
+  return <input className={cls} {...rest} ref={ref as React.Ref<HTMLInputElement>} />;
+});

@@ -199,7 +199,7 @@ export function ChatView({
               title={`${s.messageCount} 条消息 — 点击切换`}
               onClick={() => onSelectSession(s.id)}
             >
-              {s.id.slice(-8)}
+              {(s.id || "").slice(-8)}
             </button>
           ))}
         </div>

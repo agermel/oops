@@ -9,6 +9,7 @@ import type {
   StepEvent,
   ChatExchange,
   SessionDetail,
+  MCPConnectionStatus,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,6 +57,8 @@ export function App() {
 
   // ---- 路由（始终调用，即使未登录也解析路径） ----
   const { route, navigate, replace } = usePathRouter();
+  const routeViewRef = React.useRef(route.view);
+  routeViewRef.current = route.view;
 
   const activeNav = route.view === "servers" ? "servers" : route.view === "console" ? "console" : "projects";
   const selectedProjectID =
@@ -79,9 +82,10 @@ export function App() {
   // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
-  // MCP 新建连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
+  // MCP 新建/编辑连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
   const [mcpFormOpen, setMCPFormOpen] = React.useState(false);
   const [mcpQuickType, setMCPQuickType] = React.useState<string | undefined>(undefined);
+  const [mcpEditItem, setMCPEditItem] = React.useState<MCPConnectionStatus | null>(null);
   const [mcpViewKey, setMCPViewKey] = React.useState(0);
 
   // ---- 数据域 hooks（TanStack Query 管理） ----
@@ -165,7 +169,11 @@ export function App() {
   const [sessionId, setSessionId] = React.useState<string>(() => {
     return localStorage.getItem("oops_session_id") || "";
   });
+  const sessionIdRef = React.useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const [sessionLoaded, setSessionLoaded] = React.useState(false);
+  const sessionLoadedRef = React.useRef(sessionLoaded);
+  sessionLoadedRef.current = sessionLoaded;
   const [agentType, setAgentType] = React.useState<string>("");
   const [maxStep, setMaxStep] = React.useState<number>(0);
   const [tokenStats, setTokenStats] = React.useState<{ tokens: number; trimmed: number } | null>(null);
@@ -586,8 +594,8 @@ export function App() {
 
   React.useEffect(() => {
     if (!authenticated) return;
-    // 切换项目时仅当用户在聊天页面才重置会话
-    if (sessionId && sessionLoaded && route.view === "project-chat") {
+    // 切换项目时仅当用户在聊天页面才重置会话（通过 ref 读取最新值避免过期闭包）
+    if (sessionIdRef.current && sessionLoadedRef.current && routeViewRef.current === "project-chat") {
       startNewChat();
     }
     queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
@@ -828,6 +836,7 @@ export function App() {
             }}
             logsPanelRef={logsPanel}
             onMCPChanged={() => {
+              queryClient.invalidateQueries({ queryKey: queryKeys.projects.all });
               if (selectedProjectID && selectedNodeletID && selectedContainerID) {
                 selectContainer(selectedProjectID, selectedNodeletID, selectedContainerID);
               }
@@ -843,7 +852,7 @@ export function App() {
                 <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
               </div>
               <div className="workspace-head-actions">
-                <Button size="sm" onClick={() => { setMCPQuickType(undefined); setMCPFormOpen(true); }}>
+                <Button size="sm" onClick={() => { setMCPQuickType(undefined); setMCPEditItem(null); setMCPFormOpen(true); }}>
                   <Plus size={15} />
                   <span>新建连接</span>
                 </Button>
@@ -851,7 +860,8 @@ export function App() {
             </div>
             <MCPView
               key={mcpViewKey}
-              onQuickCreate={(type) => { setMCPQuickType(type); setMCPFormOpen(true); }}
+              onQuickCreate={(type) => { setMCPQuickType(type); setMCPEditItem(null); setMCPFormOpen(true); }}
+              onEdit={(item) => { setMCPEditItem(item); setMCPFormOpen(true); }}
             />
           </section>
         )}
@@ -911,18 +921,20 @@ export function App() {
         )}
       </main>
 
-      {/* App 级 MCP 表单模态框 —— 供 workspace head 按钮和快捷卡片共用 */}
+      {/* App 级 MCP 表单模态框 —— 供 workspace head 按钮、快捷卡片和编辑共用 */}
       {mcpFormOpen && (
         <MCPFormModal
-          prefill={mcpQuickType ? {
+          editItem={mcpEditItem}
+          prefill={!mcpEditItem && mcpQuickType ? {
             name: "",
             type: mcpQuickType,
             env: [],
           } : null}
-          onClose={() => { setMCPFormOpen(false); setMCPQuickType(undefined); }}
+          onClose={() => { setMCPFormOpen(false); setMCPQuickType(undefined); setMCPEditItem(null); }}
           onSaved={() => {
             setMCPFormOpen(false);
             setMCPQuickType(undefined);
+            setMCPEditItem(null);
             setMCPViewKey((k) => k + 1);
           }}
         />

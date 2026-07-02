@@ -1,5 +1,5 @@
 import React from "react";
-import { Plus, FolderKanban, Trash2, Edit3, ChevronRight } from "lucide-react";
+import { Plus, FolderKanban, Trash2, Edit3, ChevronRight, Github } from "lucide-react";
 import type { Project } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { Modal } from "./Modal";
@@ -7,11 +7,11 @@ import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
 
 function emptyProject(): Project {
-  return { id: "", name: "", description: "", nodeletIds: [], createdAt: "", updatedAt: "" };
+  return { id: "", name: "", description: "", githubRepo: "", nodeletIds: [], createdAt: "", updatedAt: "" };
 }
 
 function savePayload(project: Project) {
-  return { id: project.id, name: project.name, description: project.description || "" };
+  return { id: project.id, name: project.name, description: project.description || "", githubRepo: project.githubRepo || "" };
 }
 
 export function ProjectsView({
@@ -33,6 +33,7 @@ export function ProjectsView({
   const [saving, setSaving] = React.useState(false);
   const [formError, setFormError] = React.useState("");
   const [deleteError, setDeleteError] = React.useState("");
+  const githubInputRef = React.useRef<HTMLInputElement>(null);
 
   function openAdd() {
     setIsNew(true);
@@ -41,11 +42,14 @@ export function ProjectsView({
     setShowForm(true);
   }
 
-  function openEdit(p: Project) {
+  function openEdit(p: Project, focusGithub?: boolean) {
     setIsNew(false);
     setEditing({ ...p });
     setFormError("");
     setShowForm(true);
+    if (focusGithub) {
+      setTimeout(() => githubInputRef.current?.focus(), 50);
+    }
   }
 
   function closeForm() {
@@ -115,15 +119,37 @@ export function ProjectsView({
               <div className="project-card-info">
                 <h3>{p.name}</h3>
                 {p.description && <p>{p.description}</p>}
-                <small>{p.nodeletIds.length} 台服务器</small>
+                <div className="project-card-meta">
+                  {p.githubRepo ? (
+                    <a
+                      href={p.githubRepo}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="project-github-link"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Github size={14} />
+                      <span>{p.githubRepo.replace(/^https?:\/\/github\.com\//, "")}</span>
+                    </a>
+                  ) : (
+                    <button
+                      className="project-github-cta"
+                      onClick={(e) => { e.stopPropagation(); openEdit(p, true); }}
+                    >
+                      <Github size={14} />
+                      <span>设置 GitHub 仓库</span>
+                    </button>
+                  )}
+                  <small>{p.nodeletIds.length} 台服务器</small>
+                </div>
               </div>
               <ChevronRight size={20} className="project-card-arrow" />
             </div>
             <div className="project-card-actions">
-              <Button variant="ghost" size="sm" aria-label="编辑项目" onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
+              <Button variant="ghost" size="sm" iconOnly aria-label="编辑项目" onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
                 <Edit3 size={14} />
               </Button>
-              <Button variant="ghost" size="sm" danger aria-label="删除项目" onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
+              <Button variant="ghost" size="sm" iconOnly danger aria-label="删除项目" onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
                 <Trash2 size={14} />
               </Button>
             </div>
@@ -157,6 +183,14 @@ export function ProjectsView({
             value={editing.description || ""}
             onChange={(e) => setEditing({ ...editing, description: e.target.value })}
             placeholder="项目简介（可选）"
+          />
+          <label htmlFor="project-github">GitHub 仓库</label>
+          <FormInput
+            id="project-github"
+            ref={githubInputRef}
+            value={editing.githubRepo || ""}
+            onChange={(e) => setEditing({ ...editing, githubRepo: e.target.value })}
+            placeholder="例如: https://github.com/user/repo"
           />
           {formError && <div className="error-banner">{formError}</div>}
         </Modal>

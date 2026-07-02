@@ -196,9 +196,11 @@ function emptyForm(type?: string): MCPConnectionStatus {
     id: "",
     name: "",
     type: t,
+    transport: "stdio",
     command: defaults.command,
     args: [...defaults.args],
     env: [...defaults.env],
+    url: "",
     enabled: true,
     status: "stopped",
     toolCount: 0,
@@ -210,9 +212,11 @@ function formToConfig(form: MCPConnectionStatus): MCPConnectionConfig {
     id: form.id,
     name: form.name,
     type: form.type,
+    transport: form.transport,
     command: form.command,
     args: form.args,
     env: form.env,
+    url: form.url,
     enabled: form.enabled,
     containerId: form.containerId,
     nodeletId: form.nodeletId,
@@ -406,6 +410,48 @@ export function MCPFormModal({
         <option value="other">其他</option>
       </select>
 
+      <label htmlFor="mcp-transport">传输方式</label>
+      <select
+        id="mcp-transport"
+        value={editing?.transport || "stdio"}
+        onChange={(e) => setEditing((prev) => prev ? { ...prev, transport: e.target.value } : prev)}
+      >
+        <option value="stdio">stdio（本地子进程）</option>
+        <option value="sse">SSE（远程服务）</option>
+      </select>
+
+      {(editing?.transport || "stdio") === "sse" ? (
+        <>
+          <label htmlFor="mcp-url">SSE 地址</label>
+          <FormInput
+            id="mcp-url"
+            value={editing?.url || ""}
+            onChange={(e) => setEditing((prev) => prev ? { ...prev, url: e.target.value } : prev)}
+            placeholder="http://10.0.0.1:19900/sse"
+          />
+        </>
+      ) : (
+        <>
+          <label htmlFor="mcp-command">命令路径</label>
+          <FormInput
+            id="mcp-command"
+            value={editing?.command || ""}
+            onChange={(e) => setEditing((prev) => prev ? { ...prev, command: e.target.value } : prev)}
+            placeholder="mysql-mcp-server"
+          />
+
+          <label htmlFor="mcp-args">参数（每行一个）</label>
+          <FormInput
+            id="mcp-args"
+            multiline
+            monospace
+            value={editing?.args.join("\n") || ""}
+            onChange={(e) => setEditing((prev) => prev ? { ...prev, args: e.target.value.split("\n").filter(Boolean) } : prev)}
+            placeholder="--read-only"
+          />
+        </>
+      )}
+
       {/* 连接参数 —— 按类型展示不同字段 */}
       {showCredentials && credFields.length > 0 && (
         <fieldset className="creds-fieldset">
@@ -437,24 +483,6 @@ export function MCPFormModal({
           </div>
         </fieldset>
       )}
-
-      <label htmlFor="mcp-command">命令路径</label>
-      <FormInput
-        id="mcp-command"
-        value={editing?.command || ""}
-        onChange={(e) => setEditing((prev) => prev ? { ...prev, command: e.target.value } : prev)}
-        placeholder="mysql-mcp-server"
-      />
-
-      <label htmlFor="mcp-args">参数（每行一个）</label>
-      <FormInput
-        id="mcp-args"
-        multiline
-        monospace
-        value={editing?.args.join("\n") || ""}
-        onChange={(e) => setEditing((prev) => prev ? { ...prev, args: e.target.value.split("\n").filter(Boolean) } : prev)}
-        placeholder="--read-only"
-      />
 
       <label htmlFor="mcp-env">环境变量（KEY=VALUE，每行一个）</label>
       <FormInput

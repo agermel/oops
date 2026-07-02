@@ -12,14 +12,16 @@ import { Button } from "./ui/Button";
 // ---- MCPView ----
 export function MCPView({
   onQuickCreate,
+  onEdit,
 }: {
   onQuickCreate?: (type?: string) => void;
+  onEdit?: (item: MCPConnectionStatus) => void;
 }) {
   const [connections, setConnections] = React.useState<MCPConnectionStatus[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
 
-  // 表单模态框控制
+  // 表单模态框控制（仅在无外部回调时使用本地状态）
   const [showForm, setShowForm] = React.useState(false);
   const [editItem, setEditItem] = React.useState<MCPConnectionStatus | null>(null);
 
@@ -109,8 +111,12 @@ export function MCPView({
   }
 
   function openEdit(item: MCPConnectionStatus) {
-    setEditItem(item);
-    setShowForm(true);
+    if (onEdit) {
+      onEdit(item);
+    } else {
+      setEditItem(item);
+      setShowForm(true);
+    }
   }
 
   async function handleDelete(id: string) {
@@ -129,9 +135,11 @@ export function MCPView({
       id: item.id,
       name: item.name,
       type: item.type,
+      transport: item.transport,
       command: item.command,
       args: item.args,
       env: item.env,
+      url: item.url,
       enabled,
       containerId: item.containerId,
       nodeletId: item.nodeletId,
@@ -215,7 +223,7 @@ export function MCPView({
               <th>类型</th>
               <th>状态</th>
               <th>工具数</th>
-              <th>命令</th>
+              <th>传输 / 命令</th>
               <th>启用</th>
               <th>操作</th>
             </tr>
@@ -283,7 +291,9 @@ export function MCPView({
                         </button>
                       </td>
                       <td className="mono">
-                        <span className="mcp-command-text" title={item.command}>{item.command}</span>
+                        <span className="mcp-command-text" title={item.transport === "sse" ? item.url : item.command}>
+                          {item.transport === "sse" ? item.url : item.command}
+                        </span>
                       </td>
                       <td className="mcp-toggle-cell">
                         <ToggleSwitch

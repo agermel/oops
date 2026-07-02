@@ -1,0 +1,43 @@
+services:
+  oops:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    image: oops:latest
+    container_name: oops
+    restart: always
+    environment:
+      - OOPS_ADDR=:8081
+      - OOPS_CONFIG=config/config.yaml
+      # - OOPS_LLM_API_KEY=sk-...
+      # - OOPS_MCP_ALLOWED_COMMANDS=mysql-mcp-server,redis-mcp-server
+    volumes:
+      # 配置文件目录（config.yaml, mcp_connections.json）
+      - ../config:/opt/oops/config
+      # MCP Server 二进制/脚本目录 —— 用户可自行添加新的 MCP Server
+      - ../mcp-servers:/opt/oops/mcp-servers:ro
+      # 数据持久化
+      - ./oops-data:/var/lib/oops
+      - ./oops-logs:/var/log/oops
+    ports:
+      - "8081:8081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  nodelet:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile.nodelet
+    image: oops-nodelet:latest
+    container_name: oops-nodelet
+    restart: always
+    environment:
+      - OOPS_NODELET_ADDR=:8686
+      - OOPS_NODELET_PUBLIC_ADDRESS=http://<server-ip>:8686
+      - OOPS_NODELET_LOG_PATH=/var/log/oops/nodelet.log
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./nodelet-logs:/var/log/oops
+      - ./nodelet-data:/var/lib/oops/nodelet
+    ports:
+      - "8686:8686"

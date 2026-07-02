@@ -13,7 +13,7 @@ export function useProjects() {
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; description?: string }) =>
+    mutationFn: (body: { name: string; description?: string; githubRepo?: string }) =>
       apiRequest<Project>("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -39,9 +39,9 @@ export function useDeleteProject() {
 export function useUpdateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; name?: string; description?: string }) =>
+    mutationFn: ({ id, ...body }: { id: string; name?: string; description?: string; githubRepo?: string }) =>
       apiRequest<Project>(`/api/projects/${encodeURIComponent(id)}`, {
-        method: "PATCH",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),

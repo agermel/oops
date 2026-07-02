@@ -230,14 +230,27 @@ export function ContainerMCP({
             <TypePill label={connection.type} />
           </div>
           <div className="mcp-status-row">
-            <span>命令</span>
-            <code className="mono">{connection.command}</code>
+            <span>传输</span>
+            <code className="mono">{connection.transport || "stdio"}</code>
           </div>
-          {connection.args.length > 0 && (
+          {connection.transport === "sse" ? (
             <div className="mcp-status-row">
-              <span>参数</span>
-              <code className="mono">{connection.args.join(" ")}</code>
+              <span>SSE 地址</span>
+              <code className="mono">{connection.url}</code>
             </div>
+          ) : (
+            <>
+              <div className="mcp-status-row">
+                <span>命令</span>
+                <code className="mono">{connection.command}</code>
+              </div>
+              {connection.args.length > 0 && (
+                <div className="mcp-status-row">
+                  <span>参数</span>
+                  <code className="mono">{connection.args.join(" ")}</code>
+                </div>
+              )}
+            </>
           )}
           <div className="mcp-status-row">
             <span>环境变量</span>

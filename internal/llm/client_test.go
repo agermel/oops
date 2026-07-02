@@ -36,8 +36,8 @@ func TestClientNew(t *testing.T) {
 	if client.model == nil {
 		t.Fatal("client.model is nil")
 	}
-	if len(client.tools) != 4 {
-		t.Fatalf("len(client.tools) = %d, want 4", len(client.tools))
+	if len(client.tools) != 8 {
+		t.Fatalf("len(client.tools) = %d, want 8", len(client.tools))
 	}
 }
 

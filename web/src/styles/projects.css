@@ -35,6 +35,9 @@
 }
 
 .project-card-icon {
+  width: 52px;
+  display: grid;
+  place-items: center;
   color: var(--primary);
   flex-shrink: 0;
 }
@@ -63,23 +66,135 @@
   text-overflow: ellipsis;
 }
 
+.project-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
 .project-card-info small {
   color: var(--muted);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.project-github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--link);
+  text-decoration: none;
+  max-width: min(220px, 100%);
+  min-width: 0;
+  line-height: 1;
+}
+
+.project-github-link:hover {
+  text-decoration: underline;
+}
+
+.project-github-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 项目卡片 GitHub CTA（未设置仓库时） ---- */
+.project-github-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 5px 10px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  background: none;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  font-family: inherit;
+}
+
+.project-github-cta:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--blue-50);
+}
+
+/* ---- 项目详情面包屑 GitHub 信息 ---- */
+.project-github-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.project-github-inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--link);
+  text-decoration: none;
+}
+
+.project-github-inline-link:hover {
+  text-decoration: underline;
+}
+
+.project-github-inline-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  background: none;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  font-family: inherit;
+}
+
+.project-github-inline-cta:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.error-text {
+  color: var(--error-text);
   font-size: var(--text-xs);
 }
 
 .project-card-arrow {
+  margin-left: auto;
   color: var(--muted);
   flex-shrink: 0;
 }
 
 .project-card-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-4) var(--space-3);
   border-top: 1px solid var(--border);
   margin: 0 var(--space-3);
+}
+
+.project-card-actions .btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
 }
 
 /* ---- 项目详情：面包屑 ---- */
@@ -997,6 +1112,25 @@
   gap: var(--space-2);
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--border);
+}
+
+.skills-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.skills-edit-form .form-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.skills-content-editor {
+  min-height: 320px;
+  max-height: 45vh;
+  line-height: 1.55;
+  overflow: auto;
 }
 
 /* ---- 连接参数字段 ---- */

@@ -2,6 +2,7 @@ import React from "react";
 import { Skill } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { Pencil, Trash2, Eye, EyeOff } from "lucide-react";
+import { Modal } from "./Modal";
 
 type Props = {
   skills: Skill[];
@@ -130,13 +131,20 @@ function SkillsEditModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3>编辑技能: {skill.name}</h3>
-          <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
-        </div>
-        <div className="modal-body">
+    <Modal
+      title={`编辑技能: ${skill.name}`}
+      onClose={onClose}
+      maxWidth="720px"
+      footer={
+        <>
+          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>取消</button>
+          <button className="btn btn-primary" onClick={() => onSave(form)} disabled={saving}>
+            {saving ? "保存中..." : "保存"}
+          </button>
+        </>
+      }
+    >
+        <div className="skills-edit-form">
           <label className="form-label">
             标签
             <input
@@ -188,7 +196,7 @@ function SkillsEditModal({
           <label className="form-label">
             内容 (Markdown)
             <textarea
-              className="form-textarea"
+              className="form-input form-textarea skills-content-editor"
               rows={15}
               value={form.content}
               onChange={(e) => update("content", e.target.value)}
@@ -196,13 +204,6 @@ function SkillsEditModal({
           </label>
           {saveError && <div className="error-banner">{saveError}</div>}
         </div>
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>取消</button>
-          <button className="btn btn-primary" onClick={() => onSave(form)} disabled={saving}>
-            {saving ? "保存中..." : "保存"}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"oops/internal/logutil"
@@ -29,10 +30,19 @@ func DefaultCompactionConfig() (maxTokens int, keepRecent int) {
 	return int(float64(DefaultBudget.MaxTokens) * 0.75), 8
 }
 
+// ProjectContext 包含注入 system prompt 的项目元数据。
+type ProjectContext struct {
+	Name        string
+	Description string
+	GitHubRepo  string
+	NodeletIDs  []string
+}
+
 // BuildOptions 是 Build() 的输入参数。
 type BuildOptions struct {
 	Session  *Session
 	Question string
+	Project  *ProjectContext
 }
 
 // BuildResult 是 Build() 的返回值。
@@ -107,7 +117,7 @@ func (cb *ContextBuilder) Build(ctx context.Context, opts BuildOptions) BuildRes
 			logutil.Info("context: compaction not triggered, falling back to TrimToBudget")
 			trimResult := TrimToBudget(currentMsgs, DefaultBudget)
 			return BuildResult{
-				Messages: cb.prependSystemPrompt(trimResult.Messages),
+				Messages: cb.prependSystemPrompt(trimResult.Messages, opts.Project),
 				Tokens:   trimResult.TotalTokens,
 				Trimmed:  trimResult.Trimmed,
 			}
@@ -116,15 +126,19 @@ func (cb *ContextBuilder) Build(ctx context.Context, opts BuildOptions) BuildRes
 
 	// 4. 组装最终消息列表：system prompt + history + question。
 	return BuildResult{
-		Messages:   cb.prependSystemPrompt(currentMsgs),
+		Messages:   cb.prependSystemPrompt(currentMsgs, opts.Project),
 		Compaction: compaction,
 		Tokens:     tokens,
 	}
 }
 
 // prependSystemPrompt 在消息列表前插入 system prompt。
-func (cb *ContextBuilder) prependSystemPrompt(msgs []*schema.Message) []*schema.Message {
+func (cb *ContextBuilder) prependSystemPrompt(msgs []*schema.Message, project *ProjectContext) []*schema.Message {
 	prompt := BasePrompt
+
+	if project != nil {
+		prompt = prompt + "\n\n" + FormatProjectContext(project)
+	}
 
 	if cb.skillStore != nil {
 		available := cb.skillStore.RenderAvailable()
@@ -135,6 +149,24 @@ func (cb *ContextBuilder) prependSystemPrompt(msgs []*schema.Message) []*schema.
 
 	systemMsg := schema.SystemMessage(prompt)
 	return append([]*schema.Message{systemMsg}, msgs...)
+}
+
+// FormatProjectContext 将项目元数据格式化为 system prompt 中的中文段落。
+func FormatProjectContext(p *ProjectContext) string {
+	var b strings.Builder
+	b.WriteString("## 当前项目\n")
+	fmt.Fprintf(&b, "- 名称: %s\n", p.Name)
+	if p.Description != "" {
+		fmt.Fprintf(&b, "- 描述: %s\n", p.Description)
+	}
+	if p.GitHubRepo != "" {
+		fmt.Fprintf(&b, "- GitHub 仓库: %s\n", p.GitHubRepo)
+		b.WriteString("- 提示: 可使用 repo_sync、repo_list_dir、repo_read_file 工具检查仓库源码，使用 repo_fetch 抓取网页或 API\n")
+	}
+	if len(p.NodeletIDs) > 0 {
+		fmt.Fprintf(&b, "- 关联服务器: %s\n", strings.Join(p.NodeletIDs, ", "))
+	}
+	return b.String()
 }
 
 // llmSummarize 使用 LLM 生成对话摘要。

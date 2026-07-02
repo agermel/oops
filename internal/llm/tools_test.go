@@ -16,6 +16,7 @@ type fakeOpsData struct {
 	containers  []nodelet.Container
 	logs        []nodelet.LogEntry
 	connections []ConnectionStatus
+	repoURL     string
 	err         error
 }
 
@@ -35,6 +36,13 @@ func (f *fakeOpsData) CheckConnections(_ context.Context) ([]ConnectionStatus, e
 	return f.connections, f.err
 }
 
+func (f *fakeOpsData) GetProjectRepo(_ context.Context, projectID string) (string, error) {
+	if f.repoURL == "" {
+		return "", errors.New("no github repo configured")
+	}
+	return f.repoURL, nil
+}
+
 // mustJSON 将 v 序列化为 JSON 字符串，失败时 panic。
 func mustJSON(v any) string {
 	data, err := json.Marshal(v)
@@ -44,17 +52,18 @@ func mustJSON(v any) string {
 	return string(data)
 }
 
-// TestNewTools 验证四个工具全部创建成功。
+// TestNewTools 验证所有工具全部创建成功。
 func TestNewTools(t *testing.T) {
-	ops := &fakeOpsData{}
+	ops := &fakeOpsData{repoURL: "https://github.com/test/repo"}
 	tools, err := NewTools(ops, nil)
 	if err != nil {
 		t.Fatalf("NewTools() error = %v", err)
 	}
-	if len(tools) != 4 {
-		t.Fatalf("len(tools) = %d, want 4", len(tools))
+	if len(tools) != 8 {
+		t.Fatalf("len(tools) = %d, want 8", len(tools))
 	}
-	expected := []string{"list_nodelets", "list_containers", "get_logs", "check_connections"}
+	expected := []string{"list_nodelets", "list_containers", "get_logs", "check_connections",
+		"repo_sync", "repo_list_dir", "repo_read_file", "repo_fetch"}
 	for i, want := range expected {
 		info, err := tools[i].Info(context.Background())
 		if err != nil {

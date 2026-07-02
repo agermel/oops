@@ -128,3 +128,18 @@ func (s *Server) CheckConnections(ctx context.Context) ([]llm.ConnectionStatus, 
 	return results, nil
 }
 
+
+// GetProjectRepo 实现 llm.OpsData，返回项目的 GitHub 仓库 URL。
+func (s *Server) GetProjectRepo(ctx context.Context, projectID string) (string, error) {
+	if s.projectStore == nil {
+		return "", fmt.Errorf("project store not initialized")
+	}
+	p := s.projectStore.Get(projectID)
+	if p == nil {
+		return "", fmt.Errorf("project %q not found", projectID)
+	}
+	if p.GitHubRepo == "" {
+		return "", fmt.Errorf("project %q 未配置 GitHub 仓库", p.Name)
+	}
+	return p.GitHubRepo, nil
+}

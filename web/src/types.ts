@@ -20,6 +20,7 @@ export type Project = {
   id: string;
   name: string;
   description?: string;
+  githubRepo?: string;
   nodeletIds: string[];
   createdAt: string;
   updatedAt: string;
@@ -133,9 +134,11 @@ export type MCPConnectionConfig = {
   id: string;
   name: string;
   type: string;
+  transport: string; // "stdio" (default) | "sse"
   command: string;
   args: string[];
   env: string[];
+  url: string;       // sse endpoint
   enabled: boolean;
   containerId?: string;
   nodeletId?: string;

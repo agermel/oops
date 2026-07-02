@@ -79,10 +79,12 @@ type ToolInfo struct {
 type ConnectionConfig struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
-	Type        string   `json:"type"`    // mysql, redis, etc.
-	Command     string   `json:"command"` // path to community MCP server binary
-	Args        []string `json:"args"`    // e.g. ["--read-only"]
-	Env         []string `json:"env"`     // e.g. ["MYSQL_DSN=user:pass@tcp(host:3306)/db"]
+	Type        string   `json:"type"`      // mysql, redis, etc.
+	Transport   string   `json:"transport"` // "stdio" (default) | "sse"
+	Command     string   `json:"command"`   // stdio: path to MCP server binary
+	Args        []string `json:"args"`      // stdio: e.g. ["--read-only"]
+	Env         []string `json:"env"`       // stdio: e.g. ["MYSQL_DSN=user:pass@tcp(host:3306)/db"]
+	URL         string   `json:"url"`       // sse: endpoint address e.g. "http://10.0.0.1:19900/sse"
 	Enabled     bool     `json:"enabled"`
 	ContainerID string   `json:"containerId,omitempty"` // bound container, if any
 	NodeletID   string   `json:"nodeletId,omitempty"`   // bound nodelet, if any
@@ -249,7 +251,12 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("id is required")
 	}
-	if cfg.Command != "" {
+	if cfg.Transport == "sse" {
+		if cfg.URL == "" {
+			m.mu.Unlock()
+			return fmt.Errorf("url is required for sse transport")
+		}
+	} else if cfg.Command != "" {
 		if err := validateCommand(cfg.Command); err != nil {
 			m.mu.Unlock()
 			return err
@@ -302,7 +309,12 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 func (m *Manager) Update(cfg ConnectionConfig) error {
 	m.mu.Lock()
 
-	if cfg.Command != "" {
+	if cfg.Transport == "sse" {
+		if cfg.URL == "" {
+			m.mu.Unlock()
+			return fmt.Errorf("url is required for sse transport")
+		}
+	} else if cfg.Command != "" {
 		if err := validateCommand(cfg.Command); err != nil {
 			m.mu.Unlock()
 			return err
@@ -543,18 +555,30 @@ func inferStringDefault(name string) string {
 // Test attempts a temporary connection to verify the config works.
 // It does not persist or affect running processes.
 func (m *Manager) Test(cfg ConnectionConfig) error {
-	if cfg.Command != "" {
-		if err := validateCommand(cfg.Command); err != nil {
-			return err
+	if cfg.Transport == "sse" {
+		if cfg.URL == "" {
+			return fmt.Errorf("url is required for sse transport")
+		}
+	} else {
+		// stdio (default)
+		if cfg.Command != "" {
+			if err := validateCommand(cfg.Command); err != nil {
+				return err
+			}
 		}
 	}
 
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
 	mcpCfg := config.MCPConfig{
 		Enabled:   true,
-		Transport: "stdio",
+		Transport: transport,
 		Command:   cfg.Command,
 		Args:      expandEnvSlice(cfg.Args),
 		Env:       expandEnvSlice(cfg.Env),
+		URL:       cfg.URL,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -608,12 +632,17 @@ func (m *Manager) saveLocked() error {
 }
 
 func (m *Manager) startLocked(cfg ConnectionConfig) error {
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
 	mcpCfg := config.MCPConfig{
 		Enabled:   true,
-		Transport: "stdio",
+		Transport: transport,
 		Command:   cfg.Command,
 		Args:      expandEnvSlice(cfg.Args),
 		Env:       expandEnvSlice(cfg.Env),
+		URL:       cfg.URL,
 	}
 
 	const maxRetries = 3
