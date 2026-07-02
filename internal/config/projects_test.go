@@ -105,6 +105,41 @@ func TestProjectStorePersistence(t *testing.T) {
 	}
 }
 
+func TestProjectStoreUpdatePreservesNodelets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "projects.json")
+
+	store, err := NewProjectStore(path)
+	if err != nil {
+		t.Fatalf("NewProjectStore: %v", err)
+	}
+
+	// 创建带 server 的项目。
+	if err := store.Add(Project{ID: "p1", Name: "Test", NodeletIDs: []string{"n1", "n2"}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// 模拟前端只发 name + description（不带 nodeletIds）的更新。
+	update := Project{ID: "p1", Name: "Updated", Description: "desc"}
+	if err := store.Update(update); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got := store.Get("p1")
+	if got == nil {
+		t.Fatal("project not found after update")
+	}
+	if got.Name != "Updated" {
+		t.Fatalf("name not updated: %q", got.Name)
+	}
+	if got.Description != "desc" {
+		t.Fatalf("description not updated: %q", got.Description)
+	}
+	if len(got.NodeletIDs) != 2 || got.NodeletIDs[0] != "n1" || got.NodeletIDs[1] != "n2" {
+		t.Fatalf("NodeletIDs were lost after partial update: %v", got.NodeletIDs)
+	}
+}
+
 func TestProjectStoreEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "projects.json")

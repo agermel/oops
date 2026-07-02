@@ -1,5 +1,5 @@
 import React from "react";
-import { Plus, Trash2, Edit3, Wrench, ChevronRight, ChevronDown } from "lucide-react";
+import { Plus, Trash2, Edit3, Wrench, ChevronRight, ChevronDown, Database, Layers, Search, Globe, Terminal } from "lucide-react";
 import type { MCPConnectionConfig, MCPConnectionStatus } from "../types";
 import { mcpStatusLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
@@ -10,7 +10,11 @@ import { MCPToolList } from "./MCPToolList";
 import { Button } from "./ui/Button";
 
 // ---- MCPView ----
-export function MCPView() {
+export function MCPView({
+  onQuickCreate,
+}: {
+  onQuickCreate?: (type?: string) => void;
+}) {
   const [connections, setConnections] = React.useState<MCPConnectionStatus[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -22,6 +26,16 @@ export function MCPView() {
   const [toggling, setToggling] = React.useState<Set<string>>(new Set());
   const [checking, setChecking] = React.useState<Set<string>>(new Set());
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set());
+
+  // 快捷创建卡片定义
+  const quickStartTypes = [
+    { id: "mysql", label: "MySQL", hint: "云端 MySQL 数据库", icon: Database },
+    { id: "redis", label: "Redis", hint: "云端 Redis 服务", icon: Layers },
+    { id: "postgres", label: "PostgreSQL", hint: "云端 PostgreSQL 数据库", icon: Database },
+    { id: "etcd", label: "Etcd", hint: "Etcd 集群", icon: Globe },
+    { id: "elasticsearch", label: "Elasticsearch", hint: "Elasticsearch 集群", icon: Search },
+    { id: "other", label: "其他", hint: "自定义命令行连接", icon: Terminal },
+  ];
 
   function setCheckingIds(update: (prev: Set<string>) => Set<string>) {
     setChecking((prev) => {
@@ -86,8 +100,12 @@ export function MCPView() {
   }, [checking.size]);
 
   function openAdd() {
-    setEditItem(null);
-    setShowForm(true);
+    if (onQuickCreate) {
+      onQuickCreate();
+    } else {
+      setEditItem(null);
+      setShowForm(true);
+    }
   }
 
   function openEdit(item: MCPConnectionStatus) {
@@ -212,8 +230,24 @@ export function MCPView() {
               </tr>
             ) : connections.length === 0 ? (
               <tr>
-                <td colSpan={7} className="mcp-table-empty">
-                  暂无 MCP 连接，点击"新增"创建
+                <td colSpan={7} style={{ padding: 0 }}>
+                  <div className="mcp-quickstart-section">
+                    <h3>快速创建连接</h3>
+                    <p className="mcp-quickstart-hint">选择数据库类型，填写云端地址即可连接</p>
+                    <div className="mcp-quickstart-grid">
+                      {quickStartTypes.map((t) => (
+                        <button
+                          key={t.id}
+                          className="mcp-quickstart-card"
+                          onClick={() => onQuickCreate?.(t.id)}
+                        >
+                          <t.icon size={28} className="mcp-quickstart-icon" />
+                          <span className="mcp-quickstart-label">{t.label}</span>
+                          <small>{t.hint}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -286,8 +320,8 @@ export function MCPView() {
         </table>
       </div>
 
-      {/* MCP 表单模态框 */}
-      {showForm && (
+      {/* MCP 表单模态框 —— 仅在无外部 onQuickCreate 时使用本地模态框（编辑功能需要） */}
+      {showForm && !onQuickCreate && (
         <MCPFormModal
           editItem={editItem}
           onClose={() => {

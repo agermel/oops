@@ -106,7 +106,6 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="例: 生产环境 API 服务器"
-            disabled={!isNew}
           />
         </label>
 

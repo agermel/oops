@@ -149,7 +149,7 @@ func (s *ProjectStore) Update(p Project) error {
 	p.CreatedAt = s.config.Projects[idx].CreatedAt
 	p.UpdatedAt = time.Now()
 	if p.NodeletIDs == nil {
-		p.NodeletIDs = []string{}
+		p.NodeletIDs = s.config.Projects[idx].NodeletIDs
 	}
 
 	s.config.Projects[idx] = p

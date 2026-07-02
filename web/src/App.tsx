@@ -1,4 +1,6 @@
 import React from "react";
+import { Plus } from "lucide-react";
+import { Button } from "./components/ui/Button";
 import type {
   ContainerWithType,
   ContainerDetail as ContainerDetailType,
@@ -27,6 +29,7 @@ import { ProjectDetailView } from "./components/ProjectDetailView";
 import { NodeletManagementView } from "./components/NodeletManagementView";
 import { ChatView } from "./components/ChatView";
 import { MCPView } from "./components/MCPView";
+import { MCPFormModal } from "./components/MCPFormModal";
 import { ToolsView } from "./components/ToolsView";
 import { SkillsView } from "./components/SkillsView";
 import { ConsolePanel } from "./components/ConsolePanel";
@@ -75,6 +78,11 @@ export function App() {
 
   // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+
+  // MCP 新建连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
+  const [mcpFormOpen, setMCPFormOpen] = React.useState(false);
+  const [mcpQuickType, setMCPQuickType] = React.useState<string | undefined>(undefined);
+  const [mcpViewKey, setMCPViewKey] = React.useState(0);
 
   // ---- 数据域 hooks（TanStack Query 管理） ----
   const {
@@ -834,8 +842,17 @@ export function App() {
                 <h1>MCP 管理</h1>
                 <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
               </div>
+              <div className="workspace-head-actions">
+                <Button size="sm" onClick={() => { setMCPQuickType(undefined); setMCPFormOpen(true); }}>
+                  <Plus size={15} />
+                  <span>新建连接</span>
+                </Button>
+              </div>
             </div>
-            <MCPView />
+            <MCPView
+              key={mcpViewKey}
+              onQuickCreate={(type) => { setMCPQuickType(type); setMCPFormOpen(true); }}
+            />
           </section>
         )}
 
@@ -893,6 +910,23 @@ export function App() {
           </section>
         )}
       </main>
+
+      {/* App 级 MCP 表单模态框 —— 供 workspace head 按钮和快捷卡片共用 */}
+      {mcpFormOpen && (
+        <MCPFormModal
+          prefill={mcpQuickType ? {
+            name: "",
+            type: mcpQuickType,
+            env: [],
+          } : null}
+          onClose={() => { setMCPFormOpen(false); setMCPQuickType(undefined); }}
+          onSaved={() => {
+            setMCPFormOpen(false);
+            setMCPQuickType(undefined);
+            setMCPViewKey((k) => k + 1);
+          }}
+        />
+      )}
     </div>
   );
 }
