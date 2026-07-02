@@ -12,12 +12,11 @@ import (
 
 // fakeOpsData 是 OpsData 的测试用假实现。
 type fakeOpsData struct {
-	nodelets    []NodeletSummary
-	containers  []nodelet.Container
-	logs        []nodelet.LogEntry
-	connections []ConnectionStatus
-	repoURL     string
-	err         error
+	nodelets   []NodeletSummary
+	containers []nodelet.Container
+	logs       []nodelet.LogEntry
+	repoURL    string
+	err        error
 }
 
 func (f *fakeOpsData) ListNodelets(_ context.Context) ([]NodeletSummary, error) {
@@ -30,10 +29,6 @@ func (f *fakeOpsData) ListContainers(_ context.Context, _ string, _ string) ([]n
 
 func (f *fakeOpsData) GetLogs(_ context.Context, _, _ string, _ int) ([]nodelet.LogEntry, error) {
 	return f.logs, f.err
-}
-
-func (f *fakeOpsData) CheckConnections(_ context.Context) ([]ConnectionStatus, error) {
-	return f.connections, f.err
 }
 
 func (f *fakeOpsData) GetProjectRepo(_ context.Context, projectID string) (string, error) {
@@ -59,10 +54,10 @@ func TestNewTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTools() error = %v", err)
 	}
-	if len(tools) != 8 {
-		t.Fatalf("len(tools) = %d, want 8", len(tools))
+	if len(tools) != 7 {
+		t.Fatalf("len(tools) = %d, want 7", len(tools))
 	}
-	expected := []string{"list_nodelets", "list_containers", "get_logs", "check_connections",
+	expected := []string{"list_nodelets", "list_containers", "get_logs",
 		"repo_sync", "repo_list_dir", "repo_read_file", "repo_fetch"}
 	for i, want := range expected {
 		info, err := tools[i].Info(context.Background())
@@ -149,22 +144,3 @@ func TestGetLogsTool(t *testing.T) {
 	}
 }
 
-// TestCheckConnectionsTool 验证连接检查工具。
-func TestCheckConnectionsTool(t *testing.T) {
-	ops := &fakeOpsData{
-		connections: []ConnectionStatus{
-			{ID: "mysql", Name: "MySQL", Status: "alive"},
-		},
-	}
-	tool, err := NewCheckConnectionsTool(ops)
-	if err != nil {
-		t.Fatalf("NewCheckConnectionsTool() error = %v", err)
-	}
-	result, err := tool.InvokableRun(context.Background(), "{}")
-	if err != nil {
-		t.Fatalf("InvokableRun() error = %v", err)
-	}
-	if !strings.Contains(result, "MySQL") {
-		t.Fatalf("result = %s, want 'MySQL'", result)
-	}
-}

@@ -8,8 +8,6 @@ import (
 
 	"oops/internal/auth"
 	"oops/internal/config"
-	"oops/internal/connection"
-	"oops/internal/connection/checker"
 	"oops/internal/console"
 	"oops/internal/llm"
 	"oops/internal/logutil"
@@ -40,10 +38,8 @@ type NodeletClient interface {
 
 // Options 保存中心端 API 服务依赖。
 type Options struct {
-	Connections    []connection.Connection
 	NodeletManager *nodelet.NodeletManager
 	NodeletClient  NodeletClient
-	Registry       *connection.Registry
 	LLMEnabled     bool
 	LLMConfig      config.LLMConfig
 	UserStore      *auth.Store
@@ -53,11 +49,9 @@ type Options struct {
 
 // Server 保存中心端 API 服务运行所需的配置和依赖。
 type Server struct {
-	connections    []connection.Connection
 	nodeletManager *nodelet.NodeletManager
 	nodeletProber  *nodelet.NodeletProber
 	nodeletClient  NodeletClient
-	registry       *connection.Registry
 	llmClient      *llm.Client
 	skillStore     *llm.SkillStore
 	contextBuilder *llm.ContextBuilder
@@ -70,8 +64,6 @@ type Server struct {
 	TokenService   *auth.TokenService
 	tokenTTL       time.Duration
 }
-
-// statusItem 是 GUI 状态接口返回的一行连接状态。
 
 // NewFromConfig 使用配置创建中心端 API 服务。
 func NewFromConfig(cfg config.Config) *Server {
@@ -86,10 +78,8 @@ func NewFromConfig(cfg config.Config) *Server {
 	prober.Start()
 
 	s := New(Options{
-		Connections:    cfg.Connections(),
 		NodeletManager: nm,
 		NodeletClient:  nodelet.NewClient(nil),
-		Registry:      checker.NewDefaultRegistry(),
 		LLMEnabled:    cfg.LLM.Enabled,
 		LLMConfig:     cfg.LLM,
 	})
@@ -140,9 +130,6 @@ func New(options Options) *Server {
 	if options.NodeletClient == nil {
 		options.NodeletClient = nodelet.NewClient(nil)
 	}
-	if options.Registry == nil {
-		options.Registry = checker.NewDefaultRegistry()
-	}
 
 	// JSONL-backed session store（重启后会话可恢复）。
 	sessionStore, err := llm.OpenSessionStore("data/sessions")
@@ -152,10 +139,8 @@ func New(options Options) *Server {
 	}
 
 	s := &Server{
-		connections:    options.Connections,
 		nodeletManager: options.NodeletManager,
 		nodeletClient:  options.NodeletClient,
-		registry:       options.Registry,
 		sessionStore:   sessionStore,
 		UserStore:      options.UserStore,
 		TokenService:   options.TokenService,
@@ -232,9 +217,6 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/token", publicWrap(s.handleCreateToken))
 	mux.HandleFunc("DELETE /api/token", publicWrap(s.handleDeleteToken))
 	mux.HandleFunc("GET /api/auth/me", authed(s.handleAuthMe))
-
-	// ---- Connections ----
-	mux.HandleFunc("GET /api/connections/status", authed(s.handleConnectionStatus))
 
 	// ---- Nodelets ----
 	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodeletList))

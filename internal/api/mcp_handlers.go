@@ -1,15 +1,11 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
-	"oops/internal/connection"
 	"oops/internal/llm"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
@@ -17,53 +13,6 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
 )
-
-type statusItem struct {
-	Connection connection.Connection `json:"connection"`
-	Result     connection.Result     `json:"result"`
-	Error      string                `json:"error,omitempty"`
-}
-
-// handleConnectionStatus 执行所有连接检查并返回 JSON。
-func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	items := make([]statusItem, 0, len(s.connections))
-	results := make([]statusItem, len(s.connections))
-
-	var wg sync.WaitGroup
-	for index, conn := range s.connections {
-		wg.Add(1)
-		go func(index int, conn connection.Connection) {
-			defer wg.Done()
-
-			// 每个连接独立超时，避免慢组件拖累其他组件的结果。
-			checkCtx, checkCancel := context.WithTimeout(ctx, 6*time.Second)
-			defer checkCancel()
-
-			result, err := s.registry.Check(checkCtx, conn)
-			item := statusItem{
-				Connection: conn,
-				Result:     result,
-			}
-			if err != nil {
-				item.Error = err.Error()
-				item.Result = connection.Result{
-					ConnectionID: conn.ID,
-					Status:       connection.StatusUnknown,
-					Message:      err.Error(),
-					CheckedAt:    time.Now(),
-				}
-			}
-			results[index] = item
-		}(index, conn)
-	}
-	wg.Wait()
-
-	items = append(items, results...)
-	writeJSON(w, items)
-}
 
 // onMCPToolsChanged 是 MCP Manager 的工具变更回调。
 // 合并原生工具和 MCP 工具后热更新 LLM Client。

@@ -5,8 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"oops/internal/connection"
-
 	"github.com/spf13/viper"
 )
 
@@ -23,45 +21,7 @@ const (
 
 // Config 是应用启动或刷新时读取到的完整配置。
 type Config struct {
-	Env              string                  `mapstructure:"env"`
-	ExtraConnections []connection.Connection `mapstructure:"connections"`
-	MySQL            MySQLConfig             `mapstructure:"mysql"`
-	Redis            RedisConfig             `mapstructure:"redis"`
-	Etcd             EtcdConfig              `mapstructure:"etcd"`
-	Kafka            KafkaConfig             `mapstructure:"kafka"`
-	OTel             OTelConfig              `mapstructure:"otel"`
-	LLM              LLMConfig               `mapstructure:"llm"`
-	MCP              MCPConfig               `mapstructure:"mcp"`
-}
-
-// MySQLConfig 保存 MySQL 连接配置。
-type MySQLConfig struct {
-	DSN string `mapstructure:"dsn"`
-}
-
-// RedisConfig 保存 Redis 连接配置。
-type RedisConfig struct {
-	Addr     string `mapstructure:"addr"`
-	Password string `mapstructure:"password"`
-}
-
-// EtcdConfig 保存 Etcd 连接配置。
-type EtcdConfig struct {
-	Endpoints []string `mapstructure:"endpoints"`
-	Username  string   `mapstructure:"username"`
-	Password  string   `mapstructure:"password"`
-}
-
-// KafkaConfig 保存 Kafka 连接配置。
-type KafkaConfig struct {
-	Addrs    []string `mapstructure:"addrs"`
-	Username string   `mapstructure:"username"`
-	Password string   `mapstructure:"password"`
-}
-
-// OTelConfig 保存 OpenTelemetry Collector 连接配置。
-type OTelConfig struct {
-	Endpoint string `mapstructure:"endpoint"`
+	LLM LLMConfig `mapstructure:"llm"`
 }
 
 // LLMConfig 保存 LLM Agent 配置。

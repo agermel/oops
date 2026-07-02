@@ -12,30 +12,6 @@ func TestLoadExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Env != "prod" {
-		t.Fatalf("Env = %q, want %q", cfg.Env, "prod")
-	}
-	if len(cfg.ExtraConnections) != 3 {
-		t.Fatalf("ExtraConnections length = %d, want 3", len(cfg.ExtraConnections))
-	}
-	if cfg.ExtraConnections[0].ID != "elasticsearch" {
-		t.Fatalf("ExtraConnections[0].ID = %q, want %q", cfg.ExtraConnections[0].ID, "elasticsearch")
-	}
-	if cfg.MySQL.DSN == "" {
-		t.Fatal("MySQL.DSN is empty")
-	}
-	if cfg.Redis.Addr != "127.0.0.1:6379" {
-		t.Fatalf("Redis.Addr = %q, want %q", cfg.Redis.Addr, "127.0.0.1:6379")
-	}
-	if len(cfg.Etcd.Endpoints) != 1 {
-		t.Fatalf("Etcd.Endpoints length = %d, want 1", len(cfg.Etcd.Endpoints))
-	}
-	if len(cfg.Kafka.Addrs) != 1 {
-		t.Fatalf("Kafka.Addrs length = %d, want 1", len(cfg.Kafka.Addrs))
-	}
-	if cfg.OTel.Endpoint != "127.0.0.1:4318" {
-		t.Fatalf("OTel.Endpoint = %q, want %q", cfg.OTel.Endpoint, "127.0.0.1:4318")
-	}
 	if !cfg.LLM.Enabled {
 		t.Fatal("LLM.Enabled = false, want true")
 	}
@@ -50,11 +26,8 @@ func TestLoadExample(t *testing.T) {
 // TestLoadRuntimeEnvPath 验证运行时配置优先读取 OOPS_CONFIG。
 func TestLoadRuntimeEnvPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := []byte(`env: "test"
-nodelets:
-  - id: "custom"
-    name: "自定义"
-    address: "http://127.0.0.1:9999"
+	content := []byte(`llm:
+  model: "custom-model"
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -65,7 +38,7 @@ nodelets:
 	if err != nil {
 		t.Fatalf("LoadRuntime() error = %v", err)
 	}
-	if cfg.Env != "test" {
-		t.Fatalf("Env = %q, want %q", cfg.Env, "test")
+	if cfg.LLM.Model != "custom-model" {
+		t.Fatalf("LLM.Model = %q, want %q", cfg.LLM.Model, "custom-model")
 	}
 }

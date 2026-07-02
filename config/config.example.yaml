@@ -1,56 +1,10 @@
-env: "prod"
-
 # nodelet 配置请编辑 config/nodelets.json，格式:
 # { "nodelets": [{ "id": "local", "name": "本机", "address": "http://127.0.0.1:8686", "token": "..." }] }
 
-connections:
-  - id: "elasticsearch"
-    name: "Elasticsearch"
-    type: "elasticsearch"
-    address: "http://127.0.0.1:9200"
-  - id: "jaeger"
-    name: "Jaeger"
-    type: "jaeger"
-    address: "http://127.0.0.1:16686"
-  - id: "nacos"
-    name: "Nacos"
-    type: "nacos"
-    address: "http://127.0.0.1:8848"
-
-mysql:
-  dsn: "user:password@tcp(127.0.0.1:3306)/app?charset=utf8mb4&parseTime=True&loc=Local"
-
-redis:
-  addr: "127.0.0.1:6379"
-  password: "password"
-
-etcd:
-  endpoints:
-    - "127.0.0.1:2379"
-  username: "root"
-  password: "password"
-
-kafka:
-  addrs:
-    - "127.0.0.1:9092"
-  username: "root"
-  password: "password"
-
-otel:
-  endpoint: "127.0.0.1:4318"
+# MCP 连接配置请编辑 config/mcp_connections.json
 
 llm:
   enabled: true
   model: "gpt-4o-mini"
   base_url: "https://api.openai.com/v1"
   api_key: "${OOPS_LLM_API_KEY}"
-
-mcp:
-  enabled: false
-  # stdio 方式（社区 MCP Server 主流方式，二进制需在 oops 同机）
-  transport: "stdio"
-  command: "mysql-mcp-server"
-  args: ["--read-only"]
-  # sse 方式（跨网络部署，社区 MCP Server 需支持 SSE transport）
-  # transport: "sse"
-  # url: "http://127.0.0.1:19900/sse"

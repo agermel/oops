@@ -24,9 +24,6 @@ type OpsData interface {
 	// GetLogs 返回指定容器的历史日志。
 	GetLogs(ctx context.Context, nodeletID, containerID string, tail int) ([]nodelet.LogEntry, error)
 
-	// CheckConnections 执行所有连接健康检查。
-	CheckConnections(ctx context.Context) ([]ConnectionStatus, error)
-
 	// GetProjectRepo 返回指定项目的 GitHub 仓库 URL。
 	// projectID 不存在或未配置仓库时返回空字符串和错误。
 	GetProjectRepo(ctx context.Context, projectID string) (string, error)
@@ -45,18 +42,6 @@ type NodeletSummary struct {
 	Error         string `json:"error,omitempty"`
 }
 
-// ConnectionStatus 是 LLM 可见的连接健康状态。
-type ConnectionStatus struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Address string `json:"address"`
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
-	Latency int64  `json:"latency"`
-	Error   string `json:"error,omitempty"`
-}
-
 // ---------- 工具输入类型 ----------
 
 type listNodeletsInput struct{}
@@ -71,8 +56,6 @@ type getLogsInput struct {
 	ContainerID string `json:"container_id" jsonschema:"required,description=目标容器 ID"`
 	Tail        int    `json:"tail" jsonschema:"description=返回最近的日志行数,default=50"`
 }
-
-type checkConnectionsInput struct{}
 
 // ---------- 单个工具构造函数 ----------
 
@@ -156,25 +139,6 @@ func NewGetLogsTool(ops OpsData) (tool.InvokableTool, error) {
 		})
 }
 
-// NewCheckConnectionsTool 创建 check_connections 工具——对所有连接执行健康检查。
-func NewCheckConnectionsTool(ops OpsData) (tool.InvokableTool, error) {
-	return utils.InferTool("check_connections", ""+
-		"对所有已配置的连接（MySQL、Redis、Elasticsearch、Kafka 等）执行健康检查。"+
-		"返回每个连接的状态（alive/dead/unknown）、延迟和错误消息。",
-		func(ctx context.Context, _ *checkConnectionsInput) (string, error) {
-			var items []ConnectionStatus
-			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
-				var callErr error
-				items, callErr = ops.CheckConnections(ctx)
-				return callErr
-			})
-			if err != nil {
-				return formatRetryError("连接检查失败", err, DefaultRetryPolicy.MaxRetries), nil
-			}
-			return formatItems(items), nil
-		})
-}
-
 // ---------- skill 工具 ----------
 
 type skillInput struct {
@@ -223,7 +187,6 @@ func NewTools(ops OpsData, store *SkillStore) ([]tool.InvokableTool, error) {
 		NewListNodeletsTool,
 		NewListContainersTool,
 		NewGetLogsTool,
-		NewCheckConnectionsTool,
 		NewRepoSyncTool,
 		NewRepoListDirTool,
 		NewRepoReadFileTool,

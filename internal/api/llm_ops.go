@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"oops/internal/connection"
 	"oops/internal/llm"
 	"oops/internal/nodelet"
 )
@@ -94,40 +93,6 @@ func (s *Server) GetLogs(ctx context.Context, nodeletID, containerID string, tai
 	}
 	return s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, strconv.Itoa(tail))
 }
-
-// CheckConnections 实现 llm.OpsData，执行所有连接健康检查。
-func (s *Server) CheckConnections(ctx context.Context) ([]llm.ConnectionStatus, error) {
-	results := make([]llm.ConnectionStatus, len(s.connections))
-	var wg sync.WaitGroup
-	for index, conn := range s.connections {
-		wg.Add(1)
-		go func(index int, conn connection.Connection) {
-			defer wg.Done()
-
-			checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
-			defer cancel()
-
-			result, err := s.registry.Check(checkCtx, conn)
-			cs := llm.ConnectionStatus{
-				ID:      conn.ID,
-				Name:    conn.Name,
-				Type:    conn.Type,
-				Address: conn.Address,
-				Status:  string(result.Status),
-				Message: result.Message,
-				Latency: result.Latency,
-			}
-			if err != nil {
-				cs.Error = err.Error()
-				cs.Status = string(connection.StatusUnknown)
-			}
-			results[index] = cs
-		}(index, conn)
-	}
-	wg.Wait()
-	return results, nil
-}
-
 
 // GetProjectRepo 实现 llm.OpsData，返回项目的 GitHub 仓库 URL。
 func (s *Server) GetProjectRepo(ctx context.Context, projectID string) (string, error) {
