@@ -141,7 +141,7 @@ func (s *Server) listProjectServers(w http.ResponseWriter, r *http.Request, proj
 	for i, nid := range p.NodeletIDs {
 		item, ok := s.findNodelet(nid)
 		sw := serverWithNodelet{
-			Nodelet: nodelet.NodeletConfig{ID: nid, Name: nid},
+			Nodelet: nodelet.NodeletConfig{Name: nid},
 		}
 		if ok {
 			sw.Nodelet = item

@@ -129,7 +129,7 @@ export function ServerTree({
                     {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     <Server size={15} />
                     <div className="tree-server-info">
-                      <strong>{sw.nodelet.name || sw.nodelet.id}</strong>
+                      <strong>{sw.nodelet.name}</strong>
                       <small>{sw.nodelet.address}</small>
                     </div>
                     <StatusDot alive={sw.host?.available ?? false} loading={isContainerLoading} unknown={isStatusUnknown} />
@@ -184,7 +184,7 @@ export function ServerTree({
               {availableNodelets.map((n) => (
                 <li key={n.id}>
                   <div className="nodelet-pick-info">
-                    <strong>{n.name || n.id}</strong>
+                    <strong>{n.name}</strong>
                     <small>{n.address}</small>
                   </div>
                   <Button

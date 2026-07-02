@@ -9,6 +9,7 @@ func NewDefaultRegistry() *connection.Registry {
 	_ = registry.Register(NewElasticsearchChecker())
 	_ = registry.Register(NewHTTPChecker("jaeger", "/"))
 	_ = registry.Register(NewHTTPChecker("nacos", "/nacos/v1/console/health/readiness"))
+	_ = registry.Register(NewHTTPChecker("nodelet", "/health"))
 	_ = registry.Register(NewHTTPChecker("http", ""))
 	_ = registry.Register(NewTCPChecker("mysql"))
 	_ = registry.Register(NewTCPChecker("redis"))

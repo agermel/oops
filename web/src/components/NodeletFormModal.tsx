@@ -14,7 +14,6 @@ type Props = {
 export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
   const isNew = !editItem;
 
-  const [id, setId] = React.useState(editItem?.id ?? "");
   const [name, setName] = React.useState(editItem?.name ?? "");
   const [address, setAddress] = React.useState(editItem?.address ?? "http://:8686");
   const hasExistingToken = editItem?.hasToken === true;
@@ -27,12 +26,12 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
   const [testing, setTesting] = React.useState(false);
   const [testResult, setTestResult] = React.useState("");
 
-  function buildPayload(): NodeletConfig {
-    return { id, name, address, token };
+  function buildPayload() {
+    return { name, address, token };
   }
 
   function canSave() {
-    return id.trim() !== "" && address.trim() !== "";
+    return name.trim() !== "" && address.trim() !== "";
   }
 
   async function handleSave() {
@@ -41,7 +40,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
     setSaveOk("");
     try {
       const method = isNew ? "POST" : "PUT";
-      const url = isNew ? "/api/nodelets" : `/api/nodelets/${encodeURIComponent(id)}`;
+      const url = isNew ? "/api/nodelets" : `/api/nodelets/${encodeURIComponent(editItem!.id)}`;
       await apiRequest(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -101,23 +100,13 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
         )}
 
         <label className="form-label">
-          ID
-          <input
-            className="form-input"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-            placeholder="例: prod-api-01"
-            disabled={!isNew}
-          />
-        </label>
-
-        <label className="form-label">
           名称
           <input
             className="form-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="例: 生产环境 API 服务器"
+            disabled={!isNew}
           />
         </label>
 

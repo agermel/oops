@@ -59,7 +59,7 @@ func TestNodeletRoutes(t *testing.T) {
 
 	client := &fakeNodeletClient{}
 	nm, _ := nodelet.NewNodeletManager("")
-	_ = nm.Add(nodelet.NodeletConfig{ID: "local", Address: "http://nodelet", Token: "secret"})
+	_ = nm.Add(&nodelet.NodeletConfig{ID: "local", Name: "local", Address: "http://nodelet", Token: "secret"})
 	server := New(Options{
 		NodeletManager: nm,
 		NodeletClient:  client,
@@ -105,7 +105,7 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 
 	client := &fakeNodeletClient{}
 	nm, _ := nodelet.NewNodeletManager("")
-	_ = nm.Add(nodelet.NodeletConfig{ID: "local", Address: "http://nodelet", Token: "secret"})
+	_ = nm.Add(&nodelet.NodeletConfig{ID: "local", Name: "local", Address: "http://nodelet", Token: "secret"})
 	server := New(Options{
 		NodeletManager: nm,
 		NodeletClient:  client,

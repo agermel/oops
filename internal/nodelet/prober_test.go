@@ -52,8 +52,8 @@ func newBlockingServer(unblock <-chan struct{}) *httptest.Server {
 // TestNodeletProber_New 测试从 manager 创建 Prober。
 func TestNodeletProber_New(t *testing.T) {
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Name: "a"})
-	_ = m.Add(NodeletConfig{ID: "n2", Name: "b"})
+	_ = m.Add(&NodeletConfig{ID: "a", Name: "a", Token: "t"})
+	_ = m.Add(&NodeletConfig{ID: "b", Name: "b", Token: "t"})
 
 	p := NewNodeletProber(m)
 	results := p.Status()
@@ -87,7 +87,7 @@ func TestNodeletProber_NewEmpty(t *testing.T) {
 // TestNodeletProber_StatusByID 测试按 ID 查找状态。
 func TestNodeletProber_StatusByID(t *testing.T) {
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Token: "t"})
 	p := NewNodeletProber(m)
 
 	if r := p.StatusByID("n1"); r == nil {
@@ -101,7 +101,7 @@ func TestNodeletProber_StatusByID(t *testing.T) {
 // TestNodeletProber_StatusCopySemantics 测试 Status 返回副本。
 func TestNodeletProber_StatusCopySemantics(t *testing.T) {
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Token: "t"})
 	p := NewNodeletProber(m)
 
 	results := p.Status()
@@ -121,7 +121,7 @@ func TestNodeletProber_ProbeNow_Healthy(t *testing.T) {
 	defer srv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: srv.URL})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: srv.URL, Token: "t"})
 	p := NewNodeletProber(m)
 
 	result := p.ProbeNow("n1")
@@ -148,7 +148,7 @@ func TestNodeletProber_ProbeNow_UnhealthyToDead(t *testing.T) {
 	defer srv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: srv.URL})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: srv.URL, Token: "t"})
 	p := NewNodeletProber(m)
 
 	// 第一次失败 → Unhealthy
@@ -184,7 +184,7 @@ func TestNodeletProber_ProbeNow_Recovery(t *testing.T) {
 	// 先用 503 让其判死
 	badSrv := newTestServer(http.StatusServiceUnavailable)
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: badSrv.URL})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: badSrv.URL, Token: "t"})
 	p := NewNodeletProber(m)
 
 	for i := 0; i < 3; i++ {
@@ -222,7 +222,7 @@ func TestNodeletProber_ProbeNow_AuthMode(t *testing.T) {
 	defer srv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: srv.URL, Token: "my-secret"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: srv.URL, Token: "my-secret"})
 	p := NewNodeletProber(m)
 
 	result := p.ProbeNow("n1")
@@ -240,7 +240,7 @@ func TestNodeletProber_ProbeNow_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: srv.URL, Token: "wrong"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: srv.URL, Token: "wrong"})
 	p := NewNodeletProber(m)
 
 	result := p.ProbeNow("n1")
@@ -261,7 +261,7 @@ func TestNodeletProber_ProbeNow_Timeout(t *testing.T) {
 	defer srv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: srv.URL})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: srv.URL, Token: "t"})
 	p := NewNodeletProber(m)
 	// 同包测试可设置内部超时
 	p.probeTimeout = 50 * time.Millisecond
@@ -296,7 +296,7 @@ func TestNodeletProber_ProbeNow_ConcurrentWait(t *testing.T) {
 	defer srv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1", Address: srv.URL})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: srv.URL, Token: "t"})
 	p := NewNodeletProber(m)
 
 	var wg sync.WaitGroup
@@ -356,8 +356,8 @@ func TestNodeletProber_ProbeAll(t *testing.T) {
 	defer badSrv.Close()
 
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "healthy", Address: goodSrv.URL})
-	_ = m.Add(NodeletConfig{ID: "unhealthy", Address: badSrv.URL})
+	_ = m.Add(&NodeletConfig{ID: "healthy", Name: "healthy", Address: goodSrv.URL, Token: "t"})
+	_ = m.Add(&NodeletConfig{ID: "unhealthy", Name: "unhealthy", Address: badSrv.URL, Token: "t"})
 	p := NewNodeletProber(m)
 
 	p.ProbeAll()
@@ -378,11 +378,11 @@ func TestNodeletProber_ProbeAll(t *testing.T) {
 // TestNodeletProber_OnConfigChange_Add 测试新增 nodelet 同步。
 func TestNodeletProber_OnConfigChange_Add(t *testing.T) {
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Token: "t"})
 	p := NewNodeletProber(m)
 
 	// 新增 nodelet 到同一个 manager
-	_ = m.Add(NodeletConfig{ID: "n2"})
+	_ = m.Add(&NodeletConfig{ID: "n2", Name: "n2", Token: "t"})
 	p.OnConfigChange()
 
 	if r := p.StatusByID("n2"); r == nil {
@@ -395,8 +395,8 @@ func TestNodeletProber_OnConfigChange_Add(t *testing.T) {
 // TestNodeletProber_OnConfigChange_Remove 测试删除 nodelet 同步。
 func TestNodeletProber_OnConfigChange_Remove(t *testing.T) {
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1"})
-	_ = m.Add(NodeletConfig{ID: "n2"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Token: "t"})
+	_ = m.Add(&NodeletConfig{ID: "n2", Name: "n2", Token: "t"})
 	p := NewNodeletProber(m)
 
 	_ = m.Remove("n1")
@@ -413,7 +413,7 @@ func TestNodeletProber_OnConfigChange_Remove(t *testing.T) {
 // TestNodeletProber_OnConfigChange_Noop 测试无变化时不变。
 func TestNodeletProber_OnConfigChange_Noop(t *testing.T) {
 	m, _ := NewNodeletManager("")
-	_ = m.Add(NodeletConfig{ID: "n1"})
+	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Token: "t"})
 	p := NewNodeletProber(m)
 
 	count := len(p.Status())
