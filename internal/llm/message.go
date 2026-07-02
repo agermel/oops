@@ -24,7 +24,6 @@ type ToolCall struct {
 }
 
 // AgentMessage 是 oops 应用层的统一消息类型。
-// 
 // 会话历史、会话树、压缩逻辑均基于此类型运转。
 // 仅在调用 LLM 的边界上通过 convertToLlm() 转换为 eino 的 *schema.Message。
 type AgentMessage struct {

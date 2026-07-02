@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ const DefaultConfigPath = "config/nodelets.json"
 const FallbackConfigPath = "/dev/null"
 
 // NodeletConfig 保存一台 oops-nodelet 的访问信息。
+// ID 是系统自动生成的主键（用户不可见），Name 是用户指定的唯一展示名称。
 // Token 在 JSON API 响应中永远不暴露（json:"-"），
 // 但通过 HasToken 告知前端是否已设置 token。
 type NodeletConfig struct {
@@ -48,7 +50,8 @@ func toPersisted(cfg NodeletConfig) persistedNodelet {
 
 // nodeletConfigFile 是 manager 持久化文件的顶层结构。
 type nodeletConfigFile struct {
-	Nodelets []persistedNodelet `json:"nodelets"`
+	Nodelets    []persistedNodelet `json:"nodelets"`
+	NextCounter int                `json:"nextCounter"`
 }
 
 // NodeletManager 管理 nodelet 配置的 CRUD，持久化到 JSON 文件。
@@ -95,23 +98,29 @@ func (m *NodeletManager) Find(id string) (NodeletConfig, bool) {
 	return NodeletConfig{}, false
 }
 
-// Add 新增一条 nodelet 配置并持久化。
-func (m *NodeletManager) Add(cfg NodeletConfig) error {
-	if cfg.ID == "" {
-		return fmt.Errorf("id is required")
+// Add 新增一条 nodelet 配置并持久化。ID 自动生成（写入 cfg.ID），Name 必须唯一。
+func (m *NodeletManager) Add(cfg *NodeletConfig) error {
+	if cfg.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if cfg.Token == "" {
+		return fmt.Errorf("token is required")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, existing := range m.config.Nodelets {
-		if existing.ID == cfg.ID {
-			logutil.Warn("nodelet manager: add skipped, already exists", zap.String("id", cfg.ID))
-			return fmt.Errorf("nodelet %q already exists", cfg.ID)
+		if existing.Name == cfg.Name {
+			logutil.Warn("nodelet manager: add skipped, name already exists", zap.String("name", cfg.Name))
+			return fmt.Errorf("nodelet %q already exists", cfg.Name)
 		}
 	}
 
-	m.config.Nodelets = append(m.config.Nodelets, toPersisted(cfg))
+	if cfg.ID == "" {
+		cfg.ID = m.nextIDLocked()
+	}
+	m.config.Nodelets = append(m.config.Nodelets, toPersisted(*cfg))
 	if err := m.saveLocked(); err != nil {
 		return err
 	}
@@ -124,8 +133,15 @@ func (m *NodeletManager) Add(cfg NodeletConfig) error {
 	return nil
 }
 
-// Update 修改已有 nodelet 配置并持久化。
+// Update 修改已有 nodelet 配置并持久化。按 ID 查找，Name 不可与已有冲突。
 func (m *NodeletManager) Update(cfg NodeletConfig) error {
+	if cfg.Token == "" {
+		return fmt.Errorf("token is required")
+	}
+	if cfg.ID == "" {
+		return fmt.Errorf("id is required")
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -139,6 +155,13 @@ func (m *NodeletManager) Update(cfg NodeletConfig) error {
 	if idx < 0 {
 		logutil.Warn("nodelet manager: update skipped, not found", zap.String("id", cfg.ID))
 		return fmt.Errorf("nodelet %q not found", cfg.ID)
+	}
+
+	// 检查 name 是否与其他已有条目冲突（自身除外）
+	for _, existing := range m.config.Nodelets {
+		if existing.ID != cfg.ID && existing.Name == cfg.Name {
+			return fmt.Errorf("nodelet name %q already exists", cfg.Name)
+		}
 	}
 
 	m.config.Nodelets[idx] = toPersisted(cfg)
@@ -179,7 +202,13 @@ func (m *NodeletManager) Remove(id string) error {
 	return nil
 }
 
-// Test 尝试连接 nodelet 的 /health 端点验证配置有效。
+// nextIDLocked 生成下一个自增 ID。调用方需持有锁。
+func (m *NodeletManager) nextIDLocked() string {
+	m.config.NextCounter++
+	return strconv.Itoa(m.config.NextCounter)
+}
+
+// Test 尝试连接 nodelet 的 /host 端点验证 token 有效。
 // 最多重试 3 次，每次间隔递增（1s / 2s / 3s）。
 func (m *NodeletManager) Test(cfg NodeletConfig) error {
 	const maxRetries = 3
@@ -191,10 +220,11 @@ func (m *NodeletManager) Test(cfg NodeletConfig) error {
 			time.Sleep(time.Duration(attempt) * time.Second)
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.Address+"/health", nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.Address+"/host", nil)
 		if err != nil {
 			return fmt.Errorf("bad address: %w", err)
 		}
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -206,7 +236,10 @@ func (m *NodeletManager) Test(cfg NodeletConfig) error {
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
-		lastErr = fmt.Errorf("health returned %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("unauthorized: token mismatch")
+		}
+		lastErr = fmt.Errorf("host returned %d", resp.StatusCode)
 	}
 
 	return fmt.Errorf("connect (×%d): %w", maxRetries, lastErr)

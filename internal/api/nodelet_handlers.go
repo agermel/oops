@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"oops/internal/logutil"
@@ -14,7 +16,7 @@ import (
 
 // handleNodelets 返回中心端配置的 Nodelet 状态（读 Prober 缓存，即时响应）。
 func (s *Server) handleNodelets(w http.ResponseWriter, r *http.Request) {
-	if s.nodeletProber == nil {
+	if s.nodeletProber == nil || s.nodeletManager == nil {
 		writeJSON(w, []nodeletStatusItem{})
 		return
 	}
@@ -132,7 +134,6 @@ func (s *Server) handleNodeletList(w http.ResponseWriter, r *http.Request) {
 // handleNodeletAdd handles POST /api/nodelets.
 func (s *Server) handleNodeletAdd(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID      string `json:"id"`
 		Name    string `json:"name"`
 		Address string `json:"address"`
 		Token   string `json:"token"`
@@ -141,12 +142,12 @@ func (s *Server) handleNodeletAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	cfg := nodelet.NodeletConfig{ID: req.ID, Name: req.Name, Address: req.Address, Token: req.Token}
+	cfg := nodelet.NodeletConfig{Name: req.Name, Address: req.Address, Token: req.Token}
 	if s.nodeletManager == nil {
 		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.nodeletManager.Add(cfg); err != nil {
+	if err := s.nodeletManager.Add(&cfg); err != nil {
 		logutil.Error("api: nodelet add", zap.Error(err))
 		writeJSONError(w, err.Error(), mcpErrorStatus(err))
 		return
@@ -190,7 +191,7 @@ func (s *Server) handleNodeletUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.nodeletProber != nil {
 		s.nodeletProber.OnConfigChange()
-		go s.nodeletProber.ProbeNow(cfg.ID)
+		go s.nodeletProber.ProbeNow(id)
 	}
 	writeJSONOK(w)
 }
@@ -211,11 +212,8 @@ func (s *Server) handleNodeletRemove(w http.ResponseWriter, r *http.Request) {
 	// 级联清理项目引用。
 	if s.projectStore != nil {
 		for _, p := range s.projectStore.List() {
-			for _, nid := range p.NodeletIDs {
-				if nid == id {
-					_ = s.projectStore.RemoveNodelet(p.ID, id)
-					break
-				}
+			if slices.Contains(p.NodeletIDs, id) {
+				_ = s.projectStore.RemoveNodelet(p.ID, id)
 			}
 		}
 	}
@@ -240,27 +238,51 @@ func (s *Server) handleProjectServersRemove(w http.ResponseWriter, r *http.Reque
 	writeJSONOK(w)
 }
 
-// handleNodeletTest handles POST /api/nodelets/test（兼容旧前端，内部改为走 Prober）。
+// handleNodeletTest handles POST /api/nodelets/test.
+// 直接对目标地址做 GET /host（带 Bearer token）验证连通性和 token 有效性。
+// 不依赖 manager/prober 中是否已保存该节点。
 func (s *Server) handleNodeletTest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
 		Address string `json:"address"`
+		Token   string `json:"token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if s.nodeletProber == nil {
-		writeJSONError(w, "nodelet manager not initialized", http.StatusServiceUnavailable)
+	if req.Address == "" {
+		writeJSONError(w, "address is required", http.StatusBadRequest)
 		return
 	}
-	result := s.nodeletProber.ProbeNow(req.ID)
-	if result.Status == nodelet.StatusHealthy {
-		writeJSONOK(w)
-	} else {
-		writeJSON(w, map[string]string{"status": "error", "error": result.LastError})
+	if req.Token == "" {
+		writeJSONError(w, "token is required", http.StatusBadRequest)
+		return
 	}
+
+	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, req.Address+"/host", nil)
+	if err != nil {
+		writeJSONError(w, "bad address: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+req.Token)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+		return
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		writeJSONOK(w)
+		return
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		writeJSON(w, map[string]string{"status": "error", "error": "unauthorized: token mismatch"})
+		return
+	}
+	writeJSON(w, map[string]string{"status": "error", "error": fmt.Sprintf("returned %d", resp.StatusCode)})
 }
 
 // handleNodeletProbe handles POST /api/nodelets/{id}/probe — 强制探测单个 Nodelet。

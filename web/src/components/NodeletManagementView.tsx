@@ -108,8 +108,8 @@ export function NodeletManagementView() {
     setShowForm(true);
   }
 
-  async function handleDelete(id: string) {
-    if (!window.confirm(`确定要删除服务器 "${id}" 吗？`)) return;
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`确定要删除服务器 "${name}" 吗？`)) return;
     try {
       await apiRequest(`/api/nodelets/${encodeURIComponent(id)}`, { method: "DELETE" });
       fetchNodelets();
@@ -193,7 +193,7 @@ export function NodeletManagementView() {
               {nodelets.map((n) => (
                 <tr key={n.id}>
                   <td>
-                    <span style={{ fontWeight: 500 }}>{n.name || n.id}</span>
+                    <span style={{ fontWeight: 500 }}>{n.name}</span>
                   </td>
                   <td className="mono nodelet-address-cell">
                     {n.address}
@@ -219,14 +219,14 @@ export function NodeletManagementView() {
                         iconOnly
                         onClick={() => handleRetrySingle(n.id)}
                         title="重新探测"
-                        aria-label={`重新探测 ${n.name || n.id}`}
+                        aria-label={`重新探测 ${n.name}`}
                       >
                         <RefreshCw size={12} />
                       </Button>
-                      <Button size="xs" variant="ghost" iconOnly onClick={() => openEdit(n)} aria-label={`编辑 ${n.name || n.id}`}>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => openEdit(n)} aria-label={`编辑 ${n.name}`}>
                         <Edit3 size={12} />
                       </Button>
-                      <Button size="xs" variant="ghost" iconOnly onClick={() => handleDelete(n.id)} aria-label={`删除 ${n.name || n.id}`}>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => handleDelete(n.id, n.name)} aria-label={`删除 ${n.name}`}>
                         <Trash2 size={12} />
                       </Button>
                     </div>

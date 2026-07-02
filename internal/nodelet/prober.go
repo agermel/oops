@@ -33,7 +33,7 @@ type ProbeResult struct {
 	LatencyMs        int64       `json:"latencyMs"`
 }
 
-// NodeletProber 在后台周期性探测所有 Nodelet 的 /health 端点，
+// NodeletProber 在后台周期性探测所有 Nodelet 的 /host 端点（带 Bearer token），
 // 维护一份可缓存的连通性状态，供 API 和前端统一读取。
 type NodeletProber struct {
 	mu      sync.Mutex
@@ -305,30 +305,21 @@ func (p *NodeletProber) tick() {
 
 // probeOne 对单个 Nodelet 执行一次探测并更新状态。
 // 调用方负责管理 probing 集合的加入/移除。
-//
-// 探测策略：
-//   - token 已配置 → GET /host（带 Bearer token），401 即 token 不匹配
-//   - token 未配置 → GET /health（无需认证），仅检测连通性
+// token 为必填项，统一走 GET /host（带 Bearer token）。
+// 401 → token 不匹配，其他非 200 → 不可达。
 func (p *NodeletProber) probeOne(cfg NodeletConfig) ProbeResult {
 	start := time.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.probeTimeout)
 	defer cancel()
 
-	endpoint := cfg.Address + "/health"
-	hasAuth := false
-	if cfg.Token != "" {
-		endpoint = cfg.Address + "/host"
-		hasAuth = true
-	}
+	endpoint := cfg.Address + "/host"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return p.applyResult(cfg.ID, false, fmt.Sprintf("bad address: %v", err), 0)
 	}
-	if hasAuth {
-		req.Header.Set("Authorization", "Bearer "+cfg.Token)
-	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 
 	resp, err := p.httpClient.Do(req)
 	latency := time.Since(start).Milliseconds()
