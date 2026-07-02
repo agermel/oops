@@ -34,7 +34,6 @@ export function ProjectDetailView({
   onBack,
   onToggleServer,
   onSelectContainer,
-  onServersChanged,
   onHealthCheck,
   onAutoScrollChange,
   onClearLogs,
@@ -62,7 +61,6 @@ export function ProjectDetailView({
   onBack: () => void;
   onToggleServer: (id: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
-  onServersChanged: () => void;
   onHealthCheck: () => void;
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
@@ -96,7 +94,6 @@ export function ProjectDetailView({
           expandedServers={expandedServers}
           onToggleServer={onToggleServer}
           onSelectContainer={onSelectContainer}
-          onServersChanged={onServersChanged}
         />
 
         <ContainerDetailView

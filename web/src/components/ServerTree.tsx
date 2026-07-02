@@ -1,9 +1,10 @@
 import { Server, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import React from "react";
-import type { ServerWithNodelet, ContainerWithType, NodeletConfig } from "../types";
+import type { ServerWithNodelet, ContainerWithType } from "../types";
 import { serviceTypeIcons, serviceLabel } from "../types";
-import { apiRequest, getErrorMessage } from "../lib/api";
-import { projectPaths } from "../lib/paths";
+import { getErrorMessage } from "../lib/api";
+import { useDeleteServer, useAddServer } from "../hooks/useServers";
+import { useNodelets } from "../hooks/useNodelets";
 import { Modal } from "./Modal";
 import { StatusDot } from "./StatusPill";
 import { Button } from "./ui/Button";
@@ -19,7 +20,6 @@ export function ServerTree({
   expandedServers,
   onToggleServer,
   onSelectContainer,
-  onServersChanged,
 }: {
   projectId: string;
   servers: ServerWithNodelet[];
@@ -31,62 +31,36 @@ export function ServerTree({
   expandedServers: Set<string>;
   onToggleServer: (nodeletID: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
-  onServersChanged: () => void;
 }) {
   const [showAddModal, setShowAddModal] = React.useState(false);
-  const [nodelets, setNodelets] = React.useState<NodeletConfig[]>([]);
-  const [nodeletsLoading, setNodeletsLoading] = React.useState(false);
-  const [addError, setAddError] = React.useState("");
-  const [addingID, setAddingID] = React.useState("");
-  const [removeError, setRemoveError] = React.useState("");
 
-  const paths = projectPaths(projectId);
+  const { data: nodelets = [], isLoading: nodeletsLoading } = useNodelets();
+  const deleteServer = useDeleteServer(projectId);
+  const addServer = useAddServer(projectId);
 
-  async function openAddModal() {
+  function openAddModal() {
     setShowAddModal(true);
-    setAddError("");
-    setNodeletsLoading(true);
-    try {
-      setNodelets(await apiRequest<NodeletConfig[]>("/api/nodelets"));
-    } catch (err) {
-      setAddError(getErrorMessage(err, "读取服务器列表失败"));
-    } finally {
-      setNodeletsLoading(false);
-    }
   }
 
   function closeAddModal() {
     setShowAddModal(false);
   }
 
-  async function removeServer(nodeletID: string) {
+  function removeServer(nodeletID: string) {
     if (!window.confirm(`确定要从项目中移除服务器吗？`)) return;
-    setRemoveError("");
-    try {
-      await apiRequest(`${paths.servers}/${encodeURIComponent(nodeletID)}`, { method: "DELETE" });
-      onServersChanged();
-    } catch (err) {
-      setRemoveError(getErrorMessage(err, "移除失败"));
-    }
+    deleteServer.mutate(nodeletID);
   }
 
-  async function addServer(nodeletID: string) {
-    setAddingID(nodeletID);
-    setAddError("");
-    try {
-      await apiRequest(paths.servers, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nodeletId: nodeletID }),
-      });
-      setShowAddModal(false);
-      onServersChanged();
-    } catch (err) {
-      setAddError(getErrorMessage(err, "添加失败"));
-    } finally {
-      setAddingID("");
-    }
+  function handleAddServer(nodeletID: string) {
+    addServer.mutate(nodeletID, {
+      onSuccess: () => setShowAddModal(false),
+    });
   }
+
+  const addError = deleteServer.error || addServer.error
+    ? getErrorMessage(deleteServer.error || addServer.error, "操作失败")
+    : "";
+  const addingID = addServer.isPending ? addServer.variables : "";
 
   const existingIDs = new Set(servers.map((s) => s.nodelet.id));
   const availableNodelets = nodelets.filter((n) => !existingIDs.has(n.id));
@@ -101,7 +75,7 @@ export function ServerTree({
       </div>
 
       {serverError && <div className="error-banner">{serverError}</div>}
-      {removeError && <div className="error-banner">{removeError}</div>}
+      {addError && <div className="error-banner">{addError}</div>}
 
       <div className="tree-list">
         {serversLoading && servers.length === 0 && (
@@ -190,7 +164,7 @@ export function ServerTree({
                   <Button
                     size="sm"
                     disabled={addingID === n.id}
-                    onClick={() => addServer(n.id)}
+                    onClick={() => handleAddServer(n.id)}
                   >
                     {addingID === n.id ? "添加中..." : "添加"}
                   </Button>

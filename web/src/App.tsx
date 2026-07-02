@@ -1,20 +1,21 @@
 import React from "react";
 import type {
-  Project,
-  ServerWithNodelet,
-  NodeletStatusItem,
   ContainerWithType,
   ContainerDetail as ContainerDetailType,
   HealthResult,
   LogEntry,
   StepEvent,
   ChatExchange,
-  SessionInfo,
   SessionDetail,
-  Skill,
 } from "./types";
 import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
+import { useQueryClient } from "@tanstack/react-query";
 import { usePathRouter } from "./hooks/usePathRouter";
+import { useProjects } from "./hooks/useProjects";
+import { useProjectServers, useNodeletStatus } from "./hooks/useServers";
+import { useSkills } from "./hooks/useSkills";
+import { useSessions } from "./hooks/useSessions";
+import { queryKeys } from "./hooks/queries";
 import { pageConfig } from "./lib/config";
 import { apiRequest, getErrorMessage } from "./lib/api";
 import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
@@ -75,15 +76,55 @@ export function App() {
   // 侧栏折叠
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
-  // ---- 项目状态 ----
-  const [projects, setProjects] = React.useState<Project[]>([]);
-  const [projectsLoading, setProjectsLoading] = React.useState(false);
-  const [projectsError, setProjectsError] = React.useState("");
+  // ---- 数据域 hooks（TanStack Query 管理） ----
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    error: projectsQueryError,
+  } = useProjects();
+  const projectsError = projectsQueryError ? getErrorMessage(projectsQueryError, "读取项目列表失败") : "";
+
+  const selectedProjectID_clean = selectedProjectID;
+  const {
+    data: rawServers = [],
+    isLoading: serversLoading,
+    error: serversQueryError,
+  } = useProjectServers(selectedProjectID_clean);
+  const serverError = serversQueryError ? getErrorMessage(serversQueryError, "读取服务器列表失败") : "";
+
+  const { data: nodeletStatusItems = [] } = useNodeletStatus();
+  const { data: skills = [] } = useSkills();
+  const {
+    data: sessions = [],
+  } = useSessions(selectedProjectID_clean || undefined);
+
+  // agentMeta: 从 skills 派生
+  const agentMeta = React.useMemo(() => {
+    const meta: Record<string, { label: string; iconName: string; color: string }> = {};
+    for (const s of skills) {
+      if (s.enabled) {
+        meta[s.name] = { label: s.label, iconName: s.icon, color: s.color };
+      }
+    }
+    return meta;
+  }, [skills]);
+
+  // 将 Prober 状态合并到服务器列表（原 mergeProberStatus 函数，现用 useMemo）
+  const servers = React.useMemo(() => {
+    if (rawServers.length === 0) return rawServers;
+    const statusMap = new Map(nodeletStatusItems.map((s) => [s.nodelet.id, s]));
+    return rawServers.map((sw) => {
+      const si = statusMap.get(sw.nodelet.id);
+      if (!si) return sw;
+      return {
+        ...sw,
+        host: { ...sw.host, available: si.status === "healthy" },
+        error: si.error || sw.error,
+      };
+    });
+  }, [rawServers, nodeletStatusItems]);
 
   // ---- 服务器 & 容器树状态 ----
-  const [servers, setServers] = React.useState<ServerWithNodelet[]>([]);
-  const [serversLoading, setServersLoading] = React.useState(false);
-  const [serverError, setServerError] = React.useState("");
   const [containers, setContainers] = React.useState<Record<string, ContainerWithType[]>>({});
   const [containersLoading, setContainersLoading] = React.useState<Set<string>>(new Set());
   const [expandedServers, setExpandedServers] = React.useState<Set<string>>(new Set());
@@ -117,12 +158,9 @@ export function App() {
     return localStorage.getItem("oops_session_id") || "";
   });
   const [sessionLoaded, setSessionLoaded] = React.useState(false);
-  const [sessions, setSessions] = React.useState<SessionInfo[]>([]);
   const [agentType, setAgentType] = React.useState<string>("");
   const [maxStep, setMaxStep] = React.useState<number>(0);
   const [tokenStats, setTokenStats] = React.useState<{ tokens: number; trimmed: number } | null>(null);
-  const [skills, setSkills] = React.useState<Skill[]>([]);
-  const [agentMeta, setAgentMeta] = React.useState<Record<string, { label: string; iconName: string; color: string }>>({});
 
   // ---- 日志缓冲区 ----
   const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -226,7 +264,7 @@ export function App() {
           }
           setChatExchanges(exchanges);
           setSessionLoaded(true);
-          loadSessions();
+          queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
         }
       } catch {
         if (!cancelled) {
@@ -239,88 +277,18 @@ export function App() {
     return () => { cancelled = true; };
   }, [authenticated, sessionId, sessionLoaded]);
 
-  // ---------------- 数据获取 ----------------
-
-  async function fetchProjects() {
-    setProjectsLoading(true);
-    setProjectsError("");
-    try {
-      setProjects(await apiRequest<Project[]>("/api/projects"));
-    } catch (err) {
-      setProjectsError(getErrorMessage(err, "读取项目列表失败"));
-    } finally {
-      setProjectsLoading(false);
-    }
-  }
-
-  async function loadProjectServers(projectID: string) {
-    setServersLoading(true);
-    setServerError("");
-    try {
-      const { servers: url } = projectPaths(projectID);
-      const svrs = await apiRequest<ServerWithNodelet[]>(url);
-      const merged = await mergeProberStatus(svrs);
-      setServers(merged ?? svrs);
-    } catch (err) {
-      setServerError(getErrorMessage(err, "读取服务器列表失败"));
-    } finally {
-      setServersLoading(false);
-    }
-  }
-
-  // mergeProberStatus 从 Prober 缓存同步状态到服务器列表。
-  // 传入 svrs 参数时直接返回合并后的数组（不写 state），用于初始加载避免空 state 竞态。
-  // 不传参数时通过 setServers 更新当前 state，用于定时轮询。
-  async function mergeProberStatus(svrs?: ServerWithNodelet[]): Promise<ServerWithNodelet[] | undefined> {
-    const targets = svrs ?? servers;
-    if (targets.length === 0) return svrs ? [] : undefined;
-    try {
-      const statusItems = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
-      const statusMap = new Map(statusItems.map((s) => [s.nodelet.id, s]));
-      const merged = targets.map((sw) => {
-        const si = statusMap.get(sw.nodelet.id);
-        if (!si) return sw;
-        return {
-          ...sw,
-          host: { ...sw.host, available: si.status === "healthy" },
-          error: si.error || sw.error,
-        };
-      });
-      if (svrs) return merged;
-      setServers(merged);
-    } catch {
-      if (svrs) return svrs;
-      // 静默处理轮询错误
-    }
-  }
-
-  // 项目视图下 30s 刷新一次 Prober 状态，错误信息可及时更新到 ServerTree。
-  React.useEffect(() => {
-    if (!route.view.startsWith("project-") || !selectedProjectID) return;
-    const timer = setInterval(() => mergeProberStatus(), 30_000);
-    return () => clearInterval(timer);
-  }, [route.view, selectedProjectID]);
+  // Prober 状态通过 useNodeletStatus() 的 refetchInterval: 30_000 自动轮询，
+  // servers 的合并通过 useMemo 完成（见上方），无需额外的 effect。
 
   async function loadContainers(projectID: string, nodeletID: string) {
     setContainersLoading((prev) => new Set(prev).add(nodeletID));
     try {
       const data = await apiRequest<ContainerWithType[]>(serverPaths(projectID, nodeletID).containers);
       setContainers((prev) => ({ ...prev, [nodeletID]: data }));
-      setServers((prev) => prev.map((sw) => (
-        sw.nodelet.id === nodeletID
-          ? { ...sw, host: { ...sw.host, available: true }, error: "" }
-          : sw
-      )));
     } catch (err) {
-      // 触发后端即时探测，让 Prober 感知失败
+      // 触发后端即时探测，让 Prober 感知失败；server 状态由 useMemo + Prober 数据驱动
       apiRequest(`/api/nodelets/${encodeURIComponent(nodeletID)}/probe`, { method: "POST" }).catch(() => {});
-      const message = getErrorMessage(err, "读取容器列表失败");
       setContainers((prev) => ({ ...prev, [nodeletID]: [] }));
-      setServers((prev) => prev.map((sw) => (
-        sw.nodelet.id === nodeletID
-          ? { ...sw, host: { ...sw.host, available: false }, error: message }
-          : sw
-      )));
     } finally {
       setContainersLoading((prev) => {
         const next = new Set(prev);
@@ -470,7 +438,7 @@ export function App() {
       setCurrentQuestion("");
       setChatLoading(false);
       chatLoadingRef.current = false;
-      loadSessions();
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
     } catch (err) {
       const errorMessage = getErrorMessage(err, "聊天请求失败");
       // 保存失败的 exchange，让用户能看到自己提的问题和错误信息；
@@ -577,7 +545,7 @@ export function App() {
         setAgentType("");
         setMaxStep(0);
         setTokenStats(null);
-        loadSessions();
+        queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
       }
     } catch (err) {
       setChatError(getErrorMessage(err, "加载会话失败"));
@@ -586,28 +554,7 @@ export function App() {
     }
   }
 
-  async function loadSessions() {
-    try {
-      const list = await apiRequest<SessionInfo[]>(
-        "/api/sessions" + (selectedProjectID ? `?project_id=${encodeURIComponent(selectedProjectID)}` : "")
-      );
-      setSessions(list || []);
-    } catch { /* 会话列表加载失败不影响主流程 */ }
-  }
-
-  async function fetchSkills() {
-    try {
-      const list = await apiRequest<Skill[]>("/api/skills");
-      setSkills(list || []);
-      const meta: Record<string, { label: string; iconName: string; color: string }> = {};
-      for (const s of list || []) {
-        if (s.enabled) {
-          meta[s.name] = { label: s.label, iconName: s.icon, color: s.color };
-        }
-      }
-      setAgentMeta(meta);
-    } catch { /* silent */ }
-  }
+  const queryClient = useQueryClient();
 
   function clearChat() {
     if (sessionId) {
@@ -621,7 +568,7 @@ export function App() {
     setChatError("");
     setSessionId("");
     setSessionLoaded(false);
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
     setAgentType("");
     setMaxStep(0);
     setTokenStats(null);
@@ -635,7 +582,7 @@ export function App() {
     if (sessionId && sessionLoaded && route.view === "project-chat") {
       startNewChat();
     }
-    loadSessions();
+    queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
   }, [authenticated, selectedProjectID]);
 
   function selectServerFromUI(nodeletID: string) {
@@ -684,20 +631,18 @@ export function App() {
       autoExpandFirstServerRef.current = false;
       setSelectedNodeletID("");
       setSelectedContainerID("");
-      setServers([]);
       setContainers({});
       setExpandedServers(new Set());
       setContainerDetail(undefined);
       closeLogStream();
       setLogs([]);
-      loadProjectServers(selectedProjectID);
+      // servers 由 useProjectServers 的 query key 变化自动重新 fetch
     }
     if (!selectedProjectID && lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = "";
       autoExpandFirstServerRef.current = false;
       setSelectedNodeletID("");
       setSelectedContainerID("");
-      setServers([]);
       setContainers({});
       setExpandedServers(new Set());
       setContainerDetail(undefined);
@@ -747,12 +692,7 @@ export function App() {
   }, [authenticated, route.view, servers, serversLoading, expandedServers.size, selectedProjectID, containers]);
 
   // ---------------- 基础 Effects ----------------
-
-  React.useEffect(() => {
-    if (!authenticated) return;
-    fetchProjects();
-    fetchSkills();
-  }, [authenticated]);
+  // projects / skills 数据由 TanStack Query hooks 自动管理，无需手动 fetch
 
   React.useEffect(() => {
     return () => closeLogStream();
@@ -843,7 +783,7 @@ export function App() {
               loading={projectsLoading}
               error={projectsError}
               onSelect={goToProject}
-              onRefresh={fetchProjects}
+              onRefresh={() => queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })}
             />
           </section>
         )}
@@ -871,7 +811,6 @@ export function App() {
             onBack={goToProjectList}
             onToggleServer={toggleServer}
             onSelectContainer={selectContainerFromUI}
-            onServersChanged={() => loadProjectServers(selectedProjectID)}
             onHealthCheck={checkHealth}
             onAutoScrollChange={setAutoScroll}
             onClearLogs={() => {
@@ -920,7 +859,7 @@ export function App() {
                 <p>管理 LLM Agent 的技能定义。技能是专业性工作流程指导，Agent 在需要时通过 skill 工具自主加载。</p>
               </div>
             </div>
-            <SkillsView skills={skills} onRefresh={fetchSkills} />
+            <SkillsView skills={skills} onRefresh={() => queryClient.invalidateQueries({ queryKey: queryKeys.skills.all })} />
           </section>
         )}
 
