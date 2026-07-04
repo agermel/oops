@@ -27,7 +27,7 @@ func main() {
 	server := api.NewFromConfig(cfg)
 	mux := http.NewServeMux()
 	server.Mount(mux)
-	handler := web.MountStatic(mux, "web/dist", server.TokenService)
+	handler := web.MountStatic(mux, "web/dist", server.TokenService, server.UserStore)
 
 	addr := common.EnvOrDefault("OOPS_ADDR", ":8081")
 

@@ -76,8 +76,11 @@ export type ContainerWithType = {
   id: string;
   name: string;
   image: string;
+  command?: string;
   state: string;
+  status?: string;
   health?: string;
+  ports?: PortMapping[];
   serviceType: string;
 };
 
@@ -114,12 +117,6 @@ export type DSNConfig = {
   overrides: Record<string, string>;
   merged: Record<string, string>;
   hasOverrides: boolean;
-};
-
-export type HealthResult = {
-  status: "alive" | "dead" | "unknown";
-  message?: string;
-  latency: number;
 };
 
 export type MCPStatus = {
@@ -184,7 +181,6 @@ export type ContainerDetail = {
   dsn?: DSNInfo;
   dsnOverrides?: Record<string, string>;
   hasDSNOverrides: boolean;
-  health?: HealthResult;
   mcp?: MCPStatus;
 };
 

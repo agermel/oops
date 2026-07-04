@@ -6,6 +6,7 @@ export interface PageConfig {
   user?: {
     name: string;
   };
+  needsSetup?: boolean;
 }
 
 function readConfig(): PageConfig {

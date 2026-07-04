@@ -365,8 +365,22 @@
   font-weight: var(--font-bold);
 }
 
-.tree-container-name {
+.tree-container-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-container-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-container-sub {
+  font-size: var(--text-xs);
+  color: var(--gray-400);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

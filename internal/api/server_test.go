@@ -45,6 +45,11 @@ func (f *fakeNodeletClient) ContainerLogsStream(_ context.Context, _ string, _ s
 	return io.NopCloser(strings.NewReader("data: {\"message\":\"started\"}\n\n")), nil
 }
 
+// ContainerExec 返回测试用容器 exec 结果。
+func (f *fakeNodeletClient) ContainerExec(context.Context, string, string, string, []string) (nodelet.ExecResult, error) {
+	return nodelet.ExecResult{ExitCode: 0}, nil
+}
+
 // TestNodeletRoutes 验证 nodelet 子资源路由匹配（Go 1.22+ 模式匹配）。
 func TestNodeletRoutes(t *testing.T) {
 	userStore, tokenService, jwtToken := testAuthSetup(t)

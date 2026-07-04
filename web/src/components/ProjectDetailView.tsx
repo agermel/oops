@@ -5,7 +5,6 @@ import type {
   ServerWithNodelet,
   ContainerWithType,
   ContainerDetail as ContainerDetailType,
-  HealthResult,
   LogEntry,
 } from "../types";
 import { ServerTree } from "./ServerTree";
@@ -26,8 +25,6 @@ export function ProjectDetailView({
   containerDetail,
   containerDetailLoading,
   containerDetailError,
-  health,
-  healthLoading,
   expandedServers,
   logs,
   logsLoading,
@@ -36,7 +33,6 @@ export function ProjectDetailView({
   onBack,
   onToggleServer,
   onSelectContainer,
-  onHealthCheck,
   onAutoScrollChange,
   onClearLogs,
   logsPanelRef,
@@ -53,8 +49,6 @@ export function ProjectDetailView({
   containerDetail?: ContainerDetailType;
   containerDetailLoading: boolean;
   containerDetailError: string;
-  health?: HealthResult;
-  healthLoading: boolean;
   expandedServers: Set<string>;
   logs: LogEntry[];
   logsLoading: boolean;
@@ -63,7 +57,6 @@ export function ProjectDetailView({
   onBack: () => void;
   onToggleServer: (id: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
-  onHealthCheck: () => void;
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
@@ -172,9 +165,6 @@ export function ProjectDetailView({
           detail={containerDetail}
           loading={containerDetailLoading}
           error={containerDetailError}
-          health={health}
-          healthLoading={healthLoading}
-          onHealthCheck={onHealthCheck}
           logs={logs}
           logsLoading={logsLoading}
           logsError={logsError}

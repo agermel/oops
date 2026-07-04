@@ -15,6 +15,7 @@ import (
 type pageConfig struct {
 	AuthProvider string     `json:"authProvider"`
 	User         *pageUser  `json:"user,omitempty"`
+	NeedsSetup   bool       `json:"needsSetup,omitempty"`
 }
 
 type pageUser struct {
@@ -25,6 +26,7 @@ type pageUser struct {
 type spaHandler struct {
 	staticDir    string
 	tokenService *auth.TokenService
+	userStore    *auth.Store
 	indexHTML    []byte // 缓存的 index.html 原始内容
 }
 
@@ -69,19 +71,28 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Auth 重定向：未登录时跳转到 /login。
+	// 3. Auth 重定向：未登录时跳转到 /login 或 /setup。
+	needsSetup := h.userStore == nil || !h.userStore.IsSetup()
 	user := h.extractUser(r)
 	if user == nil {
-		// /login 自己不能重定向，否则死循环。
-		if r.URL.Path != "/login" {
-			redirectURL := "/login?redirectUrl=" + r.URL.String()
-			http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
-			return
+		if needsSetup {
+			// 尚未创建用户 → 重定向到 /setup（排除 /login 和自身避免死循环）。
+			if r.URL.Path != "/setup" && r.URL.Path != "/login" {
+				http.Redirect(w, r, "/setup", http.StatusTemporaryRedirect)
+				return
+			}
+		} else {
+			// 已设置用户但未登录 → 重定向到 /login。
+			if r.URL.Path != "/login" {
+				redirectURL := "/login?redirectUrl=" + r.URL.String()
+				http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+				return
+			}
 		}
 	}
 
 	// 4. 注入 config__json 到 index.html。
-	h.serveIndexWithConfig(w, "simple", user)
+	h.serveIndexWithConfig(w, "simple", user, needsSetup)
 }
 
 // ensureBuild 确保前端构建产物存在，首次调用时缓存 index.html。
@@ -99,8 +110,8 @@ func (h *spaHandler) ensureBuild() error {
 }
 
 // serveIndexWithConfig 在 index.html 中注入 config__json 后返回。
-func (h *spaHandler) serveIndexWithConfig(w http.ResponseWriter, provider string, user *pageUser) {
-	cfg := pageConfig{AuthProvider: provider, User: user}
+func (h *spaHandler) serveIndexWithConfig(w http.ResponseWriter, provider string, user *pageUser, needsSetup bool) {
+	cfg := pageConfig{AuthProvider: provider, User: user, NeedsSetup: needsSetup}
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -117,7 +128,7 @@ func (h *spaHandler) serveIndexWithConfig(w http.ResponseWriter, provider string
 
 // MountStatic 返回一个组合 handler：API 路径走 mux，其他路径走 SPA handler。
 // 必须在 API 路由已注册到 mux 之后调用。
-func MountStatic(mux *http.ServeMux, staticDir string, tokenService *auth.TokenService) http.Handler {
+func MountStatic(mux *http.ServeMux, staticDir string, tokenService *auth.TokenService, userStore *auth.Store) http.Handler {
 	absDir, err := filepath.Abs(staticDir)
 	if err != nil {
 		absDir = staticDir
@@ -126,6 +137,7 @@ func MountStatic(mux *http.ServeMux, staticDir string, tokenService *auth.TokenS
 	spa := &spaHandler{
 		staticDir:    absDir,
 		tokenService: tokenService,
+		userStore:    userStore,
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

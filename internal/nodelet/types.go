@@ -21,14 +21,17 @@ type Host struct {
 
 // Container 表示某台服务器上的一个 Docker 容器。
 type Container struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Image     string    `json:"image"`
-	State     string    `json:"state"`
-	Health    string    `json:"health,omitempty"`
-	HostID    string    `json:"hostId"`
-	Created   time.Time `json:"created"`
-	StartedAt time.Time `json:"startedAt"`
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	Image     string        `json:"image"`
+	Command   string        `json:"command,omitempty"`
+	State     string        `json:"state"`
+	Status    string        `json:"status,omitempty"`
+	Health    string        `json:"health,omitempty"`
+	Ports     []PortMapping `json:"ports,omitempty"`
+	HostID    string        `json:"hostId"`
+	Created   time.Time     `json:"created"`
+	StartedAt time.Time     `json:"startedAt"`
 }
 
 // LogEntry 表示一条容器日志。
@@ -58,4 +61,16 @@ type ContainerInspect struct {
 	Ports   []PortMapping     `json:"ports"`   // 端口映射
 	HostID  string            `json:"hostId"`
 	Created time.Time         `json:"created"`
+}
+
+// ExecRequest 是容器 exec 请求体。
+type ExecRequest struct {
+	Cmd []string `json:"cmd"`
+}
+
+// ExecResult 是容器 exec 的返回结果。
+type ExecResult struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exitCode"`
 }

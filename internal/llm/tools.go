@@ -27,6 +27,9 @@ type OpsData interface {
 	// GetProjectRepo 返回指定项目的 GitHub 仓库 URL。
 	// projectID 不存在或未配置仓库时返回空字符串和错误。
 	GetProjectRepo(ctx context.Context, projectID string) (string, error)
+
+	// ContainerExec 在指定容器内执行命令，返回 stdout、stderr 和退出码。
+	ContainerExec(ctx context.Context, nodeletID, containerID string, cmd []string) (nodelet.ExecResult, error)
 }
 
 // NodeletSummary 是 LLM 可见的 Nodelet 概要。
@@ -55,6 +58,12 @@ type getLogsInput struct {
 	NodeletID   string `json:"nodelet_id" jsonschema:"required,description=目标 Nodelet ID"`
 	ContainerID string `json:"container_id" jsonschema:"required,description=目标容器 ID"`
 	Tail        int    `json:"tail" jsonschema:"description=返回最近的日志行数,default=50"`
+}
+
+type containerExecInput struct {
+	NodeletID   string   `json:"nodelet_id" jsonschema:"required,description=目标 Nodelet ID"`
+	ContainerID string   `json:"container_id" jsonschema:"required,description=目标容器 ID"`
+	Command     []string `json:"command" jsonschema:"required,description=要执行的命令及其参数，如 [\"ls\", \"-la\", \"/app\"]"`
 }
 
 // ---------- 单个工具构造函数 ----------
@@ -139,6 +148,53 @@ func NewGetLogsTool(ops OpsData) (tool.InvokableTool, error) {
 		})
 }
 
+// ---------- container_exec 工具 ----------
+
+// NewContainerExecTool 创建 container_exec 工具——在容器内执行命令。
+func NewContainerExecTool(ops OpsData) (tool.InvokableTool, error) {
+	return utils.InferTool("container_exec",
+		"在指定容器内执行一条命令并返回 stdout、stderr 和退出码。"+
+			"不是交互式 shell——每次调用执行一条命令。超时 30 秒，无 TTY，无标准输入。"+
+			"适合执行诊断命令（如 ls、cat、ps、env、df、netstat 等）。"+
+			"避免执行会修改系统状态的命令（如 rm、kill），除非用户明确要求。",
+		func(ctx context.Context, input *containerExecInput) (string, error) {
+			if len(input.Command) == 0 {
+				return "命令不能为空", nil
+			}
+			var result nodelet.ExecResult
+			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
+				var callErr error
+				result, callErr = ops.ContainerExec(ctx, input.NodeletID, input.ContainerID, input.Command)
+				return callErr
+			})
+			if err != nil {
+				return formatRetryError("命令执行失败", err, DefaultRetryPolicy.MaxRetries), nil
+			}
+			return formatExecResult(result), nil
+		})
+}
+
+// formatExecResult 格式化 exec 结果为 LLM 可读文本。
+func formatExecResult(result nodelet.ExecResult) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("退出码: %d\n", result.ExitCode))
+	if result.Stdout != "" {
+		sb.WriteString("--- stdout ---\n")
+		sb.WriteString(result.Stdout)
+		if !strings.HasSuffix(result.Stdout, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+	if result.Stderr != "" {
+		sb.WriteString("--- stderr ---\n")
+		sb.WriteString(result.Stderr)
+		if !strings.HasSuffix(result.Stderr, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
 // ---------- skill 工具 ----------
 
 type skillInput struct {
@@ -187,6 +243,7 @@ func NewTools(ops OpsData, store *SkillStore) ([]tool.InvokableTool, error) {
 		NewListNodeletsTool,
 		NewListContainersTool,
 		NewGetLogsTool,
+		NewContainerExecTool,
 		NewRepoSyncTool,
 		NewRepoListDirTool,
 		NewRepoReadFileTool,

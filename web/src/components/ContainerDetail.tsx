@@ -1,15 +1,13 @@
 import React from "react";
-import { Info, Gauge, Wrench, FileText, Settings } from "lucide-react";
-import type { ContainerDetail as ContainerDetailType, HealthResult, LogEntry } from "../types";
+import { Info, Wrench, FileText, Settings } from "lucide-react";
+import type { ContainerDetail as ContainerDetailType, LogEntry } from "../types";
 import { ContainerOverview } from "./ContainerOverview";
-import { ContainerHealth } from "./ContainerHealth";
 import { ContainerMCP } from "./ContainerMCP";
 import { ContainerLogs } from "./ContainerLogs";
 import { ContainerDSN } from "./ContainerDSN";
 
 const TABS = [
   { id: "overview", label: "概览", icon: Info },
-  { id: "health", label: "健康", icon: Gauge },
   { id: "dsn", label: "DSN 配置", icon: Settings },
   { id: "mcp", label: "MCP", icon: Wrench },
   { id: "logs", label: "日志", icon: FileText },
@@ -21,9 +19,6 @@ export function ContainerDetailView({
   detail,
   loading,
   error,
-  health,
-  healthLoading,
-  onHealthCheck,
   logs,
   logsLoading,
   logsError,
@@ -40,9 +35,6 @@ export function ContainerDetailView({
   detail?: ContainerDetailType;
   loading: boolean;
   error: string;
-  health?: HealthResult;
-  healthLoading: boolean;
-  onHealthCheck: () => void;
   logs: LogEntry[];
   logsLoading: boolean;
   logsError: string;
@@ -92,11 +84,6 @@ export function ContainerDetailView({
           <>
             {activeTab === "overview" && (
               <div role="tabpanel"><ContainerOverview detail={detail} onEditDSN={handleEditDSN} /></div>
-            )}
-            {activeTab === "health" && (
-              <div role="tabpanel">
-                <ContainerHealth health={health || detail.health} loading={healthLoading} onCheck={onHealthCheck} />
-              </div>
             )}
             {activeTab === "dsn" && (
               <div role="tabpanel">

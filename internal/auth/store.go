@@ -24,13 +24,15 @@ type User struct {
 // Store 管理单用户凭证。
 type Store struct {
 	User *User
+	path string // YAML 文件路径，用于 Setup 时回写
 }
 
-// NewStore 从 YAML 文件加载用户。文件不存在时交互式创建。
+// NewStore 从 YAML 文件加载用户。文件不存在时返回空 Store（未初始化状态），
+// 由前端 Web 页面完成账户设置，不再阻塞在 stdin 交互式提示。
 func NewStore(path string) (*Store, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return promptAndSave(path)
+		return &Store{path: path}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read users.yml: %w", err)
@@ -43,7 +45,49 @@ func NewStore(path string) (*Store, error) {
 	if u.Username == "" || u.Password == "" {
 		return nil, fmt.Errorf("users.yml: username and password are required")
 	}
-	return &Store{User: &u}, nil
+	return &Store{User: &u, path: path}, nil
+}
+
+// IsSetup 返回是否已完成初始账户设置。
+func (s *Store) IsSetup() bool {
+	return s.User != nil
+}
+
+// Setup 创建初始管理员账户，哈希密码并持久化到 YAML 文件。
+// 仅在尚未设置时可用。
+func (s *Store) Setup(username, name, password string) error {
+	if s.IsSetup() {
+		return fmt.Errorf("user already configured")
+	}
+	if username == "" || password == "" {
+		return fmt.Errorf("username and password cannot be empty")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	u := &User{
+		Username: username,
+		Name:     name,
+		Password: string(hash),
+	}
+
+	data, err := yaml.Marshal(u)
+	if err != nil {
+		return fmt.Errorf("marshal user: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
+	}
+	if err := os.WriteFile(s.path, data, 0o600); err != nil {
+		return fmt.Errorf("write users.yml: %w", err)
+	}
+
+	s.User = u
+	return nil
 }
 
 // Validate 验证用户名和密码。

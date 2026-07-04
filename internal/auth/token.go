@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"time"
@@ -25,6 +26,16 @@ type TokenService struct {
 func NewTokenService(passwordHash string, ttl time.Duration) *TokenService {
 	h := sha256.Sum256([]byte(passwordHash))
 	return &TokenService{secret: h[:], ttl: ttl}
+}
+
+// NewTokenServiceRandom 创建使用随机密钥的 TokenService。
+// 用于用户尚未设置时的过渡阶段——setup 完成后会用真实密钥重建。
+func NewTokenServiceRandom(ttl time.Duration) (*TokenService, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("generate random secret: %w", err)
+	}
+	return &TokenService{secret: secret, ttl: ttl}, nil
 }
 
 // CreateToken 为用户签发 JWT。

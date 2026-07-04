@@ -28,12 +28,15 @@ type nodeletHostSummary struct {
 
 // containerWithType 是带服务类型识别的容器列表项。
 type containerWithType struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Image       string `json:"image"`
-	State       string `json:"state"`
-	Health      string `json:"health,omitempty"`
-	ServiceType string `json:"serviceType"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	Image       string               `json:"image"`
+	Command     string               `json:"command,omitempty"`
+	State       string               `json:"state"`
+	Status      string               `json:"status,omitempty"`
+	Health      string               `json:"health,omitempty"`
+	Ports       []nodelet.PortMapping `json:"ports,omitempty"`
+	ServiceType string               `json:"serviceType"`
 }
 
 // handleProjectList handles GET /api/projects.
@@ -217,8 +220,11 @@ func (s *Server) handleProjectContainers(w http.ResponseWriter, r *http.Request)
 			ID:          c.ID,
 			Name:        c.Name,
 			Image:       c.Image,
+			Command:     c.Command,
 			State:       c.State,
+			Status:      c.Status,
 			Health:      c.Health,
+			Ports:       c.Ports,
 			ServiceType: string(stype),
 		}
 	}

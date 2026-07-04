@@ -32,6 +32,15 @@ type API interface {
 
 	// ServerVersion 返回 Docker daemon 版本组件。
 	ServerVersion(context.Context, client.ServerVersionOptions) (client.ServerVersionResult, error)
+
+	// ExecCreate 在容器内创建 exec 实例。
+	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
+
+	// ExecAttach 附加到 exec 实例以获取 I/O。
+	ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error)
+
+	// ExecInspect 查询 exec 实例状态（含退出码）。
+	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
 }
 
 // Client 通过 Docker Engine API 读取本机容器运行环境。
@@ -102,8 +111,11 @@ func (c *Client) Containers(r *http.Request) ([]nodelet.Container, error) {
 			ID:      item.ID,
 			Name:    containerName(item.Names),
 			Image:   item.Image,
+			Command: item.Command,
 			State:   string(item.State),
+			Status:  item.Status,
 			Health:  healthStatus(item.Health),
+			Ports:   collectSummaryPorts(item.Ports),
 			HostID:  id,
 			Created: time.Unix(item.Created, 0),
 		})
@@ -183,6 +195,24 @@ func healthStatus(health *containertypes.HealthSummary) string {
 		return ""
 	}
 	return string(health.Status)
+}
+
+// collectSummaryPorts 把 Docker 容器列表摘要中的端口映射转为统一的 PortMapping 列表。
+func collectSummaryPorts(ports []containertypes.PortSummary) []nodelet.PortMapping {
+	if len(ports) == 0 {
+		return nil
+	}
+	result := make([]nodelet.PortMapping, len(ports))
+	for i, p := range ports {
+		result[i] = nodelet.PortMapping{
+			ContainerPort: int(p.PrivatePort),
+			Protocol:      p.Type,
+		}
+		if p.PublicPort > 0 {
+			result[i].HostPort = fmt.Sprintf("%d", p.PublicPort)
+		}
+	}
+	return result
 }
 
 // runtime 判断当前容器运行时是 docker 还是 podman。

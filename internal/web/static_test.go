@@ -16,7 +16,7 @@ func TestMountStaticServesAsset(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	handler := MountStatic(mux, staticDir, nil)
+	handler := MountStatic(mux, staticDir, nil, nil)
 
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
@@ -36,7 +36,7 @@ func TestMountStaticFallsBackToIndex(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	handler := MountStatic(mux, staticDir, nil)
+	handler := MountStatic(mux, staticDir, nil, nil)
 
 	// /login 不触发鉴权重定向，可直接测试 SPA fallback。
 	response := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestMountStaticFallsBackToIndex(t *testing.T) {
 
 func TestMountStaticMissingBuild(t *testing.T) {
 	mux := http.NewServeMux()
-	handler := MountStatic(mux, t.TempDir(), nil)
+	handler := MountStatic(mux, t.TempDir(), nil, nil)
 
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -69,7 +69,7 @@ func TestMountStaticConfigInjection(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	handler := MountStatic(mux, staticDir, nil)
+	handler := MountStatic(mux, staticDir, nil, nil)
 
 	response := httptest.NewRecorder()
 	// /login 不触发鉴权重定向，可直接测试 config 注入。
@@ -99,7 +99,7 @@ func TestMountStaticAPIPassthrough(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	handler := MountStatic(mux, staticDir, nil)
+	handler := MountStatic(mux, staticDir, nil, nil)
 
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/test", nil))

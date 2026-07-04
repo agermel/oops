@@ -27,3 +27,8 @@ func ContainerLogsStreamPath(containerID string) string {
 func ContainerInspectPath(containerID string) string {
 	return "/containers/" + url.PathEscape(containerID) + "/inspect"
 }
+
+// ContainerExecPath 返回指定容器的 exec 接口路径。
+func ContainerExecPath(containerID string) string {
+	return "/containers/" + url.PathEscape(containerID) + "/exec"
+}

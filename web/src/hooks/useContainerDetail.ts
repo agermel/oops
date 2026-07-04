@@ -1,8 +1,8 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../lib/api";
 import { serverPaths } from "../lib/paths";
 import { queryKeys } from "./queries";
-import type { ContainerDetail, HealthResult } from "../types";
+import type { ContainerDetail } from "../types";
 
 export function useContainerDetail(
   projectId: string,
@@ -16,19 +16,5 @@ export function useContainerDetail(
         serverPaths(projectId, nodeletId).container(containerId),
       ),
     enabled: !!projectId && !!nodeletId && !!containerId,
-  });
-}
-
-export function useCheckHealth(
-  projectId: string,
-  nodeletId: string,
-  containerId: string,
-) {
-  return useMutation({
-    mutationFn: () =>
-      apiRequest<HealthResult>(
-        serverPaths(projectId, nodeletId).containerCheck(containerId),
-        { method: "POST" },
-      ),
   });
 }

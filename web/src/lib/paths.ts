@@ -29,7 +29,6 @@ export function serverPaths(projectId: string, serverId: string) {
     containers: `${base}/containers`,
     container: (cid: string) => `${base}/containers/${enc(cid)}`,
     containerLogs: (cid: string) => `${base}/containers/${enc(cid)}/logs/stream?tail=100`,
-    containerCheck: (cid: string) => `${base}/containers/${enc(cid)}/check`,
     containerMCP: (cid: string) => `${base}/containers/${enc(cid)}/mcp`,
     containerDSN: (cid: string) => `${base}/containers/${enc(cid)}/dsn`,
   };

@@ -14,6 +14,7 @@ type fakeHostProvider struct {
 	inspect    ContainerInspect
 	logs       []LogEntry
 	streamLogs []LogEntry
+	execResult ExecResult
 	err        error
 }
 
@@ -35,6 +36,11 @@ func (f fakeHostProvider) ContainerInspect(_ *http.Request, _ string) (Container
 // ContainerLogs 返回测试用容器日志。
 func (f fakeHostProvider) ContainerLogs(_ *http.Request, _ string) ([]LogEntry, error) {
 	return f.logs, f.err
+}
+
+// ContainerExec 返回测试用容器 exec 结果。
+func (f fakeHostProvider) ContainerExec(_ *http.Request, _ string, _ []string) (ExecResult, error) {
+	return f.execResult, f.err
 }
 
 // ContainerLogsStream 返回测试用容器日志流。

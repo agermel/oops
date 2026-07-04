@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -19,15 +20,7 @@ type ContainerDetail struct {
 	DSN            *docker.DSNInfo          `json:"dsn,omitempty"`
 	DSNOverrides   map[string]string        `json:"dsnOverrides,omitempty"`
 	HasDSNOverrides bool                    `json:"hasDSNOverrides"`
-	Health         *healthResult            `json:"health,omitempty"`
 	MCP            *mcpStatus               `json:"mcp,omitempty"`
-}
-
-// healthResult 是一次健康探测的结果。
-type healthResult struct {
-	Status  string `json:"status"` // alive | dead | unknown
-	Message string `json:"message,omitempty"`
-	Latency int64  `json:"latency"`
 }
 
 // mcpStatus 是容器级 MCP 连接的运行时状态。
@@ -51,7 +44,7 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 	}
 
 	stype := docker.DetectServiceType(detail.Image)
-	dsn := docker.ExtractDSN(stype, detail)
+	dsn := docker.ExtractDSN(stype, detail, nodeletHost(item.Address))
 
 	// 合并用户 DSN 覆盖值。
 	var dsnOverrides map[string]string
@@ -184,63 +177,6 @@ func (s *Server) handleProjectLogsStream(w http.ResponseWriter, r *http.Request)
 	copyAndFlush(w, flusher, stream)
 }
 
-// handleProjectHealthCheck handles POST /api/projects/{pid}/servers/{sid}/containers/{cid}/check.
-func (s *Server) handleProjectHealthCheck(w http.ResponseWriter, r *http.Request) {
-	nodeletID := r.PathValue("sid")
-	containerID := r.PathValue("cid")
-
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
-
-	// 获取容器详情以确定服务类型。
-	detail, err := s.buildContainerDetail(ctx, nodeletID, containerID)
-	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	stype := docker.ServiceType(detail.ServiceType)
-	defaultPorts := map[docker.ServiceType]int{
-		docker.ServiceMySQL:    3306,
-		docker.ServiceRedis:    6379,
-		docker.ServicePostgres: 5432,
-		docker.ServiceMongo:    27017,
-	}
-
-	result := healthResult{Status: "unknown"}
-	if port, ok := defaultPorts[stype]; ok {
-		result = tcpHealthCheck(ctx, detail.Container.HostID, port)
-	} else {
-		result.Message = "unsupported service type for health check"
-	}
-
-	writeJSON(w, result)
-}
-
-// tcpHealthCheck 对指定地址和端口执行 TCP 连接探测。
-func tcpHealthCheck(ctx context.Context, host string, port int) healthResult {
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	start := time.Now()
-
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	latency := time.Since(start).Milliseconds()
-
-	if err != nil {
-		return healthResult{
-			Status:  "dead",
-			Message: err.Error(),
-			Latency: latency,
-		}
-	}
-	conn.Close()
-
-	return healthResult{
-		Status:  "alive",
-		Latency: latency,
-	}
-}
-
 // handleContainerMCPGet handles GET /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp.
 func (s *Server) handleContainerMCPGet(w http.ResponseWriter, r *http.Request) {
 	nodeletID := r.PathValue("sid")
@@ -339,13 +275,8 @@ func (s *Server) handleContainerDSNGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stype := docker.DetectServiceType(detail.Image)
-	var detected map[string]string
-	if stype.IsDatabase() || stype.IsMiddleware() {
-		dsn := docker.ExtractDSN(stype, detail)
-		detected = dsnInfoToMap(dsn)
-	} else {
-		detected = map[string]string{}
-	}
+	dsn := docker.ExtractDSN(stype, detail, nodeletHost(item.Address))
+	detected := dsnInfoToMap(dsn)
 	var overrides map[string]string
 	if s.dsnStore != nil {
 		overrides = s.dsnStore.Get(nodeletID, containerID)
@@ -394,6 +325,25 @@ func (s *Server) handleContainerDSNDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSONOK(w)
+}
+
+// nodeletHost 从 nodelet 地址中提取 IP。
+// 支持 "http://150.158.115.114:8686"（带 scheme）和 "10.0.0.5:8686"（纯 host:port）两种格式。
+func nodeletHost(addr string) string {
+	// 带 scheme 的 URL 格式。
+	if u, err := url.Parse(addr); err == nil && u.Host != "" {
+		h, _, err := net.SplitHostPort(u.Host)
+		if err == nil {
+			return h
+		}
+		return u.Host
+	}
+	// 纯 host:port 格式。
+	h, _, err := net.SplitHostPort(addr)
+	if err == nil {
+		return h
+	}
+	return addr
 }
 
 // errNotFound 返回一个标记为 404 的错误。

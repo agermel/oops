@@ -88,8 +88,10 @@ export function ContainerDSN({
     }
   }
 
-  // projectId/nodeletId/containerId 变化时重新获取
+  // projectId/nodeletId/containerId 变化时重新获取。
+  // 折叠服务器时 ID 可能变空，跳过无效请求避免 404。
   React.useEffect(() => {
+    if (!projectId || !nodeletId || !containerId) return;
     fetchDSN();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, nodeletId, containerId]);

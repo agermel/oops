@@ -121,8 +121,6 @@ type Manager struct {
 	processes  map[string]*managedProcess // id → running process
 	errors     map[string]string          // id → last error
 	onChange   func([]tool.BaseTool)
-
-	keepaliveStop chan struct{} // closed when keepalive goroutine should stop
 }
 
 // NewManager loads persisted connections, starts all enabled ones,
@@ -772,84 +770,4 @@ func (m *Manager) notifyChangeLocked() {
 	}
 	tools := m.collectToolsLocked()
 	m.onChange(tools)
-}
-
-// --- keepalive ---
-
-// StartKeepalive 启动后台保活探测，对运行中的连接定期 ping。
-// 由 api.Server 在初始化后调用。
-func (m *Manager) StartKeepalive(interval time.Duration) {
-	if m.keepaliveStop != nil {
-		return // already running
-	}
-	m.keepaliveStop = make(chan struct{})
-	go m.keepaliveLoop(interval)
-	logutil.Info("mcp: keepalive started", zap.Duration("interval", interval))
-}
-
-// StopKeepalive 停止后台保活探测。
-func (m *Manager) StopKeepalive() {
-	if m.keepaliveStop == nil {
-		return
-	}
-	close(m.keepaliveStop)
-	m.keepaliveStop = nil
-	logutil.Info("mcp: keepalive stopped")
-}
-
-func (m *Manager) keepaliveLoop(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-m.keepaliveStop:
-			return
-		case <-ticker.C:
-			m.pingRunning()
-		}
-	}
-}
-
-// pingRunning 对所有 running 状态的连接发送 MCP 协议 Ping。
-// 参考 monitorExit 的锁外 ping 模式：先复制 session 引用再释放锁，
-// 避免持锁期间进行网络调用。
-func (m *Manager) pingRunning() {
-	m.mu.Lock()
-	type target struct {
-		id        string
-		session   MCPSession
-		stderrBuf *StderrBuffer
-	}
-	targets := make([]target, 0, len(m.processes))
-	for id, proc := range m.processes {
-		targets = append(targets, target{id: id, session: proc.session, stderrBuf: proc.stderrBuf})
-	}
-	m.mu.Unlock()
-
-	for _, t := range targets {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := t.session.Ping(ctx)
-		cancel()
-
-		if err != nil {
-			m.mu.Lock()
-			// 双重检查：可能在等待期间被 stop/remove 清理。
-			if _, stillRunning := m.processes[t.id]; stillRunning {
-				m.stopLocked(t.id)
-				errMsg := fmt.Sprintf("keepalive ping failed: %v", err)
-				if t.stderrBuf != nil {
-					if s := t.stderrBuf.String(); s != "" {
-						errMsg += "\nstderr: " + s
-					}
-				}
-				m.errors[t.id] = errMsg
-				logutil.Warn("mcp: keepalive ping failed",
-					zap.String("connID", t.id),
-					zap.Error(err),
-				)
-				m.notifyChangeLocked()
-			}
-			m.mu.Unlock()
-		}
-	}
 }

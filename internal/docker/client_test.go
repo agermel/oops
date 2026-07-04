@@ -49,6 +49,30 @@ func (f fakeAPI) ServerVersion(context.Context, client.ServerVersionOptions) (cl
 	return f.version, f.err
 }
 
+// ExecCreate 返回测试用 exec 实例 ID。
+func (f fakeAPI) ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	if f.err != nil {
+		return client.ExecCreateResult{}, f.err
+	}
+	return client.ExecCreateResult{ID: "fake-exec-id"}, nil
+}
+
+// ExecAttach 返回测试用 exec 输出流。
+func (f fakeAPI) ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	if f.err != nil {
+		return client.ExecAttachResult{}, f.err
+	}
+	return client.ExecAttachResult{}, nil
+}
+
+// ExecInspect 返回测试用 exec 状态。
+func (f fakeAPI) ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error) {
+	if f.err != nil {
+		return client.ExecInspectResult{}, f.err
+	}
+	return client.ExecInspectResult{ExitCode: 0, Running: false}, nil
+}
+
 type streamAPI struct {
 	fakeAPI
 	options client.ContainerLogsOptions
@@ -98,9 +122,15 @@ func TestContainers(t *testing.T) {
 				ID:      "container-1",
 				Names:   []string{"/api"},
 				Image:   "ccnubox/api:latest",
+				Command: `"oops-nodelet"`,
 				State:   containertypes.StateRunning,
+				Status:  "Up 2 days",
 				Created: 1710000000,
 				Health:  &containertypes.HealthSummary{Status: containertypes.Healthy},
+				Ports: []containertypes.PortSummary{
+					{PrivatePort: 8686, PublicPort: 8686, Type: "tcp"},
+					{PrivatePort: 9090, Type: "tcp"},
+				},
 			},
 		},
 	}
@@ -116,6 +146,12 @@ func TestContainers(t *testing.T) {
 	if containers[0].Name != "api" {
 		t.Fatalf("Name = %q, want %q", containers[0].Name, "api")
 	}
+	if containers[0].Command != `"oops-nodelet"` {
+		t.Fatalf("Command = %q, want %q", containers[0].Command, `"oops-nodelet"`)
+	}
+	if containers[0].Status != "Up 2 days" {
+		t.Fatalf("Status = %q, want %q", containers[0].Status, "Up 2 days")
+	}
 	if containers[0].HostID != "docker-host-id" {
 		t.Fatalf("HostID = %q, want %q", containers[0].HostID, "docker-host-id")
 	}
@@ -124,6 +160,15 @@ func TestContainers(t *testing.T) {
 	}
 	if !containers[0].Created.Equal(time.Unix(1710000000, 0)) {
 		t.Fatalf("Created = %s, want %s", containers[0].Created, time.Unix(1710000000, 0))
+	}
+	if len(containers[0].Ports) != 2 {
+		t.Fatalf("len(Ports) = %d, want %d", len(containers[0].Ports), 2)
+	}
+	if containers[0].Ports[0].HostPort != "8686" || containers[0].Ports[0].ContainerPort != 8686 || containers[0].Ports[0].Protocol != "tcp" {
+		t.Fatalf("Ports[0] = %+v, want HostPort=8686, ContainerPort=8686, Protocol=tcp", containers[0].Ports[0])
+	}
+	if containers[0].Ports[1].HostPort != "" || containers[0].Ports[1].ContainerPort != 9090 {
+		t.Fatalf("Ports[1] = %+v, want HostPort=, ContainerPort=9090", containers[0].Ports[1])
 	}
 }
 

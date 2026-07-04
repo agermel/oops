@@ -108,3 +108,14 @@ func (s *Server) GetProjectRepo(ctx context.Context, projectID string) (string, 
 	}
 	return p.GitHubRepo, nil
 }
+
+// ContainerExec 实现 llm.OpsData，在指定容器内执行命令。
+func (s *Server) ContainerExec(ctx context.Context, nodeletID, containerID string, cmd []string) (nodelet.ExecResult, error) {
+	item, ok := s.findNodelet(nodeletID)
+	if !ok {
+		return nodelet.ExecResult{}, fmt.Errorf("nodelet %q not found", nodeletID)
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return s.nodeletClient.ContainerExec(execCtx, item.Address, item.Token, containerID, cmd)
+}

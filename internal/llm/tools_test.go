@@ -12,11 +12,12 @@ import (
 
 // fakeOpsData 是 OpsData 的测试用假实现。
 type fakeOpsData struct {
-	nodelets   []NodeletSummary
-	containers []nodelet.Container
-	logs       []nodelet.LogEntry
-	repoURL    string
-	err        error
+	nodelets    []NodeletSummary
+	containers  []nodelet.Container
+	logs        []nodelet.LogEntry
+	repoURL     string
+	execResult  nodelet.ExecResult
+	err         error
 }
 
 func (f *fakeOpsData) ListNodelets(_ context.Context) ([]NodeletSummary, error) {
@@ -38,6 +39,10 @@ func (f *fakeOpsData) GetProjectRepo(_ context.Context, projectID string) (strin
 	return f.repoURL, nil
 }
 
+func (f *fakeOpsData) ContainerExec(_ context.Context, _, _ string, _ []string) (nodelet.ExecResult, error) {
+	return f.execResult, f.err
+}
+
 // mustJSON 将 v 序列化为 JSON 字符串，失败时 panic。
 func mustJSON(v any) string {
 	data, err := json.Marshal(v)
@@ -54,10 +59,10 @@ func TestNewTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTools() error = %v", err)
 	}
-	if len(tools) != 7 {
-		t.Fatalf("len(tools) = %d, want 7", len(tools))
+	if len(tools) != 8 {
+		t.Fatalf("len(tools) = %d, want 8", len(tools))
 	}
-	expected := []string{"list_nodelets", "list_containers", "get_logs",
+	expected := []string{"list_nodelets", "list_containers", "get_logs", "container_exec",
 		"repo_sync", "repo_list_dir", "repo_read_file", "repo_fetch"}
 	for i, want := range expected {
 		info, err := tools[i].Info(context.Background())

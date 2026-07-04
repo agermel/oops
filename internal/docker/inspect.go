@@ -90,16 +90,24 @@ func (c *Client) ContainerInspect(r *http.Request, containerID string) (nodelet.
 }
 
 // ExtractDSN 从容器 inspect 信息和推断的服务类型中提取 DSN。
-func ExtractDSN(stype ServiceType, detail nodelet.ContainerInspect) *DSNInfo {
+// defaultHost 是运行容器的服务器 IP 地址，当环境变量中未检测到 host 时用作默认值。
+func ExtractDSN(stype ServiceType, detail nodelet.ContainerInspect, defaultHost string) *DSNInfo {
 	extractor, ok := dsnExtractors[stype]
-	if !ok {
-		return nil
+	var dsn *DSNInfo
+
+	if ok {
+		envMap := parseEnvList(detail.Env)
+		dsn = extractor.parse(envMap)
 	}
 
-	envMap := parseEnvList(detail.Env)
-	dsn := extractor.parse(envMap)
+	// 抽取器不存在或返回 nil：构建基础 DSN，填入服务器 IP 作为 host。
 	if dsn == nil {
-		return nil
+		dsn = &DSNInfo{}
+	}
+
+	// 未从环境变量中检测到 host 时，默认使用服务器 IP。
+	if dsn.Host == "" {
+		dsn.Host = defaultHost
 	}
 
 	// 从容器端口映射中补充 Port 信息。
@@ -223,12 +231,12 @@ func extractRedisDSN(env map[string]string) *DSNInfo {
 	portNum, _ := strconv.Atoi(port)
 	raw := fmt.Sprintf("redis://%s:%d", host, portNum)
 	if host == "" {
-		raw = fmt.Sprintf("redis://127.0.0.1:%d", portNum)
+		raw = fmt.Sprintf("redis://:%d", portNum)
 	}
 	if password != "" {
 		raw = fmt.Sprintf("redis://:%s@%s:%d", password, host, portNum)
 		if host == "" {
-			raw = fmt.Sprintf("redis://:%s@127.0.0.1:%d", password, portNum)
+			raw = fmt.Sprintf("redis://:%s@:%d", password, portNum)
 		}
 	}
 

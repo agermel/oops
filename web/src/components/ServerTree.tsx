@@ -125,6 +125,9 @@ export function ServerTree({
                       conts.map((c) => {
                         const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
                         const label = serviceLabel(c.serviceType);
+                        const portsText = c.ports && c.ports.length > 0
+                          ? c.ports.map((p) => p.hostPort ? `${p.hostPort}->${p.containerPort}/${p.protocol || "tcp"}` : `${p.containerPort}/${p.protocol || "tcp"}`).join(", ")
+                          : "";
                         return (
                           <button
                             key={c.id}
@@ -132,7 +135,14 @@ export function ServerTree({
                             onClick={() => onSelectContainer(sw.nodelet.id, c.id)}
                           >
                             <Icon size={14} />
-                            <span className="tree-container-name">{c.name}</span>
+                            <div className="tree-container-info">
+                              <span className="tree-container-name">{c.name}</span>
+                              {(c.status || portsText) && (
+                                <span className="tree-container-sub">
+                                  {[c.status, portsText].filter(Boolean).join("  ·  ")}
+                                </span>
+                              )}
+                            </div>
                             {label && <span className="tree-container-type">{label}</span>}
                             <StatusDot alive={c.state === "running"} />
                           </button>

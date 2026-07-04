@@ -1,6 +1,7 @@
 package nodelet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -67,6 +68,15 @@ func (c *Client) InspectContainer(ctx context.Context, address string, token str
 		return ContainerInspect{}, err
 	}
 	return detail, nil
+}
+
+// ContainerExec 在远端 Nodelet 上执行容器内命令。
+func (c *Client) ContainerExec(ctx context.Context, address string, token string, containerID string, cmd []string) (ExecResult, error) {
+	var result ExecResult
+	if err := c.post(ctx, address, ContainerExecPath(containerID), token, ExecRequest{Cmd: cmd}, &result); err != nil {
+		return ExecResult{}, err
+	}
+	return result, nil
 }
 
 // ContainerLogsStream 读取远端 Nodelet 上某个容器的实时日志 SSE 流。
@@ -191,6 +201,66 @@ func (c *Client) stream(ctx context.Context, address string, route string, token
 		zap.Int64("latencyMs", latency),
 	)
 	return response.Body, nil
+}
+
+// post 发起 POST 请求，带 JSON body，并反序列化 JSON 响应。
+func (c *Client) post(ctx context.Context, address string, route string, token string, body any, out any) error {
+	endpoint, err := joinURL(address, route)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	start := time.Now()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	response, err := c.httpClient.Do(request)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		logutil.Error("nodelet client: post request failed",
+			zap.String("method", "POST"),
+			zap.String("path", route),
+			zap.String("endpoint", endpoint),
+			zap.Int64("latencyMs", latency),
+			zap.Error(err),
+		)
+		return err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		data, _ := io.ReadAll(response.Body)
+		message := strings.TrimSpace(string(data))
+		if message == "" {
+			message = http.StatusText(response.StatusCode)
+		}
+		logutil.Error("nodelet client: non-2xx post response",
+			zap.String("method", "POST"),
+			zap.String("path", route),
+			zap.Int("status", response.StatusCode),
+			zap.Int64("latencyMs", latency),
+		)
+		return fmt.Errorf("nodelet returned HTTP %d: %s", response.StatusCode, message)
+	}
+
+	logutil.Info("nodelet client: post request",
+		zap.String("method", "POST"),
+		zap.String("path", route),
+		zap.Int("status", response.StatusCode),
+		zap.Int64("latencyMs", latency),
+	)
+	return json.NewDecoder(response.Body).Decode(out)
 }
 
 // joinURL 拼接 Nodelet 地址和协议路径。

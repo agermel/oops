@@ -34,6 +34,9 @@ type NodeletClient interface {
 
 	// ContainerLogsStream 读取远端 Nodelet 上某个容器的实时日志 SSE 流。
 	ContainerLogsStream(context.Context, string, string, string, string) (io.ReadCloser, error)
+
+	// ContainerExec 在远端 Nodelet 上执行容器内命令。
+	ContainerExec(context.Context, string, string, string, []string) (nodelet.ExecResult, error)
 }
 
 // Options 保存中心端 API 服务依赖。
@@ -93,7 +96,6 @@ func NewFromConfig(cfg config.Config) *Server {
 		logutil.Error("mcp: manager", zap.Error(err))
 	} else {
 		s.mcpManager = mgr
-		mgr.StartKeepalive(5 * time.Minute)
 	}
 
 	// 项目存储。
@@ -116,10 +118,20 @@ func NewFromConfig(cfg config.Config) *Server {
 	userStore, err := auth.NewStore(auth.DefaultPath)
 	if err != nil {
 		logutil.Error("auth: user store", zap.Error(err))
+	}
+	s.UserStore = userStore
+	s.tokenTTL = 24 * time.Hour
+
+	if userStore != nil && userStore.IsSetup() {
+		s.TokenService = auth.NewTokenService(userStore.User.Password, s.tokenTTL)
 	} else {
-		s.UserStore = userStore
-		s.TokenService = auth.NewTokenService(userStore.User.Password, 24*time.Hour)
-		s.tokenTTL = 24 * time.Hour
+		// 尚未设置用户：使用随机密钥创建 TokenService，setup 完成后重建。
+		ts, err := auth.NewTokenServiceRandom(s.tokenTTL)
+		if err != nil {
+			logutil.Error("auth: random token service", zap.Error(err))
+		} else {
+			s.TokenService = ts
+		}
 	}
 
 	return s
@@ -217,6 +229,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/token", publicWrap(s.handleCreateToken))
 	mux.HandleFunc("DELETE /api/token", publicWrap(s.handleDeleteToken))
 	mux.HandleFunc("GET /api/auth/me", authed(s.handleAuthMe))
+	mux.HandleFunc("GET /api/auth/status", publicWrap(s.handleAuthStatus))
+	mux.HandleFunc("POST /api/setup", publicWrap(s.handleSetup))
 
 	// ---- Nodelets ----
 	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodeletList))
@@ -282,7 +296,6 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers", authed(s.handleProjectContainers))
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}", authed(s.handleContainerDetail))
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/logs/stream", authed(s.handleProjectLogsStream))
-	mux.HandleFunc("POST /api/projects/{pid}/servers/{sid}/containers/{cid}/check", authed(s.handleProjectHealthCheck))
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp", authed(s.handleContainerMCPGet))
 	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp", authed(s.handleContainerMCPDelete))
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNGet))

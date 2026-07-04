@@ -30,6 +30,9 @@ type Provider interface {
 
 	// ContainerLogsStream 返回指定容器的实时日志流。
 	ContainerLogsStream(r *http.Request, containerID string) (<-chan LogEntry, error)
+
+	// ContainerExec 在指定容器内执行命令。
+	ContainerExec(r *http.Request, containerID string, cmd []string) (ExecResult, error)
 }
 
 // Server 暴露 Nodelet 的 HTTP 协议。鉴权为强制要求。
@@ -189,6 +192,8 @@ func (s *Server) handleContainer(w http.ResponseWriter, r *http.Request) {
 	case "logs/stream":
 		logutil.Debug("nodelet: logs/stream start", zap.String("containerID", containerID))
 		s.handleContainerLogsStream(w, r, containerID)
+	case "exec":
+		s.handleContainerExec(w, r, containerID)
 	default:
 		http.NotFound(w, r)
 	}
@@ -234,6 +239,39 @@ func (s *Server) handleContainerLogsStream(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// handleContainerExec 在容器内执行命令并返回结果。
+func (s *Server) handleContainerExec(w http.ResponseWriter, r *http.Request, containerID string) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req ExecRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if len(req.Cmd) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "cmd is required")
+		return
+	}
+
+	start := time.Now()
+	result, err := s.provider.ContainerExec(r, containerID, req.Cmd)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		logutil.Errorf("nodelet: exec %s: %v", containerID, err)
+		writeJSONError(w, http.StatusServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
+		return
+	}
+	logutil.Info("nodelet: exec",
+		zap.String("containerID", containerID),
+		zap.Int("cmdLen", len(req.Cmd)),
+		zap.Int("exitCode", result.ExitCode),
+		zap.Int64("latencyMs", latency),
+	)
+	writeJSON(w, http.StatusOK, result)
+}
+
 // containerIDPattern 匹配 Docker 容器 ID（64 字符 hex）。
 var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
@@ -268,7 +306,7 @@ func splitContainerPath(path string) (string, string, bool) {
 			return "", "", false
 		}
 		action := parts[1]
-		if action == "logs" || action == "inspect" {
+		if action == "logs" || action == "inspect" || action == "exec" {
 			return containerID, action, true
 		}
 	}

@@ -4,7 +4,6 @@ import { Button } from "./components/ui/Button";
 import type {
   ContainerWithType,
   ContainerDetail as ContainerDetailType,
-  HealthResult,
   LogEntry,
   StepEvent,
   ChatExchange,
@@ -35,6 +34,7 @@ import { ToolsView } from "./components/ToolsView";
 import { SkillsView } from "./components/SkillsView";
 import { ConsolePanel } from "./components/ConsolePanel";
 import { LoginPage } from "./components/LoginPage";
+import { SetupPage } from "./components/SetupPage";
 import "./styles.css";
 
 export function App() {
@@ -44,15 +44,32 @@ export function App() {
 
   // ---- 登录状态 ----
   const hasInjectedUser = pageConfig.authProvider !== "none" && !!pageConfig.user;
-  const [authenticated, setAuthenticated] = React.useState(hasInjectedUser);
-  const [authChecked, setAuthChecked] = React.useState(hasInjectedUser);
+  // needsSetup 可能由服务端注入（生产模式），也可能未定义（Vite dev 模式）
+  const injectedNeedsSetup = pageConfig.needsSetup === true;
+  const [needsSetup, setNeedsSetup] = React.useState(injectedNeedsSetup);
+  const [authenticated, setAuthenticated] = React.useState(hasInjectedUser && !injectedNeedsSetup);
+  const [authChecked, setAuthChecked] = React.useState(hasInjectedUser || injectedNeedsSetup);
 
   React.useEffect(() => {
-    if (!hasInjectedUser) {
-      fetch("/api/auth/me")
-        .then((r) => { setAuthenticated(r.ok); setAuthChecked(true); })
-        .catch(() => { setAuthenticated(false); setAuthChecked(true); });
+    if (hasInjectedUser) return; // 服务端已注入用户 → 已登录
+
+    if (injectedNeedsSetup) {
+      // 服务端已告知需要设置（生产模式）
+      return;
     }
+
+    // Dev 模式或未注入时：并行检查 /api/auth/status 和 /api/auth/me
+    Promise.all([
+      fetch("/api/auth/status").then(r => r.json()).catch(() => ({ setup: false })),
+      fetch("/api/auth/me").then(r => ({ ok: r.ok })).catch(() => ({ ok: false })),
+    ]).then(([status, me]) => {
+      if (status.setup === false) {
+        setNeedsSetup(true);
+      } else {
+        setAuthenticated(me.ok);
+      }
+      setAuthChecked(true);
+    });
   }, []);
 
   // ---- 路由（始终调用，即使未登录也解析路径） ----
@@ -147,8 +164,6 @@ export function App() {
   const [containerDetail, setContainerDetail] = React.useState<ContainerDetailType | undefined>();
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState("");
-  const [health, setHealth] = React.useState<HealthResult | undefined>();
-  const [healthLoading, setHealthLoading] = React.useState(false);
 
   // ---- 日志状态 ----
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
@@ -320,7 +335,6 @@ export function App() {
   async function selectContainer(projectId: string, nodeletID: string, containerID: string) {
     closeLogStream();
     setDetailError("");
-    setHealth(undefined);
 
     setDetailLoading(true);
     try {
@@ -367,21 +381,6 @@ export function App() {
         setLogsError("日志流连接失败，请检查容器是否在运行");
       }
     };
-  }
-
-  async function checkHealth() {
-    if (!selectedContainerID || !selectedNodeletID) return;
-    setHealthLoading(true);
-    try {
-      setHealth(await apiRequest<HealthResult>(
-        serverPaths(selectedProjectID, selectedNodeletID).containerCheck(selectedContainerID),
-        { method: "POST" }
-      ));
-    } catch (err) {
-      setHealth({ status: "unknown", message: getErrorMessage(err, "探测失败"), latency: 0 });
-    } finally {
-      setHealthLoading(false);
-    }
   }
 
   async function sendChat(question?: string) {
@@ -626,8 +625,10 @@ export function App() {
 
   function selectServerFromUI(nodeletID: string) {
     if (!selectedProjectID) return;
+    if (selectedNodeletID !== nodeletID) {
+      setSelectedContainerID("");
+    }
     setSelectedNodeletID(nodeletID);
-    setSelectedContainerID("");
   }
 
   function selectContainerFromUI(nodeletID: string, containerID: string) {
@@ -644,11 +645,6 @@ export function App() {
         next.delete(nodeletID);
         return next;
       });
-      // 如果折叠的是当前选中的 server，清除选中状态
-      if (selectedNodeletID === nodeletID) {
-        setSelectedNodeletID("");
-        setSelectedContainerID("");
-      }
     } else {
       // 展开并选中：触发即时探测获取最新连通状态
       apiRequest(`/api/nodelets/${encodeURIComponent(nodeletID)}/probe`, { method: "POST" }).catch(() => {});
@@ -762,6 +758,9 @@ export function App() {
   if (!authChecked) {
     return <div className="login-page"><p>加载中...</p></div>;
   }
+  if (needsSetup) {
+    return <SetupPage />;
+  }
   if (!authenticated) {
     return <LoginPage />;
   }
@@ -842,8 +841,6 @@ export function App() {
             containerDetail={containerDetail}
             containerDetailLoading={detailLoading}
             containerDetailError={detailError}
-            health={health}
-            healthLoading={healthLoading}
             expandedServers={expandedServers}
             logs={logs}
             logsLoading={logsLoading}
@@ -852,7 +849,6 @@ export function App() {
             onBack={goToProjectList}
             onToggleServer={toggleServer}
             onSelectContainer={selectContainerFromUI}
-            onHealthCheck={checkHealth}
             onAutoScrollChange={setAutoScroll}
             onClearLogs={() => {
               flushLogs.cancel();
