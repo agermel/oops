@@ -150,7 +150,7 @@ export function App() {
       return {
         ...sw,
         host: { ...sw.host, available: si.status === "healthy" },
-        error: si.error || sw.error,
+        error: si.status === "healthy" ? undefined : (si.error || sw.error),
       };
     });
   }, [rawServers, nodeletStatusItems]);
