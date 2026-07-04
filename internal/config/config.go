@@ -14,9 +14,6 @@ const (
 
 	// DefaultPath 是生产/本地默认配置文件路径。
 	DefaultPath = "config/config.yaml"
-
-	// ExamplePath 是默认配置缺失时的示例配置路径。
-	ExamplePath = "config/config.example.yaml"
 )
 
 // Config 是应用启动或刷新时读取到的完整配置。
@@ -80,23 +77,18 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// LoadDefault 使用默认路径读取配置。
-func LoadDefault() (Config, error) {
-	return Load(DefaultPath)
-}
-
 // LoadRuntime 按运行时优先级读取配置。
 func LoadRuntime() (Config, error) {
 	if path := os.Getenv(EnvPath); path != "" {
 		return Load(path)
 	}
 
-	cfg, err := LoadDefault()
+	cfg, err := Load(DefaultPath)
 	if err == nil {
 		return cfg, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return Config{}, err
 	}
-	return Load(ExamplePath)
+	return Load("config/config.example.yaml")
 }
