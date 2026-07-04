@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -233,10 +234,8 @@ func (s *ProjectStore) ExcludeContainer(projectID string, ref string) error {
 
 	for i, p := range s.config.Projects {
 		if p.ID == projectID {
-			for _, r := range p.ExcludedContainerRefs {
-				if r == ref {
-					return fmt.Errorf("container ref %q already excluded from project %q", ref, projectID)
-				}
+			if slices.Contains(p.ExcludedContainerRefs, ref) {
+				return fmt.Errorf("container ref %q already excluded from project %q", ref, projectID)
 			}
 			s.config.Projects[i].ExcludedContainerRefs = append(s.config.Projects[i].ExcludedContainerRefs, ref)
 			s.config.Projects[i].UpdatedAt = time.Now()

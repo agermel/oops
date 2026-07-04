@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 
@@ -48,9 +49,7 @@ func (s *ContainerDSNStore) Get(nodeletID, containerID string) map[string]string
 	}
 	// return a copy to avoid races
 	out := make(map[string]string, len(pairs))
-	for k, v := range pairs {
-		out[k] = v
-	}
+	maps.Copy(out, pairs)
 	return out
 }
 
@@ -65,9 +64,7 @@ func (s *ContainerDSNStore) Set(nodeletID, containerID string, pairs map[string]
 	} else {
 		// copy to avoid external mutation
 		cp := make(map[string]string, len(pairs))
-		for k, v := range pairs {
-			cp[k] = v
-		}
+		maps.Copy(cp, pairs)
 		s.entries[key] = cp
 	}
 
@@ -108,9 +105,7 @@ func dsnEntriesToRuntime(entries map[string]map[string]string) []runtimestore.DS
 			continue
 		}
 		cp := make(map[string]string, len(pairs))
-		for k, v := range pairs {
-			cp[k] = v
-		}
+		maps.Copy(cp, pairs)
 		records = append(records, runtimestore.DSNRecord{
 			NodeletID:   nodeletID,
 			ContainerID: containerID,
@@ -124,9 +119,7 @@ func dsnEntriesFromRuntime(records []runtimestore.DSNRecord) map[string]map[stri
 	entries := make(map[string]map[string]string, len(records))
 	for _, record := range records {
 		cp := make(map[string]string, len(record.Pairs))
-		for k, v := range record.Pairs {
-			cp[k] = v
-		}
+		maps.Copy(cp, record.Pairs)
 		entries[containerKey(record.NodeletID, record.ContainerID)] = cp
 	}
 	return entries
