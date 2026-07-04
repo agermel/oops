@@ -9,6 +9,7 @@ export function projectPaths(projectId: string) {
     chat: `/api/projects/${pid}/chat`,
     sessions: `/api/projects/${pid}/sessions`,
     session: (sid: string) => `/api/projects/${pid}/sessions/${enc(sid)}`,
+    excludedContainers: `/api/projects/${pid}/excluded-containers`,
   };
 }
 

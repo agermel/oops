@@ -22,6 +22,7 @@ export type Project = {
   description?: string;
   githubRepo?: string;
   nodeletIds: string[];
+  excludedContainerRefs?: string[];
   createdAt: string;
   updatedAt: string;
 };

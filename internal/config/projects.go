@@ -18,8 +18,9 @@ type Project struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	GitHubRepo  string    `json:"githubRepo,omitempty"`
-	NodeletIDs  []string  `json:"nodeletIds"`
-	CreatedAt   time.Time `json:"createdAt"`
+	NodeletIDs           []string  `json:"nodeletIds"`
+	ExcludedContainerRefs []string  `json:"excludedContainerRefs,omitempty"`
+	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
@@ -122,6 +123,9 @@ func (s *ProjectStore) Add(p Project) error {
 	if p.NodeletIDs == nil {
 		p.NodeletIDs = []string{}
 	}
+	if p.ExcludedContainerRefs == nil {
+		p.ExcludedContainerRefs = []string{}
+	}
 
 	s.config.Projects = append(s.config.Projects, p)
 	return s.saveLocked()
@@ -151,6 +155,9 @@ func (s *ProjectStore) Update(p Project) error {
 	p.UpdatedAt = time.Now()
 	if p.NodeletIDs == nil {
 		p.NodeletIDs = s.config.Projects[idx].NodeletIDs
+	}
+	if p.ExcludedContainerRefs == nil {
+		p.ExcludedContainerRefs = s.config.Projects[idx].ExcludedContainerRefs
 	}
 
 	s.config.Projects[idx] = p
@@ -215,6 +222,51 @@ func (s *ProjectStore) RemoveNodelet(projectID string, nodeletID string) error {
 				return fmt.Errorf("nodelet %q not found in project %q", nodeletID, projectID)
 			}
 			s.config.Projects[i].NodeletIDs = append(p.NodeletIDs[:idx], p.NodeletIDs[idx+1:]...)
+			s.config.Projects[i].UpdatedAt = time.Now()
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("project %q not found", projectID)
+}
+
+// ExcludeContainer 将容器加入项目的排除列表。
+func (s *ProjectStore) ExcludeContainer(projectID string, ref string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, p := range s.config.Projects {
+		if p.ID == projectID {
+			for _, r := range p.ExcludedContainerRefs {
+				if r == ref {
+					return fmt.Errorf("container ref %q already excluded from project %q", ref, projectID)
+				}
+			}
+			s.config.Projects[i].ExcludedContainerRefs = append(s.config.Projects[i].ExcludedContainerRefs, ref)
+			s.config.Projects[i].UpdatedAt = time.Now()
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("project %q not found", projectID)
+}
+
+// IncludeContainer 将容器从项目的排除列表移除。
+func (s *ProjectStore) IncludeContainer(projectID string, ref string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, p := range s.config.Projects {
+		if p.ID == projectID {
+			idx := -1
+			for j, r := range p.ExcludedContainerRefs {
+				if r == ref {
+					idx = j
+					break
+				}
+			}
+			if idx < 0 {
+				return fmt.Errorf("container ref %q not found in project %q exclusions", ref, projectID)
+			}
+			s.config.Projects[i].ExcludedContainerRefs = append(p.ExcludedContainerRefs[:idx], p.ExcludedContainerRefs[idx+1:]...)
 			s.config.Projects[i].UpdatedAt = time.Now()
 			return s.saveLocked()
 		}

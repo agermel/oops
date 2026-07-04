@@ -230,8 +230,8 @@
 
 /* ---- 服务器树 ---- */
 .server-tree {
-  width: 310px;
-  min-width: 280px;
+  width: 292px;
+  min-width: 270px;
   background: var(--surface-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -244,8 +244,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 52px;
-  padding: 0 var(--space-4);
+  min-height: 42px;
+  padding: 0 var(--space-3);
   border-bottom: 1px solid var(--border);
   font-weight: var(--font-semibold);
   font-size: var(--text-md);
@@ -255,7 +255,7 @@
 .tree-list {
   flex: 0 1 auto;
   overflow-y: auto;
-  padding: var(--space-3);
+  padding: 6px;
 }
 
 .tree-empty,
@@ -267,22 +267,25 @@
 }
 
 .tree-node {
-  margin-bottom: 2px;
+  margin-bottom: 1px;
 }
 
 .tree-node-main {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .tree-remove-btn {
   flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
 }
 
 .tree-node-detail {
-  padding-left: 22px;
-  padding-top: var(--space-1);
+  padding-left: 28px;
+  padding-top: 2px;
 }
 
 .tree-node-error {
@@ -300,10 +303,11 @@
 .tree-server {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 6px;
   width: 100%;
   min-width: 0;
-  padding: 9px 10px;
+  min-height: 38px;
+  padding: 5px 8px;
   border: none;
   background: none;
   color: var(--text);
@@ -324,7 +328,7 @@
 
 .tree-server-info strong {
   display: block;
-  font-size: var(--text-base);
+  font-size: 13px;
   font-weight: var(--font-bold);
   white-space: nowrap;
   overflow: hidden;
@@ -334,7 +338,7 @@
 .tree-server-info small {
   display: block;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -343,9 +347,10 @@
 .tree-container {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 6px;
   width: 100%;
-  padding: var(--space-2) 10px;
+  min-height: 30px;
+  padding: 4px 7px;
   border: none;
   background: none;
   color: var(--gray-700);
@@ -366,20 +371,24 @@
 }
 
 .tree-container-info {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .tree-container-name {
+  font-size: 13px;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .tree-container-sub {
-  font-size: var(--text-xs);
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1.15;
   color: var(--gray-400);
   white-space: nowrap;
   overflow: hidden;
@@ -387,6 +396,7 @@
 }
 
 .tree-container-type {
+  margin-left: auto;
   font-size: var(--text-xs);
   color: var(--gray-400);
   text-transform: uppercase;
@@ -1629,4 +1639,84 @@
 .dsn-kv-actions-right {
   display: flex;
   gap: var(--space-2);
+}
+
+/* ---- 容器隐藏/恢复按钮 ---- */
+
+.tree-hide-btn {
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.tree-container:hover .tree-hide-btn {
+  opacity: 1;
+}
+
+.tree-hide-btn:hover {
+  color: var(--warning, #d97706) !important;
+}
+
+/* ---- 已隐藏容器区 ---- */
+
+.tree-hidden-section {
+  margin-top: 3px;
+  border-top: 1px dashed var(--border);
+  padding-top: 3px;
+}
+
+.tree-hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: 26px;
+  padding: 2px 7px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.tree-hidden-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.tree-hidden-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: 3px 7px;
+  color: var(--gray-400);
+  font-size: 13px;
+  opacity: 0.65;
+}
+
+.tree-hidden-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-restore-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.tree-restore-btn:hover {
+  color: var(--primary);
+  background: var(--surface-hover);
 }

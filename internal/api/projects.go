@@ -231,3 +231,44 @@ func (s *Server) handleProjectContainers(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, result)
 }
+
+// handleProjectExcludeContainer handles POST /api/projects/{pid}/excluded-containers.
+func (s *Server) handleProjectExcludeContainer(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("pid")
+
+	var body struct {
+		NodeletID   string `json:"nodeletId"`
+		ContainerID string `json:"containerId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.NodeletID == "" || body.ContainerID == "" {
+		writeJSONError(w, "nodeletId and containerId are required", http.StatusBadRequest)
+		return
+	}
+
+	ref := body.NodeletID + "/" + body.ContainerID
+	if err := s.projectStore.ExcludeContainer(projectID, ref); err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSONOK(w)
+}
+
+// handleProjectIncludeContainer handles DELETE /api/projects/{pid}/excluded-containers.
+func (s *Server) handleProjectIncludeContainer(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("pid")
+	nodeletID := r.URL.Query().Get("nodeletId")
+	containerID := r.URL.Query().Get("containerId")
+
+	if nodeletID == "" || containerID == "" {
+		writeJSONError(w, "nodeletId and containerId query params are required", http.StatusBadRequest)
+		return
+	}
+
+	ref := nodeletID + "/" + containerID
+	if err := s.projectStore.IncludeContainer(projectID, ref); err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSONOK(w)
+}
+

@@ -67,3 +67,35 @@ export function useContainers(projectId: string, nodeletId: string) {
     enabled: !!projectId && !!nodeletId,
   });
 }
+
+// ---- Container Exclusions ----
+
+export function useExcludeContainer(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeletId, containerId }: { nodeletId: string; containerId: string }) =>
+      apiRequest(projectPaths(projectId).excludedContainers, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodeletId, containerId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.projects.all });
+    },
+  });
+}
+
+export function useIncludeContainer(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeletId, containerId }: { nodeletId: string; containerId: string }) => {
+      const params = new URLSearchParams({ nodeletId, containerId });
+      return apiRequest(`${projectPaths(projectId).excludedContainers}?${params}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.projects.all });
+    },
+  });
+}

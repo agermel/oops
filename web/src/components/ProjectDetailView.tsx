@@ -157,6 +157,7 @@ export function ProjectDetailView({
           containersLoading={containersLoading}
           selectedContainerID={selectedContainerID}
           expandedServers={expandedServers}
+          excludedContainerRefs={project.excludedContainerRefs || []}
           onToggleServer={onToggleServer}
           onSelectContainer={onSelectContainer}
         />

@@ -279,6 +279,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/projects/{pid}", authed(s.handleProjectUpdate))
 	mux.HandleFunc("DELETE /api/projects/{pid}", authed(s.handleProjectDelete))
 
+	// ---- Project Container Exclusions ----
+	mux.HandleFunc("POST /api/projects/{pid}/excluded-containers", authed(s.handleProjectExcludeContainer))
+	mux.HandleFunc("DELETE /api/projects/{pid}/excluded-containers", authed(s.handleProjectIncludeContainer))
+
 	// ---- Project Chat ----
 	mux.HandleFunc("POST /api/projects/{pid}/chat", authedChat(s.handleProjectChat))
 
