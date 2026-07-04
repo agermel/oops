@@ -1,5 +1,6 @@
 import React from "react";
 import { Server } from "lucide-react";
+import { authPaths } from "../lib/paths";
 
 export function SetupPage() {
   const [username, setUsername] = React.useState("");
@@ -21,7 +22,7 @@ export function SetupPage() {
       formData.set("name", username.trim());
       formData.set("password", password);
 
-      const resp = await fetch("/api/setup", {
+      const resp = await fetch(authPaths.setup, {
         method: "POST",
         body: formData,
       });

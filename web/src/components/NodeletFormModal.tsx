@@ -1,6 +1,8 @@
 import React from "react";
 import type { NodeletConfig } from "../types";
+import { DEFAULT_NODELET_ADDRESS } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { nodeletPaths, nodeletBasePaths } from "../lib/paths";
 import { Modal } from "./Modal";
 import { Button } from "./ui/Button";
 
@@ -15,7 +17,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
   const isNew = !editItem;
 
   const [name, setName] = React.useState(editItem?.name ?? "");
-  const [address, setAddress] = React.useState(editItem?.address ?? "http://:8686");
+  const [address, setAddress] = React.useState(editItem?.address ?? DEFAULT_NODELET_ADDRESS);
   const hasExistingToken = editItem?.hasToken === true;
   const [token, setToken] = React.useState("");
 
@@ -44,7 +46,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
     setSaveOk("");
     try {
       const method = isNew ? "POST" : "PUT";
-      const url = isNew ? "/api/nodelets" : `/api/nodelets/${encodeURIComponent(editItem!.id)}`;
+      const url = isNew ? nodeletBasePaths.list : nodeletPaths(editItem!.id).detail;
       await apiRequest(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -64,7 +66,7 @@ export function NodeletFormModal({ editItem, onSaved, onClose }: Props) {
     setTestResult("");
     try {
       const resp = await apiRequest<{ status: string; error?: string }>(
-        "/api/nodelets/test",
+        nodeletBasePaths.test,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

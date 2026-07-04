@@ -1,6 +1,9 @@
 import React from "react";
 import { Cog, RefreshCw } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { toolPaths } from "../lib/paths";
+import { queryKeys } from "../hooks/queries";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { Button } from "./ui/Button";
 
@@ -20,61 +23,47 @@ type ToolsData = {
 // ---- 组件 ----
 
 export function ToolsView() {
-  const [data, setData] = React.useState<ToolsData | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState("");
+  const queryClient = useQueryClient();
 
-  // 每个 toggle 的独立 loading 状态：key=toolName → true 表示正在请求
-  const [toggling, setToggling] = React.useState<Record<string, boolean>>({});
+  const { data, isLoading: loading, error: queryError, refetch } = useQuery<ToolsData>({
+    queryKey: queryKeys.tools.all,
+    queryFn: () => apiRequest<ToolsData>(toolPaths.list),
+  });
 
-  async function fetchTools() {
-    setLoading(true);
-    setError("");
-    try {
-      setData(await apiRequest<ToolsData>("/api/tools"));
-    } catch (err) {
-      setError(getErrorMessage(err, "读取工具列表失败"));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const error = queryError ? getErrorMessage(queryError, "读取工具列表失败") : "";
 
-  React.useEffect(() => {
-    fetchTools();
-  }, []);
-
-  async function toggleTool(name: string, enabled: boolean) {
-    setToggling((prev) => ({ ...prev, [name]: true }));
-    // 乐观更新
-    setData((prev) => {
-      if (!prev) return prev;
-      const update = (items: ToolItem[]) =>
-        items.map((t) => (t.name === name ? { ...t, enabled } : t));
-      return {
-        native: update(prev.native),
-        mcp: Object.fromEntries(
-          Object.entries(prev.mcp).map(([conn, tools]) => [conn, update(tools)])
-        ),
-      };
-    });
-
-    try {
-      await apiRequest(`/api/tools/${encodeURIComponent(name)}`, {
+  const toggleMutation = useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      apiRequest(toolPaths.detail(name), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
+      }),
+    onMutate: async ({ name, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.tools.all });
+      const previous = queryClient.getQueryData<ToolsData>(queryKeys.tools.all);
+      queryClient.setQueryData<ToolsData>(queryKeys.tools.all, (prev) => {
+        if (!prev) return prev;
+        const update = (items: ToolItem[]) =>
+          items.map((t) => (t.name === name ? { ...t, enabled } : t));
+        return {
+          native: update(prev.native),
+          mcp: Object.fromEntries(
+            Object.entries(prev.mcp).map(([conn, tools]) => [conn, update(tools)])
+          ),
+        };
       });
-    } catch {
-      // 失败时回滚
-      fetchTools();
-    } finally {
-      setToggling((prev) => {
-        const next = { ...prev };
-        delete next[name];
-        return next;
-      });
-    }
-  }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.tools.all, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tools.all });
+    },
+  });
 
   const hasMCP = data && Object.keys(data.mcp).length > 0;
   const hasContent = data && (data.native.length > 0 || hasMCP);
@@ -90,7 +79,7 @@ export function ToolsView() {
               ? `${data.native.length + Object.values(data.mcp).reduce((sum, t) => sum + t.length, 0)} 个工具`
               : "—"}
         </span>
-        <Button variant="ghost" size="sm" onClick={fetchTools} disabled={loading}>
+        <Button variant="ghost" size="sm" onClick={() => refetch()} disabled={loading}>
           <RefreshCw size={14} className={loading ? "spin" : ""} />
           <span>刷新</span>
         </Button>
@@ -113,8 +102,8 @@ export function ToolsView() {
                   <ToolRow
                     key={tool.name}
                     tool={tool}
-                    toggling={!!toggling[tool.name]}
-                    onToggle={(enabled) => toggleTool(tool.name, enabled)}
+                    toggling={toggleMutation.isPending && toggleMutation.variables?.name === tool.name}
+                    onToggle={(enabled) => toggleMutation.mutate({ name: tool.name, enabled })}
                   />
                 ))}
               </div>
@@ -131,8 +120,8 @@ export function ToolsView() {
                     <ToolRow
                       key={tool.name}
                       tool={tool}
-                      toggling={!!toggling[tool.name]}
-                      onToggle={(enabled) => toggleTool(tool.name, enabled)}
+                      toggling={toggleMutation.isPending && toggleMutation.variables?.name === tool.name}
+                      onToggle={(enabled) => toggleMutation.mutate({ name: tool.name, enabled })}
                     />
                   ))}
                 </div>

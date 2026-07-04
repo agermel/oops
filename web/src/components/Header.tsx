@@ -1,10 +1,11 @@
 import { Sparkles, LogOut } from "lucide-react";
 import { navigation } from "../types";
+import { authPaths } from "../lib/paths";
 
 export function Header({ activeNav, onNavChange }: { activeNav: string; onNavChange: (id: string) => void }) {
   async function handleLogout() {
     try {
-      await fetch("/api/token", { method: "DELETE" });
+      await fetch(authPaths.token, { method: "DELETE" });
     } catch {
       // 即使请求失败也清除本地状态，token 可能已过期或基于 cookie
     }

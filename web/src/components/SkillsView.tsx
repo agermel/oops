@@ -1,6 +1,7 @@
 import React from "react";
-import { Skill } from "../types";
+import { Skill, SKILL_MAX_STEPS, SKILL_DEFAULT_MAX_STEPS } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { skillPaths } from "../lib/paths";
 import { Pencil, Trash2, Eye, EyeOff } from "lucide-react";
 import { Modal } from "./Modal";
 
@@ -19,7 +20,7 @@ export function SkillsView({ skills, onRefresh }: Props) {
     setSaving(true);
     setSaveError("");
     try {
-      await apiRequest(`/api/skills/${encodeURIComponent(updated.name)}`, {
+      await apiRequest(skillPaths.detail(updated.name), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updated),
@@ -37,7 +38,7 @@ export function SkillsView({ skills, onRefresh }: Props) {
     if (!window.confirm(`确定要删除技能 "${name}" 吗？`)) return;
     setDeleting(name);
     try {
-      await apiRequest(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+      await apiRequest(skillPaths.detail(name), { method: "DELETE" });
       onRefresh();
     } catch (err) {
       alert(getErrorMessage(err, "删除失败"));
@@ -70,7 +71,7 @@ export function SkillsView({ skills, onRefresh }: Props) {
               <td className="mono">{skill.name}</td>
               <td>{skill.label}</td>
               <td className="desc-cell" title={skill.description}>{skill.description}</td>
-              <td>{skill.name === "diagnose" ? 10 : skill.name === "inspect" ? 5 : 15}</td>
+              <td>{SKILL_MAX_STEPS[skill.name] ?? SKILL_DEFAULT_MAX_STEPS}</td>
               <td>
                 <span className={`status-pill ${skill.enabled ? "pill-alive" : "pill-dead"}`}>
                   {skill.enabled ? "启用" : "禁用"}

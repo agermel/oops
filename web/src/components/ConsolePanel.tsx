@@ -1,6 +1,8 @@
 import React from "react";
 import { Terminal, Trash2, ChevronUp, ChevronDown } from "lucide-react";
-import AnsiConvertor from "ansi-to-html";
+import { ansiConvertor, CONSOLE_MAX_ENTRIES } from "../types";
+import { sanitizeHTML } from "../lib/sanitize";
+import { consolePaths } from "../lib/paths";
 
 interface ConsoleEntry {
   timestamp: string;
@@ -8,20 +10,9 @@ interface ConsoleEntry {
   message: string;
 }
 
-const ansi = new AnsiConvertor({ escapeXML: true, fg: "#f5f7fa", bg: "#1f2430" });
+const ansi = ansiConvertor;
 
-function sanitize(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
-    .replace(/<object[\s\S]*?<\/object>/gi, "")
-    .replace(/<embed[\s\S]*?>/gi, "")
-    .replace(/\bon\w+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\bon\w+\s*=\s*'[^']*'/gi, "")
-    .replace(/javascript\s*:/gi, "");
-}
-
-const MAX_ENTRIES = 500;
+const MAX_ENTRIES = CONSOLE_MAX_ENTRIES;
 
 export function ConsolePanel() {
   const [entries, setEntries] = React.useState<ConsoleEntry[]>([]);
@@ -33,7 +24,7 @@ export function ConsolePanel() {
 
   React.useEffect(() => {
     setConnStatus("connecting");
-    const source = new EventSource("/api/console/stream");
+    const source = new EventSource(consolePaths.stream);
     sourceRef.current = source;
 
     source.onopen = () => {
@@ -145,7 +136,7 @@ export function ConsolePanel() {
             <div key={`${e.timestamp}-${i}`} className={`console-line level-${e.level}`}>
               <span className="console-ts">{e.timestamp.slice(11, 19)}</span>
               <span className="console-level-tag">{e.level}</span>
-              <span className="console-msg" dangerouslySetInnerHTML={{ __html: sanitize(ansi.toHtml(e.message)) }} />
+              <span className="console-msg" dangerouslySetInnerHTML={{ __html: sanitizeHTML(ansi.toHtml(e.message)) }} />
             </div>
           ))
         )}

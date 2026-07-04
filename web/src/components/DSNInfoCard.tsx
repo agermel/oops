@@ -1,6 +1,7 @@
 import React from "react";
 import { Edit3 } from "lucide-react";
 import type { DSNInfo } from "../types";
+import { DSN_STANDARD_FIELDS } from "../types";
 import { Button } from "./ui/Button";
 
 function monoClass(override: boolean): string {
@@ -66,7 +67,7 @@ export function DSNInfoCard({
           )}
           {/* 额外的覆盖键值对（不在标准 DSN 字段内） */}
           {dsnOverrides && Object.entries(dsnOverrides)
-            .filter(([k]) => !["host", "port", "user", "database", "raw"].includes(k))
+            .filter(([k]) => !DSN_STANDARD_FIELDS.includes(k as any))
             .map(([k, v]) => (
               <React.Fragment key={k}>
                 <dt>{k}</dt>

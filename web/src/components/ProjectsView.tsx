@@ -1,7 +1,9 @@
 import React from "react";
 import { Plus, FolderKanban, Trash2, Edit3, ChevronRight, Github } from "lucide-react";
 import type { Project } from "../types";
+import { useModal } from "../hooks/useModal";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { projectBasePaths, projectPaths } from "../lib/paths";
 import { Modal } from "./Modal";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
@@ -27,26 +29,22 @@ export function ProjectsView({
   onSelect: (id: string) => void;
   onRefresh: () => void;
 }) {
-  const [showForm, setShowForm] = React.useState(false);
-  const [editing, setEditing] = React.useState<Project | null>(null);
-  const [isNew, setIsNew] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [formError, setFormError] = React.useState("");
   const [deleteError, setDeleteError] = React.useState("");
   const githubInputRef = React.useRef<HTMLInputElement>(null);
 
+  const formModal = useModal<Project>();
+  const isNew = formModal.data ? formModal.data.id === "" : true;
+
   function openAdd() {
-    setIsNew(true);
-    setEditing(emptyProject());
     setFormError("");
-    setShowForm(true);
+    formModal.onOpen(emptyProject());
   }
 
   function openEdit(p: Project, focusGithub?: boolean) {
-    setIsNew(false);
-    setEditing({ ...p });
     setFormError("");
-    setShowForm(true);
+    formModal.onOpen({ ...p });
     if (focusGithub) {
       setTimeout(() => githubInputRef.current?.focus(), 50);
     }
@@ -54,23 +52,22 @@ export function ProjectsView({
 
   function closeForm() {
     if (saving) return;
-    setShowForm(false);
-    setEditing(null);
+    formModal.onClose();
     setFormError("");
   }
 
   async function handleSave() {
-    if (!editing || saving) return;
+    if (!formModal.data || saving) return;
     setSaving(true);
     setFormError("");
-    const url = isNew ? "/api/projects" : `/api/projects/${encodeURIComponent(editing.id)}`;
+    const url = isNew ? projectBasePaths.create : projectPaths(formModal.data!.id).detail;
     const method = isNew ? "POST" : "PUT";
 
     try {
       const created = await apiRequest<Project>(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(savePayload(editing)),
+        body: JSON.stringify(savePayload(formModal.data!)),
       });
       closeForm();
       if (isNew && created?.id) {
@@ -88,7 +85,7 @@ export function ProjectsView({
     if (!window.confirm(`确定要删除该项目吗？`)) return;
     setDeleteError("");
     try {
-      await apiRequest(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await apiRequest(projectPaths(id).detail, { method: "DELETE" });
       onRefresh();
     } catch (err) {
       setDeleteError(getErrorMessage(err, "删除失败"));
@@ -160,12 +157,12 @@ export function ProjectsView({
         )}
       </div>
 
-      {showForm && editing && (
+      {formModal.open && formModal.data && (
         <Modal
-          title={editing.id ? "编辑项目" : "新建项目"}
+          title={formModal.data.id ? "编辑项目" : "新建项目"}
           onClose={closeForm}
           footer={
-            <Button onClick={handleSave} disabled={!editing.name.trim() || saving}>
+            <Button onClick={handleSave} disabled={!formModal.data.name.trim() || saving}>
               {saving ? "保存中..." : "保存"}
             </Button>
           }
@@ -173,23 +170,23 @@ export function ProjectsView({
           <label htmlFor="project-name">名称</label>
           <FormInput
             id="project-name"
-            value={editing.name}
-            onChange={(e) => setEditing({ ...editing, name: e.target.value, id: editing.id || `${e.target.value.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}` })}
+            value={formModal.data.name}
+            onChange={(e) => formModal.setData({ ...formModal.data!, name: e.target.value, id: formModal.data!.id || `${e.target.value.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}` })}
             placeholder="例如: CCNU Box"
           />
           <label htmlFor="project-desc">描述</label>
           <FormInput
             id="project-desc"
-            value={editing.description || ""}
-            onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+            value={formModal.data.description || ""}
+            onChange={(e) => formModal.setData({ ...formModal.data!, description: e.target.value })}
             placeholder="项目简介（可选）"
           />
           <label htmlFor="project-github">GitHub 仓库</label>
           <FormInput
             id="project-github"
             ref={githubInputRef}
-            value={editing.githubRepo || ""}
-            onChange={(e) => setEditing({ ...editing, githubRepo: e.target.value })}
+            value={formModal.data.githubRepo || ""}
+            onChange={(e) => formModal.setData({ ...formModal.data!, githubRepo: e.target.value })}
             placeholder="例如: https://github.com/user/repo"
           />
           {formError && <div className="error-banner">{formError}</div>}

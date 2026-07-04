@@ -3,8 +3,6 @@ import { ArrowLeft, Github, ExternalLink, Check, X, Pencil } from "lucide-react"
 import type {
   Project,
   ServerWithNodelet,
-  ContainerWithType,
-  ContainerDetail as ContainerDetailType,
   LogEntry,
 } from "../types";
 import { ServerTree } from "./ServerTree";
@@ -12,19 +10,15 @@ import { ContainerDetailView } from "./ContainerDetail";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { projectPaths } from "../lib/paths";
 
 export function ProjectDetailView({
   project,
   servers,
   serversLoading,
   serverError,
-  containers,
-  containersLoading,
   selectedNodeletID,
   selectedContainerID,
-  containerDetail,
-  containerDetailLoading,
-  containerDetailError,
   expandedServers,
   logs,
   logsLoading,
@@ -42,13 +36,8 @@ export function ProjectDetailView({
   servers: ServerWithNodelet[];
   serversLoading: boolean;
   serverError: string;
-  containers: Record<string, ContainerWithType[]>;
-  containersLoading: Set<string>;
   selectedNodeletID: string;
   selectedContainerID: string;
-  containerDetail?: ContainerDetailType;
-  containerDetailLoading: boolean;
-  containerDetailError: string;
   expandedServers: Set<string>;
   logs: LogEntry[];
   logsLoading: boolean;
@@ -79,7 +68,7 @@ export function ProjectDetailView({
     setRepoSaving(true);
     setRepoError("");
     try {
-      await apiRequest(`/api/projects/${encodeURIComponent(project.id)}`, {
+      await apiRequest(projectPaths(project.id).detail, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -153,8 +142,6 @@ export function ProjectDetailView({
           servers={servers}
           serversLoading={serversLoading}
           serverError={serverError}
-          containers={containers}
-          containersLoading={containersLoading}
           selectedContainerID={selectedContainerID}
           expandedServers={expandedServers}
           excludedContainerRefs={project.excludedContainerRefs || []}
@@ -163,9 +150,6 @@ export function ProjectDetailView({
         />
 
         <ContainerDetailView
-          detail={containerDetail}
-          loading={containerDetailLoading}
-          error={containerDetailError}
           logs={logs}
           logsLoading={logsLoading}
           logsError={logsError}

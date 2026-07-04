@@ -1,5 +1,6 @@
 import React from "react";
 import { Server } from "lucide-react";
+import { authPaths } from "../lib/paths";
 
 export function LoginPage() {
   const [username, setUsername] = React.useState("");
@@ -18,7 +19,7 @@ export function LoginPage() {
       formData.set("username", username);
       formData.set("password", password);
 
-      const resp = await fetch("/api/token", {
+      const resp = await fetch(authPaths.token, {
         method: "POST",
         body: formData,
       });

@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "../lib/api";
-import { projectPaths, serverPaths } from "../lib/paths";
+import { projectPaths, serverPaths, nodeletPaths, nodeletBasePaths, mcpConnectionPaths } from "../lib/paths";
 import { queryKeys } from "./queries";
-import type { ServerWithNodelet, NodeletStatusItem, ContainerWithType } from "../types";
+import type { ServerWithNodelet, NodeletStatusItem, ContainerWithType, MCPConnectionStatus, ProjectMCPConnection } from "../types";
 
 // ---- Servers ----
 
@@ -52,7 +52,7 @@ export function useAddServer(projectId: string) {
 export function useNodeletStatus() {
   return useQuery<NodeletStatusItem[]>({
     queryKey: queryKeys.nodelets.status,
-    queryFn: () => apiRequest<NodeletStatusItem[]>("/api/nodelets/status"),
+    queryFn: () => apiRequest<NodeletStatusItem[]>(nodeletBasePaths.status),
     staleTime: 30_000,
     refetchInterval: 30_000, // 30s 轮询
   });
@@ -97,5 +97,24 @@ export function useIncludeContainer(projectId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.projects.all });
     },
+  });
+}
+
+// ---- MCP Connections ----
+
+export function useMCPConnections() {
+  return useQuery<MCPConnectionStatus[]>({
+    queryKey: queryKeys.mcp.all,
+    queryFn: () => apiRequest<MCPConnectionStatus[]>(mcpConnectionPaths.list),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useProjectMCPConnections(projectId: string) {
+  return useQuery<ProjectMCPConnection[]>({
+    queryKey: queryKeys.mcp.byProject(projectId),
+    queryFn: () => apiRequest<ProjectMCPConnection[]>(projectPaths(projectId).mcpConnections),
+    enabled: !!projectId,
+    refetchInterval: 30_000,
   });
 }

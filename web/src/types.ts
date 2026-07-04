@@ -163,6 +163,12 @@ export type MCPConnectionStatus = MCPConnectionConfig & {
   tools?: ToolInfo[];
 };
 
+// ProjectMCPConnection extends MCPConnectionStatus with a scope field that tells whether
+// the connection is bound to a specific container or only to a server/nodelet.
+export type ProjectMCPConnection = MCPConnectionStatus & {
+  scope: "container" | "nodelet";
+};
+
 // MCPPrefill 用于从容器 DSN 信息预填 MCP 连接表单。
 export type MCPPrefill = {
   name: string;
@@ -349,6 +355,30 @@ export function serviceLabel(serviceType: string): string {
 }
 
 // ---- 常量 ----
+
+export const SESSION_STORAGE_KEY = "oops_session_id";
+
+/** Standard DSN field keys for display ordering in DSNInfoCard. */
+export const DSN_STANDARD_FIELDS = ["host", "port", "user", "database", "raw"] as const;
+
+/** Default max steps per skill name. Falls back to 15. */
+export const SKILL_MAX_STEPS: Record<string, number> = {
+  diagnose: 10,
+  inspect: 5,
+};
+export const SKILL_DEFAULT_MAX_STEPS = 15;
+
+/** Max token budget displayed in chat UI. */
+export const CHAT_MAX_TOKENS = 64_000;
+
+/** ConsolePanel max displayed entries. */
+export const CONSOLE_MAX_ENTRIES = 500;
+
+/** Max historical session badges in chat bar. */
+export const CHAT_MAX_SESSION_BADGES = 8;
+
+/** Default nodelet address placeholder. */
+export const DEFAULT_NODELET_ADDRESS = "http://:8686";
 
 export const MAX_LOGS = 2000;
 export const LOG_FLUSH_MS = 250;

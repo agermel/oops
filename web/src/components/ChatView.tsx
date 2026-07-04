@@ -3,6 +3,7 @@ import { Sparkles, Send, Bot, User, Trash2, Plus, MessageSquare, ChevronDown, Ch
 import * as Icons from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ChatExchange, StepEvent, SessionInfo } from "../types";
+import { CHAT_MAX_TOKENS, CHAT_MAX_SESSION_BADGES } from "../types";
 import { StepBlock } from "./StepBlock";
 import { AnswerBlock } from "./AnswerBlock";
 import { FormInput } from "./ui/FormInput";
@@ -192,7 +193,7 @@ export function ChatView({
         <div className="chat-sessions-bar">
           <MessageSquare size={14} />
           <span className="chat-sessions-label">历史会话</span>
-          {otherSessions.slice(0, 8).map((s) => (
+          {otherSessions.slice(0, CHAT_MAX_SESSION_BADGES).map((s) => (
             <button
               key={s.id}
               className="chat-session-badge"
@@ -289,7 +290,7 @@ export function ChatView({
         </div>
         {tokenStats && (
           <div className={`chat-token-stats ${tokenStats.trimmed > 0 ? "token-trimmed" : ""}`}>
-            <span>Token: ~{tokenStats.tokens.toLocaleString()} / 64,000</span>
+            <span>Token: ~{tokenStats.tokens.toLocaleString()} / {CHAT_MAX_TOKENS.toLocaleString()}</span>
             {tokenStats.trimmed > 0 && (
               <span className="token-trimmed-hint">（已裁剪 {tokenStats.trimmed} 条消息）</span>
             )}

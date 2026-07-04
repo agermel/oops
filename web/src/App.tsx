@@ -2,16 +2,16 @@ import React from "react";
 import { Plus } from "lucide-react";
 import { Button } from "./components/ui/Button";
 import type {
-  ContainerWithType,
-  ContainerDetail as ContainerDetailType,
-  LogEntry,
   StepEvent,
   ChatExchange,
   SessionDetail,
   MCPConnectionStatus,
 } from "./types";
-import { MAX_LOGS, LOG_FLUSH_MS, LOG_MAX_WAIT_MS } from "./types";
+import { SESSION_STORAGE_KEY } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
+import { useModal } from "./hooks/useModal";
+import { useSet } from "./hooks/useSet";
+import { useLogStream } from "./hooks/useLogStream";
 import { usePathRouter } from "./hooks/usePathRouter";
 import { useProjects } from "./hooks/useProjects";
 import { useProjectServers, useNodeletStatus } from "./hooks/useServers";
@@ -20,7 +20,8 @@ import { useSessions } from "./hooks/useSessions";
 import { queryKeys } from "./hooks/queries";
 import { pageConfig } from "./lib/config";
 import { apiRequest, getErrorMessage } from "./lib/api";
-import { projectPaths, serverPaths, sessionPaths } from "./lib/paths";
+import { projectPaths, sessionPaths, authPaths, chatPaths, nodeletPaths } from "./lib/paths";
+import { deserializeSessionMessages } from "./lib/session";
 import { shouldAutoExpandFirstServer } from "./lib/serverTreeState";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
@@ -60,8 +61,8 @@ export function App() {
 
     // Dev 模式或未注入时：并行检查 /api/auth/status 和 /api/auth/me
     Promise.all([
-      fetch("/api/auth/status").then(r => r.json()).catch(() => ({ setup: false })),
-      fetch("/api/auth/me").then(r => ({ ok: r.ok })).catch(() => ({ ok: false })),
+      fetch(authPaths.status).then(r => r.json()).catch(() => ({ setup: false })),
+      fetch(authPaths.me).then(r => ({ ok: r.ok })).catch(() => ({ ok: false })),
     ]).then(([status, me]) => {
       if (status.setup === false) {
         setNeedsSetup(true);
@@ -100,9 +101,8 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
   // MCP 新建/编辑连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
-  const [mcpFormOpen, setMCPFormOpen] = React.useState(false);
+  const mcpForm = useModal<MCPConnectionStatus>();
   const [mcpQuickType, setMCPQuickType] = React.useState<string | undefined>(undefined);
-  const [mcpEditItem, setMCPEditItem] = React.useState<MCPConnectionStatus | null>(null);
   const [mcpViewKey, setMCPViewKey] = React.useState(0);
 
   // ---- 数据域 hooks（TanStack Query 管理） ----
@@ -155,24 +155,13 @@ export function App() {
     });
   }, [rawServers, nodeletStatusItems]);
 
-  // ---- 服务器 & 容器树状态 ----
-  const [containers, setContainers] = React.useState<Record<string, ContainerWithType[]>>({});
-  const [containersLoading, setContainersLoading] = React.useState<Set<string>>(new Set());
-  const [expandedServers, setExpandedServers] = React.useState<Set<string>>(new Set());
+  // ---- 服务器展开/折叠 ----
+  const expandedServers = useSet();
 
-  // ---- 容器详情状态 ----
-  const [containerDetail, setContainerDetail] = React.useState<ContainerDetailType | undefined>();
-  const [detailLoading, setDetailLoading] = React.useState(false);
-  const [detailError, setDetailError] = React.useState("");
-
-  // ---- 日志状态 ----
-  const [logs, setLogs] = React.useState<LogEntry[]>([]);
-  const [logsLoading, setLogsLoading] = React.useState(false);
-  const [logsError, setLogsError] = React.useState("");
-  const [autoScroll, setAutoScroll] = React.useState(true);
-  const logEventSource = React.useRef<EventSource | null>(null);
-  const logBuffer = React.useRef<LogEntry[]>([]);
-  const logsPanel = React.useRef<HTMLDivElement | null>(null);
+  // ---- 日志流（useLogStream hook 管理 EventSource 生命周期） ----
+  const { logs, loading: logsLoading, error: logsError, autoScroll, setAutoScroll, panelRef: logsPanel, clear: clearLogs } = useLogStream(
+    selectedProjectID, selectedNodeletID, selectedContainerID
+  );
 
   // ---- 聊天状态 ----
   const [chatExchanges, setChatExchanges] = React.useState<ChatExchange[]>([]);
@@ -185,7 +174,7 @@ export function App() {
   const chatStepsRef = React.useRef<StepEvent[]>([]);
   const chatAbortRef = React.useRef<AbortController | null>(null);
   const [sessionId, setSessionId] = React.useState<string>(() => {
-    return localStorage.getItem("oops_session_id") || "";
+    return localStorage.getItem(SESSION_STORAGE_KEY) || "";
   });
   const sessionIdRef = React.useRef(sessionId);
   sessionIdRef.current = sessionId;
@@ -195,57 +184,6 @@ export function App() {
   const [agentType, setAgentType] = React.useState<string>("");
   const [maxStep, setMaxStep] = React.useState<number>(0);
   const [tokenStats, setTokenStats] = React.useState<{ tokens: number; trimmed: number } | null>(null);
-
-  // ---- 日志缓冲区 ----
-  const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flushFirstRef = React.useRef<number>(0);
-
-  // 使用 ref 持有最新的 doFlush 以避免过期闭包
-  const doFlushRef = React.useRef(() => {
-    if (logBuffer.current.length === 0) return;
-    const nextLogs = logBuffer.current;
-    logBuffer.current = [];
-    setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
-  });
-  doFlushRef.current = () => {
-    if (logBuffer.current.length === 0) return;
-    const nextLogs = logBuffer.current;
-    logBuffer.current = [];
-    setLogs((current) => [...current, ...nextLogs].slice(-MAX_LOGS));
-  };
-
-  type FlushFn = (() => void) & { cancel: () => void };
-
-  const flushLogs = React.useCallback(() => {
-    const now = Date.now();
-    if (flushFirstRef.current === 0) flushFirstRef.current = now;
-    if (now - flushFirstRef.current >= LOG_MAX_WAIT_MS) {
-      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-      flushFirstRef.current = 0;
-      doFlushRef.current();
-      return;
-    }
-    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-    flushTimerRef.current = setTimeout(() => {
-      flushTimerRef.current = null;
-      flushFirstRef.current = 0;
-      doFlushRef.current();
-    }, LOG_FLUSH_MS);
-  }, []) as FlushFn;
-
-  flushLogs.cancel = () => {
-    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-    flushFirstRef.current = 0;
-  };
-
-  function closeLogStream() {
-    if (logEventSource.current) {
-      logEventSource.current.close();
-      logEventSource.current = null;
-    }
-    flushLogs.cancel();
-    logBuffer.current = [];
-  }
 
   // ---- 会话加载 ----
   React.useEffect(() => {
@@ -257,52 +195,13 @@ export function App() {
           sessionPaths(sessionId).get + "?include_messages=true"
         );
         if (!cancelled && detail?.id) {
-          const exchanges: ChatExchange[] = [];
-          let currentQuestion = "";
-          let currentSteps: StepEvent[] = [];
-          for (const msg of detail.messages) {
-            if (msg.role === "user") {
-              if (currentQuestion) {
-                exchanges.push({ question: currentQuestion, steps: currentSteps });
-              }
-              currentQuestion = msg.content;
-              currentSteps = [];
-            } else if (msg.role === "assistant") {
-              currentSteps.push({ type: "answer", content: msg.content });
-            } else if (msg.role === "thinking") {
-              currentSteps.push({ type: "thinking", content: msg.content });
-            } else if (msg.role === "tool_call") {
-              currentSteps.push({
-                type: "tool_call",
-                content: msg.content,
-                toolCallId: msg.toolCallId,
-                toolName: msg.toolName,
-                toolArgs: msg.toolArgs,
-              });
-            } else if (msg.role === "tool") {
-              currentSteps.push({
-                type: "tool_result",
-                content: msg.content,
-                toolCallId: msg.toolCallId,
-                toolName: msg.toolName,
-              });
-            }
-          }
-          if (currentQuestion) {
-            const answerContents = currentSteps.filter((s) => s.type === "answer").map((s) => s.content);
-            exchanges.push({
-              question: currentQuestion,
-              steps: currentSteps,
-              answer: answerContents.length > 0 ? answerContents.join("") : undefined,
-            });
-          }
-          setChatExchanges(exchanges);
+          setChatExchanges(deserializeSessionMessages(detail.messages));
           setSessionLoaded(true);
           queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
         }
       } catch {
         if (!cancelled) {
-          localStorage.removeItem("oops_session_id");
+          localStorage.removeItem(SESSION_STORAGE_KEY);
           setSessionId("");
         }
       }
@@ -314,74 +213,7 @@ export function App() {
   // Prober 状态通过 useNodeletStatus() 的 refetchInterval: 30_000 自动轮询，
   // servers 的合并通过 useMemo 完成（见上方），无需额外的 effect。
 
-  async function loadContainers(projectID: string, nodeletID: string) {
-    setContainersLoading((prev) => new Set(prev).add(nodeletID));
-    try {
-      const data = await apiRequest<ContainerWithType[]>(serverPaths(projectID, nodeletID).containers);
-      setContainers((prev) => ({ ...prev, [nodeletID]: data }));
-    } catch (err) {
-      // 触发后端即时探测，让 Prober 感知失败；server 状态由 useMemo + Prober 数据驱动
-      apiRequest(`/api/nodelets/${encodeURIComponent(nodeletID)}/probe`, { method: "POST" }).catch(() => {});
-      setContainers((prev) => ({ ...prev, [nodeletID]: [] }));
-    } finally {
-      setContainersLoading((prev) => {
-        const next = new Set(prev);
-        next.delete(nodeletID);
-        return next;
-      });
-    }
-  }
-
-  async function selectContainer(projectId: string, nodeletID: string, containerID: string) {
-    closeLogStream();
-    setDetailError("");
-
-    setDetailLoading(true);
-    try {
-      setContainerDetail(await apiRequest<ContainerDetailType>(
-        serverPaths(projectId, nodeletID).container(containerID)
-      ));
-    } catch (err) {
-      setDetailError(getErrorMessage(err, "读取容器详情失败"));
-      setContainerDetail(undefined);
-    } finally {
-      setDetailLoading(false);
-    }
-
-    loadLogStream(projectId, nodeletID, containerID);
-  }
-
-  function loadLogStream(projectId: string, nodeletID: string, containerID: string) {
-    closeLogStream();
-    setLogsLoading(true);
-    setLogsError("");
-
-    const url = serverPaths(projectId, nodeletID).containerLogs(containerID);
-
-    const source = new EventSource(url);
-    logEventSource.current = source;
-
-    source.onopen = () => {
-      setLogsLoading(false);
-      setLogsError(""); // 重连成功时清除之前的错误
-    };
-    source.onmessage = (event) => {
-      try {
-        logBuffer.current = [...logBuffer.current, JSON.parse(event.data) as LogEntry].slice(-MAX_LOGS);
-        flushLogs();
-      } catch {
-        // 跳过无法解析的日志行
-      }
-    };
-    source.onerror = () => {
-      setLogsLoading(false);
-      // EventSource 会自动重连，仅在首次连接失败或彻底断开时展示错误；
-      // 重连成功后 onopen 会清除此错误。
-      if (source.readyState === EventSource.CLOSED) {
-        setLogsError("日志流连接失败，请检查容器是否在运行");
-      }
-    };
-  }
+  // toggleServer 展开时触发即时探测，容器由 ServerTree 内部的 useContainers 管理。
 
   async function sendChat(question?: string) {
     const q = (question ?? chatInput).trim();
@@ -406,7 +238,7 @@ export function App() {
     try {
       const url = selectedProjectID
         ? projectPaths(selectedProjectID).chat
-        : "/api/chat";
+        : chatPaths.default;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -437,7 +269,7 @@ export function App() {
               if (evt.type === "session" && evt.content) {
                 setSessionId(evt.content);
                 setSessionLoaded(true);
-                localStorage.setItem("oops_session_id", evt.content);
+                localStorage.setItem(SESSION_STORAGE_KEY, evt.content);
                 if (evt.agentType) setAgentType(evt.agentType);
                 if (evt.maxStep) setMaxStep(evt.maxStep);
                 continue;
@@ -497,7 +329,7 @@ export function App() {
 
   function startNewChat() {
     chatAbortRef.current?.abort();
-    localStorage.removeItem("oops_session_id");
+    localStorage.removeItem(SESSION_STORAGE_KEY);
     setChatExchanges([]);
     setCurrentSteps([]);
     chatStepsRef.current = [];
@@ -521,52 +353,13 @@ export function App() {
         sessionPaths(id).get + "?include_messages=true"
       );
       if (detail?.id) {
-        const exchanges: ChatExchange[] = [];
-        let currentQuestion = "";
-        let currentSteps: StepEvent[] = [];
-        for (const msg of detail.messages) {
-          if (msg.role === "user") {
-            if (currentQuestion) {
-              exchanges.push({ question: currentQuestion, steps: currentSteps });
-            }
-            currentQuestion = msg.content;
-            currentSteps = [];
-          } else if (msg.role === "assistant") {
-            currentSteps.push({ type: "answer", content: msg.content });
-          } else if (msg.role === "thinking") {
-            currentSteps.push({ type: "thinking", content: msg.content });
-          } else if (msg.role === "tool_call") {
-            currentSteps.push({
-              type: "tool_call",
-              content: msg.content,
-              toolCallId: msg.toolCallId,
-              toolName: msg.toolName,
-              toolArgs: msg.toolArgs,
-            });
-          } else if (msg.role === "tool") {
-            currentSteps.push({
-              type: "tool_result",
-              content: msg.content,
-              toolCallId: msg.toolCallId,
-              toolName: msg.toolName,
-            });
-          }
-        }
-        if (currentQuestion) {
-          const answerContents = currentSteps.filter((s) => s.type === "answer").map((s) => s.content);
-          exchanges.push({
-            question: currentQuestion,
-            steps: currentSteps,
-            answer: answerContents.length > 0 ? answerContents.join("") : undefined,
-          });
-        }
-        setChatExchanges(exchanges);
+        setChatExchanges(deserializeSessionMessages(detail.messages));
         setCurrentSteps([]);
         chatStepsRef.current = [];
         setCurrentQuestion("");
         setChatError("");
         setSessionId(id);
-        localStorage.setItem("oops_session_id", id);
+        localStorage.setItem(SESSION_STORAGE_KEY, id);
         setSessionLoaded(true);
         setAgentType("");
         setMaxStep(0);
@@ -597,7 +390,7 @@ export function App() {
       setChatError("清除会话失败，请重试");
       return;
     }
-    localStorage.removeItem("oops_session_id");
+    localStorage.removeItem(SESSION_STORAGE_KEY);
     setChatExchanges([]);
     setCurrentSteps([]);
     chatStepsRef.current = [];
@@ -638,20 +431,12 @@ export function App() {
   }
 
   function toggleServer(nodeletID: string) {
-    if (expandedServers.has(nodeletID)) {
-      // 折叠：直接从 expandedServers 移除
-      setExpandedServers((prev) => {
-        const next = new Set(prev);
-        next.delete(nodeletID);
-        return next;
-      });
+    if (expandedServers.set.has(nodeletID)) {
+      expandedServers.remove(nodeletID);
     } else {
-      // 展开并选中：触发即时探测获取最新连通状态
-      apiRequest(`/api/nodelets/${encodeURIComponent(nodeletID)}/probe`, { method: "POST" }).catch(() => {});
-      setExpandedServers((prev) => new Set(prev).add(nodeletID));
-      if (!containers[nodeletID]) {
-        loadContainers(selectedProjectID, nodeletID);
-      }
+      // 展开并选中：触发即时探测获取最新连通状态，容器由 ServerTree 的 useContainers 自动加载
+      apiRequest(nodeletPaths(nodeletID).probe, { method: "POST" }).catch(() => {});
+      expandedServers.add(nodeletID);
       selectServerFromUI(nodeletID);
     }
   }
@@ -666,11 +451,8 @@ export function App() {
       autoExpandFirstServerRef.current = false;
       setSelectedNodeletID("");
       setSelectedContainerID("");
-      setContainers({});
-      setExpandedServers(new Set());
-      setContainerDetail(undefined);
-      closeLogStream();
-      setLogs([]);
+      expandedServers.clear();
+      // 日志流由 useLogStream hook 管理，containerId 变为空时会自动关闭
       // servers 由 useProjectServers 的 query key 变化自动重新 fetch
     }
     if (!selectedProjectID && lastLoadedProjectRef.current) {
@@ -678,32 +460,13 @@ export function App() {
       autoExpandFirstServerRef.current = false;
       setSelectedNodeletID("");
       setSelectedContainerID("");
-      setContainers({});
-      setExpandedServers(new Set());
-      setContainerDetail(undefined);
-      closeLogStream();
-      setLogs([]);
+      expandedServers.clear();
     }
   }, [authenticated, selectedProjectID]);
 
-  // Effect C: 选中 container → 加载详情+日志
-  React.useEffect(() => {
-    if (!authenticated || !selectedNodeletID || !selectedContainerID) return;
-    if (containerDetail
-      && containerDetail.container.id === selectedContainerID
-      && containerDetail.container.hostId === selectedNodeletID) return;
-    selectContainer(selectedProjectID, selectedNodeletID, selectedContainerID);
-  }, [authenticated, selectedNodeletID, selectedContainerID, selectedProjectID]);
-
-  // Effect D: 选中了 server 但没有 container → 自动选第一个容器
-  React.useEffect(() => {
-    if (!authenticated || !selectedNodeletID || selectedContainerID) return;
-
-    const serverContainers = containers[selectedNodeletID];
-    if (!serverContainers || serverContainers.length === 0) return;
-
-    setSelectedContainerID(serverContainers[0].id);
-  }, [authenticated, selectedNodeletID, selectedContainerID, containers, selectedProjectID]);
+  // Effect C 已移除：日志流生命周期由 useLogStream hook 管理，自动跟随 selectedNodeletID/selectedContainerID 变化
+  // Effect D 已移除：自动选第一个容器的逻辑移入 ServerTree 的 ServerContainers 组件，
+  // 通过 useContainers 的 isSuccess 触发。
 
   // Effect E: 进入项目概览且无展开的 server → 自动展开首台服务器并选中
   React.useEffect(() => {
@@ -712,26 +475,22 @@ export function App() {
       view: route.view,
       serverCount: servers.length,
       serversLoading,
-      expandedCount: expandedServers.size,
+      expandedCount: expandedServers.set.size,
       autoExpandConsumed: autoExpandFirstServerRef.current,
     })) return;
 
     const first = servers[0];
     autoExpandFirstServerRef.current = true;
-    setExpandedServers(new Set([first.nodelet.id]));
+    expandedServers.setState(new Set([first.nodelet.id]));
     setSelectedNodeletID(first.nodelet.id);
     setSelectedContainerID("");
-    if (!containers[first.nodelet.id]) {
-      loadContainers(selectedProjectID, first.nodelet.id);
-    }
-  }, [authenticated, route.view, servers, serversLoading, expandedServers.size, selectedProjectID, containers]);
+  }, [authenticated, route.view, servers, serversLoading, expandedServers.set.size, selectedProjectID]);
 
   // ---------------- 基础 Effects ----------------
   // projects / skills 数据由 TanStack Query hooks 自动管理，无需手动 fetch
 
   React.useEffect(() => {
     return () => {
-      closeLogStream();
       chatAbortRef.current?.abort();
     };
   }, []);
@@ -834,14 +593,9 @@ export function App() {
             servers={servers}
             serversLoading={serversLoading}
             serverError={serverError}
-            containers={containers}
-            containersLoading={containersLoading}
             selectedNodeletID={selectedNodeletID}
             selectedContainerID={selectedContainerID}
-            containerDetail={containerDetail}
-            containerDetailLoading={detailLoading}
-            containerDetailError={detailError}
-            expandedServers={expandedServers}
+            expandedServers={expandedServers.set}
             logs={logs}
             logsLoading={logsLoading}
             logsError={logsError}
@@ -850,16 +604,15 @@ export function App() {
             onToggleServer={toggleServer}
             onSelectContainer={selectContainerFromUI}
             onAutoScrollChange={setAutoScroll}
-            onClearLogs={() => {
-              flushLogs.cancel();
-              logBuffer.current = [];
-              setLogs([]);
-            }}
+            onClearLogs={clearLogs}
             logsPanelRef={logsPanel}
             onMCPChanged={() => {
               queryClient.invalidateQueries({ queryKey: queryKeys.projects.all });
+              queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(selectedProjectID) });
               if (selectedProjectID && selectedNodeletID && selectedContainerID) {
-                selectContainer(selectedProjectID, selectedNodeletID, selectedContainerID);
+                queryClient.invalidateQueries({
+                  queryKey: queryKeys.containerDetail.byId(selectedProjectID, selectedNodeletID, selectedContainerID),
+                });
               }
             }}
           />
@@ -873,7 +626,7 @@ export function App() {
                 <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
               </div>
               <div className="workspace-head-actions">
-                <Button size="sm" onClick={() => { setMCPQuickType(undefined); setMCPEditItem(null); setMCPFormOpen(true); }}>
+                <Button size="sm" onClick={() => { setMCPQuickType(undefined); mcpForm.onOpen(); }}>
                   <Plus size={15} />
                   <span>新建连接</span>
                 </Button>
@@ -881,8 +634,8 @@ export function App() {
             </div>
             <MCPView
               key={mcpViewKey}
-              onQuickCreate={(type) => { setMCPQuickType(type); setMCPEditItem(null); setMCPFormOpen(true); }}
-              onEdit={(item) => { setMCPEditItem(item); setMCPFormOpen(true); }}
+              onQuickCreate={(type) => { setMCPQuickType(type); mcpForm.onOpen(); }}
+              onEdit={(item) => { mcpForm.onOpen(item); }}
             />
           </section>
         )}
@@ -943,20 +696,21 @@ export function App() {
       </main>
 
       {/* App 级 MCP 表单模态框 —— 供 workspace head 按钮、快捷卡片和编辑共用 */}
-      {mcpFormOpen && (
+      {mcpForm.open && (
         <MCPFormModal
-          editItem={mcpEditItem}
-          prefill={!mcpEditItem && mcpQuickType ? {
+          editItem={mcpForm.data}
+          prefill={!mcpForm.data && mcpQuickType ? {
             name: "",
             type: mcpQuickType,
             env: [],
           } : null}
-          onClose={() => { setMCPFormOpen(false); setMCPQuickType(undefined); setMCPEditItem(null); }}
+          onClose={() => { mcpForm.onClose(); setMCPQuickType(undefined); }}
           onSaved={() => {
-            setMCPFormOpen(false);
+            mcpForm.onClose();
             setMCPQuickType(undefined);
-            setMCPEditItem(null);
             setMCPViewKey((k) => k + 1);
+            // Refresh project-scoped MCP list so overview picks up new/edited connections.
+            queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(selectedProjectID) });
           }}
         />
       )}

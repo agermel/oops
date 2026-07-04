@@ -1,6 +1,7 @@
 import React from "react";
 import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { mcpConnectionPaths } from "../lib/paths";
 import { Modal } from "./Modal";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
@@ -310,8 +311,8 @@ export function MCPFormModal({
     }
 
     const url = isNew
-      ? "/api/mcp/connections"
-      : `/api/mcp/connections/${encodeURIComponent(body.id)}`;
+      ? mcpConnectionPaths.list
+      : mcpConnectionPaths.detail(body.id);
     const method = isNew ? "POST" : "PUT";
 
     try {
@@ -334,7 +335,7 @@ export function MCPFormModal({
     setTesting(true);
     setTestResult("");
     try {
-      const data = await apiRequest<{ status: string; error?: string }>("/api/mcp/connections/test", {
+      const data = await apiRequest<{ status: string; error?: string }>(mcpConnectionPaths.test, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formToConfig(editing)),

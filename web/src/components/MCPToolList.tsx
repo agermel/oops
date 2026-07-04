@@ -2,6 +2,7 @@ import React from "react";
 import { Play, RotateCw, AlertTriangle, WifiOff, XCircle } from "lucide-react";
 import type { ToolInfo, ToolTestResult } from "../types";
 import { getErrorMessage } from "../lib/api";
+import { mcpConnectionPaths } from "../lib/paths";
 import { Button } from "./ui/Button";
 
 // toolTestStatus 返回测试结果的显示信息。
@@ -47,7 +48,7 @@ export function MCPToolList({
     setToolTests((prev) => ({ ...prev, [key]: { status: "testing" } }));
     try {
       const resp = await fetch(
-        `/api/mcp/connections/${encodeURIComponent(connectionId)}/tools/${encodeURIComponent(toolName)}/test`,
+        mcpConnectionPaths.toolTest(connectionId, toolName),
         { method: "POST" },
       );
       const data = await resp.json().catch(() => null);

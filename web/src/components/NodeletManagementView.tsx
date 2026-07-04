@@ -1,7 +1,13 @@
 import React from "react";
 import { Plus, Trash2, Edit3, Server, RefreshCw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { NodeletConfig, NodeletStatusItem, ProbeStatus } from "../types";
+import { queryKeys } from "../hooks/queries";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { nodeletPaths, nodeletBasePaths } from "../lib/paths";
+import { useNodelets } from "../hooks/useNodelets";
+import { useNodeletStatus } from "../hooks/useServers";
+import { useModal } from "../hooks/useModal";
 import { NodeletFormModal } from "./NodeletFormModal";
 import { Button } from "./ui/Button";
 import { StatusDot } from "./StatusPill";
@@ -14,76 +20,35 @@ type NodeletRow = NodeletConfig & {
 
 // ---- NodeletManagementView ----
 export function NodeletManagementView() {
-  const [nodelets, setNodelets] = React.useState<NodeletRow[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  const { data: configs = [], isLoading: configsLoading, error: configsError } = useNodelets();
+  const { data: statusItems = [] } = useNodeletStatus();
   const [error, setError] = React.useState("");
 
-  const [showForm, setShowForm] = React.useState(false);
-  const [editItem, setEditItem] = React.useState<NodeletConfig | null>(null);
+  const formModal = useModal<NodeletConfig>();
 
-  async function fetchStatus() {
-    try {
-      const items = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
-      setNodelets((prev) => {
-        const statusMap = new Map(items.map((s) => [s.nodelet.id, s]));
-        // 如果当前列表为空（首次加载），从 status 响应创建
-        if (prev.length === 0) {
-          return items.map((s) => ({
-            ...s.nodelet,
-            status: s.status,
-            statusError: s.error,
-            latencyMs: s.latencyMs,
-          }));
-        }
-        // 增量更新状态
-        return prev.map((n) => {
-          const si = statusMap.get(n.id);
-          if (!si) return n;
-          return { ...n, status: si.status, statusError: si.error, latencyMs: si.latencyMs };
-        });
-      });
-    } catch (err) {
-      // 静默处理轮询错误
-    }
-  }
+  // 合并 configs + prober status
+  const nodelets = React.useMemo<NodeletRow[]>(() => {
+    const statusMap = new Map(statusItems.map((s: NodeletStatusItem) => [s.nodelet.id, s]));
+    return configs.map((c: NodeletConfig) => {
+      const si = statusMap.get(c.id);
+      return {
+        ...c,
+        status: si?.status ?? ("unknown" as ProbeStatus),
+        statusError: si?.error,
+        latencyMs: si?.latencyMs,
+      };
+    });
+  }, [configs, statusItems]);
 
-  async function fetchNodelets() {
-    setLoading(true);
-    setError("");
-    try {
-      const configs = await apiRequest<NodeletConfig[]>("/api/nodelets");
-      const statusItems = await apiRequest<NodeletStatusItem[]>("/api/nodelets/status");
-      const statusMap = new Map(statusItems.map((s) => [s.nodelet.id, s]));
-      setNodelets(
-        configs.map((c) => {
-          const si = statusMap.get(c.id);
-          return {
-            ...c,
-            status: si?.status ?? ("unknown" as ProbeStatus),
-            statusError: si?.error,
-            latencyMs: si?.latencyMs,
-          };
-        }),
-      );
-    } catch (err) {
-      setError(getErrorMessage(err, "读取服务器列表失败"));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // 15s 轮询读取 Prober 缓存（极快，无阻塞）
-  React.useEffect(() => {
-    fetchNodelets();
-    const timer = setInterval(fetchStatus, 15_000);
-    return () => clearInterval(timer);
-  }, []);
+  const loading = configsLoading && nodelets.length === 0;
+  const queryError = configsError ? getErrorMessage(configsError, "读取服务器列表失败") : "";
+  const queryClient = useQueryClient();
 
   async function handleRefresh() {
     setError("");
     try {
-      await apiRequest("/api/nodelets/probe-all", { method: "POST" });
-      await fetchStatus();
+      await apiRequest(nodeletBasePaths.probeAll, { method: "POST" });
+      queryClient.invalidateQueries({ queryKey: queryKeys.nodelets.status });
     } catch (err) {
       setError(getErrorMessage(err, "刷新状态失败"));
     }
@@ -91,37 +56,26 @@ export function NodeletManagementView() {
 
   async function handleRetrySingle(id: string) {
     try {
-      await apiRequest(`/api/nodelets/${encodeURIComponent(id)}/probe`, { method: "POST" });
-      await fetchStatus();
+      await apiRequest(nodeletPaths(id).probe, { method: "POST" });
+      queryClient.invalidateQueries({ queryKey: queryKeys.nodelets.status });
     } catch (err) {
       setError(getErrorMessage(err, "探测失败"));
     }
   }
 
-  function openAdd() {
-    setEditItem(null);
-    setShowForm(true);
-  }
-
-  function openEdit(item: NodeletRow) {
-    setEditItem(item);
-    setShowForm(true);
-  }
-
   async function handleDelete(id: string, name: string) {
     if (!window.confirm(`确定要删除服务器 "${name}" 吗？`)) return;
     try {
-      await apiRequest(`/api/nodelets/${encodeURIComponent(id)}`, { method: "DELETE" });
-      fetchNodelets();
+      await apiRequest(nodeletPaths(id).detail, { method: "DELETE" });
+      queryClient.invalidateQueries({ queryKey: queryKeys.nodelets.all });
     } catch (err) {
       setError(getErrorMessage(err, "删除失败"));
     }
   }
 
   function onFormSaved() {
-    setShowForm(false);
-    setEditItem(null);
-    fetchNodelets();
+    formModal.onClose();
+    queryClient.invalidateQueries({ queryKey: queryKeys.nodelets.all });
   }
 
   function statusDotProps(status: ProbeStatus | undefined) {
@@ -151,7 +105,7 @@ export function NodeletManagementView() {
             <span style={{ color: "var(--muted)", fontSize: 13 }}>
               {nodelets.length} 台
             </span>
-            <Button size="sm" onClick={openAdd}>
+            <Button size="sm" onClick={() => formModal.onOpen()}>
               <Plus size={14} /> 添加
             </Button>
             <Button size="sm" variant="ghost" onClick={handleRefresh} disabled={loading}>
@@ -161,7 +115,7 @@ export function NodeletManagementView() {
         </div>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {(error || queryError) && <div className="error-banner">{error || queryError}</div>}
 
       {loading && nodelets.length === 0 ? (
         <div className="skeleton-block" style={{ height: 120 }} />
@@ -223,7 +177,7 @@ export function NodeletManagementView() {
                       >
                         <RefreshCw size={12} />
                       </Button>
-                      <Button size="xs" variant="ghost" iconOnly onClick={() => openEdit(n)} aria-label={`编辑 ${n.name}`}>
+                      <Button size="xs" variant="ghost" iconOnly onClick={() => formModal.onOpen(n)} aria-label={`编辑 ${n.name}`}>
                         <Edit3 size={12} />
                       </Button>
                       <Button size="xs" variant="ghost" iconOnly onClick={() => handleDelete(n.id, n.name)} aria-label={`删除 ${n.name}`}>
@@ -238,14 +192,11 @@ export function NodeletManagementView() {
         </div>
       )}
 
-      {showForm && (
+      {formModal.open && (
         <NodeletFormModal
-          editItem={editItem}
+          editItem={formModal.data}
           onSaved={onFormSaved}
-          onClose={() => {
-            setShowForm(false);
-            setEditItem(null);
-          }}
+          onClose={formModal.onClose}
         />
       )}
     </section>

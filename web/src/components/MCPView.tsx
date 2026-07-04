@@ -2,7 +2,13 @@ import React from "react";
 import { Plus, Trash2, Edit3, Wrench, ChevronRight, ChevronDown, Database, Layers, Search, Globe, Terminal } from "lucide-react";
 import type { MCPConnectionConfig, MCPConnectionStatus } from "../types";
 import { mcpStatusLabel } from "../types";
+import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import { mcpConnectionPaths } from "../lib/paths";
+import { useMCPConnections } from "../hooks/useServers";
+import { queryKeys } from "../hooks/queries";
+import { useSet } from "../hooks/useSet";
+import { useModal } from "../hooks/useModal";
 import { MCPFormModal } from "./MCPFormModal";
 import { StatusPill, TypePill } from "./StatusPill";
 import { ToggleSwitch } from "./ToggleSwitch";
@@ -17,17 +23,16 @@ export function MCPView({
   onQuickCreate?: (type?: string) => void;
   onEdit?: (item: MCPConnectionStatus) => void;
 }) {
-  const [connections, setConnections] = React.useState<MCPConnectionStatus[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState("");
+  const { data: connections = [], isLoading: loading, error: queryError, refetch } = useMCPConnections();
+  const error = queryError ? getErrorMessage(queryError, "读取 MCP 连接失败") : "";
+  const queryClient = useQueryClient();
 
   // 表单模态框控制（仅在无外部回调时使用本地状态）
-  const [showForm, setShowForm] = React.useState(false);
-  const [editItem, setEditItem] = React.useState<MCPConnectionStatus | null>(null);
+  const localForm = useModal<MCPConnectionStatus>();
 
-  const [toggling, setToggling] = React.useState<Set<string>>(new Set());
-  const [checking, setChecking] = React.useState<Set<string>>(new Set());
-  const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set());
+  const toggling = useSet();
+  const checking = useSet();
+  const expandedRows = useSet();
 
   // 快捷创建卡片定义
   const quickStartTypes = [
@@ -39,100 +44,54 @@ export function MCPView({
     { id: "other", label: "其他", hint: "自定义命令行连接", icon: Terminal },
   ];
 
-  function setCheckingIds(update: (prev: Set<string>) => Set<string>) {
-    setChecking((prev) => {
-      const next = update(prev);
-      return next;
-    });
-  }
-
-  function replaceConnection(nextItem: MCPConnectionStatus) {
-    setConnections((prev) => prev.map((item) => (item.id === nextItem.id ? nextItem : item)));
-  }
-
-  async function fetchConnections() {
-    setLoading(true);
-    setError("");
-    try {
-      const next = await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections");
-      setConnections(next);
-    } catch (err) {
-      setError(getErrorMessage(err, "读取 MCP 连接失败"));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function refreshConnectionsQuietly() {
-    try {
-      const next = await apiRequest<MCPConnectionStatus[]>("/api/mcp/connections");
-      setConnections(next);
-      setCheckingIds((prev) => {
-        const nextChecking = new Set(prev);
+  // 1s 子轮询：当有连接处于 "checking"（刚启用，等待启动）状态时，快速轮询直到状态稳定
+  React.useEffect(() => {
+    if (checking.set.size === 0) return;
+    const startedAt = Date.now();
+    const interval = setInterval(async () => {
+      const next = await queryClient.fetchQuery<MCPConnectionStatus[]>({
+        queryKey: queryKeys.mcp.all,
+        queryFn: () => apiRequest<MCPConnectionStatus[]>(mcpConnectionPaths.list),
+        staleTime: 0,
+      });
+      if (next) {
+        const nextChecking = new Set(checking.set);
         for (const item of next) {
           if (item.status === "running" || (item.status === "error" && item.error) || !item.enabled) {
             nextChecking.delete(item.id);
           }
         }
-        return nextChecking;
-      });
-      return next;
-    } catch (_err) {
-      // 轮询静默失败，不覆盖已有数据和错误展示
-      return null;
-    }
-  }
-
-  React.useEffect(() => {
-    fetchConnections();
-    const interval = setInterval(refreshConnectionsQuietly, 30_000);
-    return () => { clearInterval(interval); };
-    // fetchConnections / refreshConnectionsQuietly close over stable React setters only — safe to exclude.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  React.useEffect(() => {
-    if (checking.size === 0) return;
-    const startedAt = Date.now();
-    const interval = setInterval(async () => {
-      await refreshConnectionsQuietly();
+        checking.setState(nextChecking);
+      }
       if (Date.now() - startedAt >= 60_000) {
-        setCheckingIds(() => new Set());
+        checking.clear();
       }
     }, 1_000);
     return () => clearInterval(interval);
-  }, [checking.size]);
+  }, [checking.set.size, queryClient]);
 
   function openAdd() {
-    if (onQuickCreate) {
-      onQuickCreate();
-    } else {
-      setEditItem(null);
-      setShowForm(true);
-    }
+    if (onQuickCreate) { onQuickCreate(); }
+    else { localForm.onOpen(); }
   }
 
   function openEdit(item: MCPConnectionStatus) {
-    if (onEdit) {
-      onEdit(item);
-    } else {
-      setEditItem(item);
-      setShowForm(true);
-    }
+    if (onEdit) { onEdit(item); }
+    else { localForm.onOpen(item); }
   }
 
   async function handleDelete(id: string) {
     if (!window.confirm(`确定要删除 MCP 连接 "${id}" 吗？`)) return;
     try {
-      await apiRequest(`/api/mcp/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
-      fetchConnections();
+      await apiRequest(mcpConnectionPaths.detail(id), { method: "DELETE" });
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
     } catch (err) {
-      setError(getErrorMessage(err, "删除失败"));
+      alert(getErrorMessage(err, "删除失败"));
     }
   }
 
   async function handleToggleEnabled(item: MCPConnectionStatus, enabled: boolean) {
-    setToggling((prev) => new Set(prev).add(item.id));
+    toggling.add(item.id);
     const body: MCPConnectionConfig = {
       id: item.id,
       name: item.name,
@@ -147,49 +106,32 @@ export function MCPView({
       nodeletId: item.nodeletId,
     };
     try {
-      await apiRequest(`/api/mcp/connections/${encodeURIComponent(item.id)}`, {
+      await apiRequest(mcpConnectionPaths.detail(item.id), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (enabled) {
-        replaceConnection({ ...item, enabled, status: "stopped", error: undefined });
-        setCheckingIds((prev) => new Set(prev).add(item.id));
-        await refreshConnectionsQuietly();
+        checking.add(item.id);
       } else {
-        replaceConnection({
-          ...item,
-          enabled,
-          status: "stopped",
-          error: undefined,
-          toolCount: 0,
-          tools: undefined,
-        });
-        setCheckingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(item.id);
-          return next;
-        });
-        refreshConnectionsQuietly();
+        checking.remove(item.id);
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+      // 立即触发一次刷新以更新 checking 列表中的状态
+      if (enabled) {
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+        }, 500);
       }
     } catch (err) {
-      setError(getErrorMessage(err, "更新失败"));
+      alert(getErrorMessage(err, "更新失败"));
     } finally {
-      setToggling((prev) => {
-        const next = new Set(prev);
-        next.delete(item.id);
-        return next;
-      });
+      toggling.remove(item.id);
     }
   }
 
   function toggleExpand(id: string) {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    expandedRows.toggle(id);
   }
 
   return (
@@ -201,7 +143,7 @@ export function MCPView({
           <Plus size={15} />
           <span>新增</span>
         </Button>
-        <Button variant="ghost" size="sm" onClick={fetchConnections} disabled={loading}>
+        <Button variant="ghost" size="sm" onClick={() => refetch()} disabled={loading}>
           <span>刷新</span>
         </Button>
       </div>
@@ -262,9 +204,9 @@ export function MCPView({
               </tr>
             ) : (
               connections.map((item) => {
-                const isExpanded = expandedRows.has(item.id);
+                const isExpanded = expandedRows.set.has(item.id);
                 const hasTools = item.status === "running" && item.tools && item.tools.length > 0;
-                const isChecking = checking.has(item.id);
+                const isChecking = checking.set.has(item.id);
                 return (
                   <React.Fragment key={item.id}>
                     <tr className={isExpanded ? "mcp-row-expanded" : ""}>
@@ -300,7 +242,7 @@ export function MCPView({
                       <td className="mcp-toggle-cell">
                         <ToggleSwitch
                           checked={item.enabled}
-                          disabled={toggling.has(item.id)}
+                          disabled={toggling.set.has(item.id)}
                           onChange={(enabled) => handleToggleEnabled(item, enabled)}
                         />
                       </td>
@@ -319,7 +261,7 @@ export function MCPView({
                       <tr className="mcp-tools-row">
                         <td colSpan={7}>
                           <div className="mcp-tools-list">
-                            <MCPToolList connectionId={item.id} tools={item.tools!} onRefreshTools={fetchConnections} />
+                            <MCPToolList connectionId={item.id} tools={item.tools!} onRefreshTools={() => queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all })} />
                           </div>
                         </td>
                       </tr>
@@ -333,15 +275,13 @@ export function MCPView({
       </div>
 
       {/* MCP 表单模态框 —— 仅在无外部 onQuickCreate 时使用本地模态框（编辑功能需要） */}
-      {showForm && !onQuickCreate && (
+      {localForm.open && !onQuickCreate && (
         <MCPFormModal
-          editItem={editItem}
-          onClose={() => {
-            setShowForm(false);
-            setEditItem(null);
-          }}
+          editItem={localForm.data}
+          onClose={localForm.onClose}
           onSaved={() => {
-            fetchConnections();
+            localForm.onClose();
+            queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
           }}
         />
       )}

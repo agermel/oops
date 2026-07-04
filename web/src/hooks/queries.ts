@@ -22,8 +22,15 @@ export const queryKeys = {
   skills: {
     all: ["skills"] as const,
   },
+  tools: {
+    all: ["tools"] as const,
+  },
   nodelets: {
     all: ["nodelets"] as const,
     status: ["nodelets", "status"] as const,
+  },
+  mcp: {
+    all: ["mcp-connections"] as const,
+    byProject: (projectId: string) => ["mcp", "project", projectId] as const,
   },
 };
