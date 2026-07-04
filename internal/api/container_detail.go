@@ -328,7 +328,7 @@ func (s *Server) handleContainerDSNDelete(w http.ResponseWriter, r *http.Request
 }
 
 // nodeletHost 从 nodelet 地址中提取 IP。
-// 支持 "http://150.158.115.114:8686"（带 scheme）和 "10.0.0.5:8686"（纯 host:port）两种格式。
+// 支持 "http://203.0.113.10:8686"（带 scheme）和 "10.0.0.5:8686"（纯 host:port）两种格式。
 func nodeletHost(addr string) string {
 	// 带 scheme 的 URL 格式。
 	if u, err := url.Parse(addr); err == nil && u.Host != "" {

@@ -282,7 +282,7 @@ color: blue
 ### 添加新 MCP Server
 
 1. 将 MCP Server 二进制放入 `mcp-servers/<name>/`
-2. 在 Web UI 的 MCP 管理面板中添加连接，或编辑 `config/mcp_connections.json`
+2. 在 Web UI 的 MCP 管理面板中添加连接，配置会写入 `data/runtime.db`
 3. MCP 连接支持 `stdio`（本地子进程）和 `sse`（远程）两种传输模式
 
 

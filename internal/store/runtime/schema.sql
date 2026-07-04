@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name
+ON projects(name)
+WHERE name <> '';
+
 CREATE TABLE IF NOT EXISTS project_nodelets (
   project_id TEXT NOT NULL,
   nodelet_id TEXT NOT NULL,

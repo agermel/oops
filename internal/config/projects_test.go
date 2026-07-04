@@ -153,6 +153,23 @@ func TestProjectStoreUpdatePreservesNodelets(t *testing.T) {
 	}
 }
 
+func TestProjectStoreRejectsDuplicateNames(t *testing.T) {
+	store := newTestProjectStore(t)
+
+	if err := store.Add(Project{ID: "p1", Name: "Project"}); err != nil {
+		t.Fatalf("Add p1: %v", err)
+	}
+	if err := store.Add(Project{ID: "p2", Name: "Project"}); err == nil {
+		t.Fatal("expected duplicate name error on add")
+	}
+	if err := store.Add(Project{ID: "p2", Name: "Project 2"}); err != nil {
+		t.Fatalf("Add p2: %v", err)
+	}
+	if err := store.Update(Project{ID: "p2", Name: "Project"}); err == nil {
+		t.Fatal("expected duplicate name error on update")
+	}
+}
+
 func TestProjectStoreRuntimeStartsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	runtime, err := runtimestore.Open(filepath.Join(dir, "runtime.db"))

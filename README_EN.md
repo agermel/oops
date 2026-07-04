@@ -245,6 +245,7 @@ Add connections in the MCP management panel in the web UI.
 | `OOPS_BEHIND_PROXY` | `false` | Enable HSTS behind reverse proxy |
 | `OOPS_CORS_ORIGIN` | — | CORS allowed origin |
 | `OOPS_MCP_ALLOWED_COMMANDS` | — | Comma-separated MCP command whitelist |
+| `OOPS_RUNTIME_DB` | `data/runtime.db` | SQLite runtime store path |
 | `OOPS_NODELET_ADDR` | `:8686` | Nodelet listen address |
 | `OOPS_NODELET_PUBLIC_ADDRESS` | `http://localhost:8686` | Nodelet public address |
 | `OOPS_NODELET_LOG_PATH` | `/var/log/oops/nodelet.log` | Nodelet log file path |
@@ -255,12 +256,8 @@ Add connections in the MCP management panel in the web UI.
 | File | Purpose |
 |---|---|
 | `config/config.yaml` | Main config: LLM, MCP defaults, external connections, data source DSNs |
-| `config/nodelets.json` | Nodelet registry (Web UI managed) |
-| `config/mcp_connections.json` | MCP connection definitions (Web UI managed) |
-| `config/projects.json` | Project definitions (Web UI managed) |
-| `config/container_dsn.json` | Container DSN overrides (Web UI managed) |
 | `config/skills/*.md` | Skill definitions (Markdown + YAML frontmatter) |
-| `data/users.yml` | User credentials (bcrypt hashed) |
+| `data/runtime.db` | SQLite runtime store for users, nodelets, MCP connections, projects, and container DSN overrides |
 | `data/events.db` | SQLite event store (LLM conversation events) |
 | `data/sessions/` | JSONL session files |
 
@@ -460,7 +457,7 @@ when the LLM decides to load this skill.
 ### Adding a New MCP Server
 
 1. Place the MCP server binary under `mcp-servers/<name>/`
-2. Add a connection via the MCP management panel in the Web UI, or edit `config/mcp_connections.json`
+2. Add a connection via the MCP management panel in the Web UI. Runtime configuration is stored in `data/runtime.db`
 3. MCP connections support both `stdio` (local subprocess) and `sse` (remote) transports
 
 ---
@@ -506,7 +503,7 @@ Sessions persist to `data/sessions/` as JSONL files. Ensure the directory exists
 The default threshold is 48K tokens in `DefaultCompactionConfig()` (`internal/llm/context_builder.go`). Future releases will make this configurable via `config.yaml`.
 
 **Q: How to change the user password?**
-Delete `data/users.yml`, restart Oops Plane, and the interactive first-run flow will prompt for new credentials. The current release supports a single-user model.
+Clear the `users` table in `data/runtime.db`, restart Oops Plane, and the interactive first-run flow will prompt for new credentials. The current release supports a single-user model.
 
 **Q: Nodelet Docker container won't start?**
 Ensure `/var/log/oops` and `/var/lib/oops` exist on the host with proper permissions. The Docker Compose file is at `deployment/docker-compose.nodelet.yml`.

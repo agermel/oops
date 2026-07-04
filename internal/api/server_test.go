@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"oops/internal/auth"
+	"oops/internal/config"
 	"oops/internal/nodelet"
 	runtimestore "oops/internal/store/runtime"
 
@@ -35,6 +38,22 @@ func testNodeletManager(t *testing.T) *nodelet.NodeletManager {
 		t.Fatalf("NewNodeletManagerWithRuntime: %v", err)
 	}
 	return nm
+}
+
+func testProjectStore(t *testing.T) *config.ProjectStore {
+	t.Helper()
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = runtime.Close()
+	})
+	store, err := config.NewProjectStoreWithRuntime(runtime)
+	if err != nil {
+		t.Fatalf("NewProjectStoreWithRuntime: %v", err)
+	}
+	return store
 }
 
 // Host 返回测试用 Nodelet 主机信息。
@@ -159,6 +178,69 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 	}
 	if client.streamTail != "20" {
 		t.Fatalf("tail = %q, want %q", client.streamTail, "20")
+	}
+}
+
+func TestHandleProjectCreateGeneratesID(t *testing.T) {
+	userStore, tokenService, jwtToken := testAuthSetup(t)
+
+	projectStore := testProjectStore(t)
+	server := New(Options{
+		UserStore:    userStore,
+		TokenService: tokenService,
+	})
+	server.projectStore = projectStore
+
+	request := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewBufferString(`{"name":"CCNU Box"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: "jwt", Value: jwtToken})
+	response := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	var project config.Project
+	if err := json.NewDecoder(response.Body).Decode(&project); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if project.ID == "" {
+		t.Fatal("generated id is empty")
+	}
+	if project.Name != "CCNU Box" {
+		t.Fatalf("name = %q, want %q", project.Name, "CCNU Box")
+	}
+	if got := projectStore.Get(project.ID); got == nil {
+		t.Fatalf("project %q missing from store", project.ID)
+	}
+}
+
+func TestHandleProjectCreateRejectsDuplicateName(t *testing.T) {
+	userStore, tokenService, jwtToken := testAuthSetup(t)
+
+	projectStore := testProjectStore(t)
+	if err := projectStore.Add(config.Project{ID: "project-1", Name: "CCNU Box"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	server := New(Options{
+		UserStore:    userStore,
+		TokenService: tokenService,
+	})
+	server.projectStore = projectStore
+
+	request := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewBufferString(`{"name":"CCNU Box"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: "jwt", Value: jwtToken})
+	response := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "already exists") {
+		t.Fatalf("body = %s", response.Body.String())
 	}
 }
 

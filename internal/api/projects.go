@@ -4,19 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"oops/internal/config"
 	"oops/internal/docker"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
+
+	"github.com/google/uuid"
 )
 
 // serverWithNodelet 是项目详情中一台服务器的聚合视图。
 type serverWithNodelet struct {
 	Nodelet nodelet.NodeletConfig `json:"nodelet"`
-	Host    nodeletHostSummary   `json:"host"`
-	Error   string               `json:"error,omitempty"`
+	Host    nodeletHostSummary    `json:"host"`
+	Error   string                `json:"error,omitempty"`
 }
 
 type nodeletHostSummary struct {
@@ -29,15 +32,29 @@ type nodeletHostSummary struct {
 
 // containerWithType 是带服务类型识别的容器列表项。
 type containerWithType struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	Image       string               `json:"image"`
-	Command     string               `json:"command,omitempty"`
-	State       string               `json:"state"`
-	Status      string               `json:"status,omitempty"`
-	Health      string               `json:"health,omitempty"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Image       string                `json:"image"`
+	Command     string                `json:"command,omitempty"`
+	State       string                `json:"state"`
+	Status      string                `json:"status,omitempty"`
+	Health      string                `json:"health,omitempty"`
 	Ports       []nodelet.PortMapping `json:"ports,omitempty"`
-	ServiceType string               `json:"serviceType"`
+	ServiceType string                `json:"serviceType"`
+}
+
+func projectErrorStatus(err error) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "is required"):
+		return http.StatusBadRequest
+	case strings.Contains(msg, "already exists") || strings.Contains(msg, "already in project"):
+		return http.StatusConflict
+	case strings.Contains(msg, "not found"):
+		return http.StatusNotFound
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 // handleProjectList handles GET /api/projects.
@@ -60,8 +77,19 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	p.ID = strings.TrimSpace(p.ID)
+	if p.ID == "" {
+		p.ID = "project-" + uuid.NewString()
+	}
+	p.Name = strings.TrimSpace(p.Name)
+	p.Description = strings.TrimSpace(p.Description)
+	p.GitHubRepo = strings.TrimSpace(p.GitHubRepo)
+	if p.Name == "" {
+		writeJSONError(w, "project name is required", http.StatusBadRequest)
+		return
+	}
 	if err := s.projectStore.Add(p); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), projectErrorStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -96,8 +124,15 @@ func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ID = projectID
+	p.Name = strings.TrimSpace(p.Name)
+	p.Description = strings.TrimSpace(p.Description)
+	p.GitHubRepo = strings.TrimSpace(p.GitHubRepo)
+	if p.Name == "" {
+		writeJSONError(w, "project name is required", http.StatusBadRequest)
+		return
+	}
 	if err := s.projectStore.Update(p); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), projectErrorStatus(err))
 		return
 	}
 	writeJSON(w, s.projectStore.Get(projectID))
@@ -111,7 +146,7 @@ func (s *Server) handleProjectDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.projectStore.Remove(projectID); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), projectErrorStatus(err))
 		return
 	}
 	writeJSONOK(w)
@@ -189,7 +224,7 @@ func (s *Server) addProjectServer(w http.ResponseWriter, r *http.Request, projec
 	}
 
 	if err := s.projectStore.AddNodelet(projectID, req.NodeletID); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), projectErrorStatus(err))
 		return
 	}
 	writeJSONOK(w)
@@ -248,7 +283,7 @@ func (s *Server) handleProjectExcludeContainer(w http.ResponseWriter, r *http.Re
 
 	ref := body.NodeletID + "/" + body.ContainerID
 	if err := s.projectStore.ExcludeContainer(projectID, ref); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), projectErrorStatus(err))
 		return
 	}
 	writeJSONOK(w)
@@ -267,7 +302,7 @@ func (s *Server) handleProjectIncludeContainer(w http.ResponseWriter, r *http.Re
 
 	ref := nodeletID + "/" + containerID
 	if err := s.projectStore.IncludeContainer(projectID, ref); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), projectErrorStatus(err))
 		return
 	}
 	writeJSONOK(w)

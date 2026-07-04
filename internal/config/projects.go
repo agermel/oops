@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -102,8 +103,15 @@ func (s *ProjectStore) Get(id string) *Project {
 
 // Add 创建新项目并持久化。
 func (s *ProjectStore) Add(p Project) error {
+	p.ID = strings.TrimSpace(p.ID)
+	p.Name = strings.TrimSpace(p.Name)
+	p.Description = strings.TrimSpace(p.Description)
+	p.GitHubRepo = strings.TrimSpace(p.GitHubRepo)
 	if p.ID == "" {
 		return fmt.Errorf("project id is required")
+	}
+	if p.Name == "" {
+		return fmt.Errorf("project name is required")
 	}
 
 	s.mu.Lock()
@@ -112,6 +120,9 @@ func (s *ProjectStore) Add(p Project) error {
 	for _, existing := range s.config.Projects {
 		if existing.ID == p.ID {
 			return fmt.Errorf("project %q already exists", p.ID)
+		}
+		if existing.Name == p.Name {
+			return fmt.Errorf("project name %q already exists", p.Name)
 		}
 	}
 
@@ -131,8 +142,15 @@ func (s *ProjectStore) Add(p Project) error {
 
 // Update 更新已有项目并持久化。
 func (s *ProjectStore) Update(p Project) error {
+	p.ID = strings.TrimSpace(p.ID)
+	p.Name = strings.TrimSpace(p.Name)
+	p.Description = strings.TrimSpace(p.Description)
+	p.GitHubRepo = strings.TrimSpace(p.GitHubRepo)
 	if p.ID == "" {
 		return fmt.Errorf("project id is required")
+	}
+	if p.Name == "" {
+		return fmt.Errorf("project name is required")
 	}
 
 	s.mu.Lock()
@@ -147,6 +165,11 @@ func (s *ProjectStore) Update(p Project) error {
 	}
 	if idx < 0 {
 		return fmt.Errorf("project %q not found", p.ID)
+	}
+	for _, existing := range s.config.Projects {
+		if existing.ID != p.ID && existing.Name == p.Name {
+			return fmt.Errorf("project name %q already exists", p.Name)
+		}
 	}
 
 	p.CreatedAt = s.config.Projects[idx].CreatedAt
