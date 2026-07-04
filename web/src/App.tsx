@@ -1,11 +1,10 @@
 import React from "react";
-import { Plus } from "lucide-react";
-import { Button } from "./components/ui/Button";
 import type {
   StepEvent,
   ChatExchange,
   SessionDetail,
   MCPConnectionStatus,
+  ProjectMCPConnection,
 } from "./types";
 import { SESSION_STORAGE_KEY } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,7 +28,6 @@ import { ProjectsView } from "./components/ProjectsView";
 import { ProjectDetailView } from "./components/ProjectDetailView";
 import { NodeletManagementView } from "./components/NodeletManagementView";
 import { ChatView } from "./components/ChatView";
-import { MCPView } from "./components/MCPView";
 import { MCPFormModal } from "./components/MCPFormModal";
 import { ToolsView } from "./components/ToolsView";
 import { SkillsView } from "./components/SkillsView";
@@ -84,7 +82,6 @@ export function App() {
       ? ""
       : route.projectId || "";
   const projectSection: string =
-    route.view === "project-mcp" ? "mcp" :
     route.view === "project-chat" ? "chat" :
     route.view === "project-console" ? "console" :
     route.view === "project-tools" ? "tools" :
@@ -103,7 +100,9 @@ export function App() {
   // MCP 新建/编辑连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
   const mcpForm = useModal<MCPConnectionStatus>();
   const [mcpQuickType, setMCPQuickType] = React.useState<string | undefined>(undefined);
-  const [mcpViewKey, setMCPViewKey] = React.useState(0);
+
+  // MCP 连接选择状态 —— 当用户在左侧栏点击 MCP 连接时设置
+  const [selectedMCPConnectionID, setSelectedMCPConnectionID] = React.useState("");
 
   // ---- 数据域 hooks（TanStack Query 管理） ----
   const {
@@ -319,8 +318,7 @@ export function App() {
 
   function goToProjectSection(section: string) {
     if (!selectedProjectID) return;
-    if (section === "mcp") navigate({ view: "project-mcp", projectId: selectedProjectID });
-    else if (section === "chat") navigate({ view: "project-chat", projectId: selectedProjectID });
+    if (section === "chat") navigate({ view: "project-chat", projectId: selectedProjectID });
     else if (section === "console") navigate({ view: "project-console", projectId: selectedProjectID });
     else if (section === "tools") navigate({ view: "project-tools", projectId: selectedProjectID });
     else if (section === "skills") navigate({ view: "project-skills", projectId: selectedProjectID });
@@ -428,6 +426,18 @@ export function App() {
     if (!selectedProjectID) return;
     setSelectedNodeletID(nodeletID);
     setSelectedContainerID(containerID);
+    setSelectedMCPConnectionID("");
+  }
+
+  function selectMCPConnection(conn: ProjectMCPConnection) {
+    if (!selectedProjectID) return;
+    setSelectedMCPConnectionID(conn.id);
+    // 如果 MCP 连接绑定了容器，同步选中对应的 nodelet 和容器
+    if (conn.nodeletId) setSelectedNodeletID(conn.nodeletId);
+  }
+
+  function editMCPConnection(conn: ProjectMCPConnection) {
+    mcpForm.onOpen(conn);
   }
 
   function toggleServer(nodeletID: string) {
@@ -502,7 +512,6 @@ export function App() {
   React.useEffect(() => {
     const parts: string[] = [];
     if (selectedProject) parts.push(selectedProject.name);
-    if (selectedProject && projectSection === "mcp") parts.push("MCP 管理");
     if (selectedProject && projectSection === "tools") parts.push("工具管理");
     if (selectedProject && projectSection === "skills") parts.push("技能管理");
     if (selectedProject && projectSection === "chat") parts.push("助手");
@@ -595,6 +604,7 @@ export function App() {
             serverError={serverError}
             selectedNodeletID={selectedNodeletID}
             selectedContainerID={selectedContainerID}
+            selectedMCPConnectionID={selectedMCPConnectionID}
             expandedServers={expandedServers.set}
             logs={logs}
             logsLoading={logsLoading}
@@ -603,6 +613,8 @@ export function App() {
             onBack={goToProjectList}
             onToggleServer={toggleServer}
             onSelectContainer={selectContainerFromUI}
+            onSelectMCPConnection={selectMCPConnection}
+            onEditMCPConnection={editMCPConnection}
             onAutoScrollChange={setAutoScroll}
             onClearLogs={clearLogs}
             logsPanelRef={logsPanel}
@@ -616,28 +628,6 @@ export function App() {
               }
             }}
           />
-        )}
-
-        {activeNav === "projects" && selectedProject && projectSection === "mcp" && (
-          <section className="workspace-card">
-            <div className="workspace-head">
-              <div>
-                <h1>MCP 管理</h1>
-                <p>管理 LLM Agent 的 MCP 工具连接，支持 MySQL、Redis、PostgreSQL 等社区 MCP 服务器。</p>
-              </div>
-              <div className="workspace-head-actions">
-                <Button size="sm" onClick={() => { setMCPQuickType(undefined); mcpForm.onOpen(); }}>
-                  <Plus size={15} />
-                  <span>新建连接</span>
-                </Button>
-              </div>
-            </div>
-            <MCPView
-              key={mcpViewKey}
-              onQuickCreate={(type) => { setMCPQuickType(type); mcpForm.onOpen(); }}
-              onEdit={(item) => { mcpForm.onOpen(item); }}
-            />
-          </section>
         )}
 
         {activeNav === "projects" && selectedProject && projectSection === "tools" && (
@@ -708,7 +698,6 @@ export function App() {
           onSaved={() => {
             mcpForm.onClose();
             setMCPQuickType(undefined);
-            setMCPViewKey((k) => k + 1);
             // Refresh project-scoped MCP list so overview picks up new/edited connections.
             queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(selectedProjectID) });
           }}

@@ -5,6 +5,7 @@ import { serviceTypeIcons, serviceLabel, mcpStatusLabel } from "../types";
 import { getErrorMessage } from "../lib/api";
 import { useDeleteServer, useAddServer, useExcludeContainer, useIncludeContainer, useContainers, useProjectMCPConnections } from "../hooks/useServers";
 import { useNodelets } from "../hooks/useNodelets";
+import { useToggle } from "../hooks/useToggle";
 import { Modal } from "./Modal";
 import { StatusDot } from "./StatusPill";
 import { Button } from "./ui/Button";
@@ -15,22 +16,33 @@ export function ServerTree({
   serversLoading,
   serverError,
   selectedContainerID,
+  selectedMCPConnectionID,
   expandedServers,
   excludedContainerRefs,
   onToggleServer,
   onSelectContainer,
+  onSelectMCPConnection,
 }: {
   projectId: string;
   servers: ServerWithNodelet[];
   serversLoading: boolean;
   serverError: string;
   selectedContainerID: string;
+  selectedMCPConnectionID?: string;
   expandedServers: Set<string>;
   excludedContainerRefs?: string[];
   onToggleServer: (nodeletID: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
+  onSelectMCPConnection: (conn: ProjectMCPConnection) => void;
 }) {
   const [showAddModal, setShowAddModal] = React.useState(false);
+  const [titleEditing, setTitleEditing] = React.useState(false);
+  const [title, setTitle] = React.useState("资源");
+  const [titleDraft, setTitleDraft] = React.useState("资源");
+  const titleInputRef = React.useRef<HTMLInputElement>(null);
+
+  const [serversExpanded, { toggle: toggleServers }] = useToggle(true);
+  const [mcpExpanded, { toggle: toggleMCP }] = useToggle(false);
 
   const { data: nodelets = [], isLoading: nodeletsLoading } = useNodelets();
   const deleteServer = useDeleteServer(projectId);
@@ -45,71 +57,6 @@ export function ServerTree({
   } = useProjectMCPConnections(projectId);
   const mcpError = mcpQueryError ? getErrorMessage(mcpQueryError, "读取 MCP 连接失败") : "";
 
-  // Build lookup maps from MCP connections keyed by nodeletId and nodeletId:containerId.
-  const mcpByNodelet = React.useMemo(() => {
-    const byNodelet: Record<string, ProjectMCPConnection[]> = {};
-    for (const c of mcpConns) {
-      if (!c.nodeletId) continue;
-      if (!byNodelet[c.nodeletId]) byNodelet[c.nodeletId] = [];
-      byNodelet[c.nodeletId].push(c);
-    }
-    return byNodelet;
-  }, [mcpConns]);
-
-  const mcpByContainerKey = React.useMemo(() => {
-    const byKey: Record<string, ProjectMCPConnection> = {};
-    for (const c of mcpConns) {
-      if (c.nodeletId && c.containerId) {
-        byKey[`${c.nodeletId}:${c.containerId}`] = c;
-      }
-    }
-    return byKey;
-  }, [mcpConns]);
-
-// ---- 渲染单个 MCP 连接条目 ----
-function MCPTreeItem({
-  conn,
-  boundContainerId,
-  onClick,
-}: {
-  conn: ProjectMCPConnection;
-  boundContainerId?: string;
-  onClick?: () => void;
-}) {
-  const boundName = boundContainerId ? boundContainerId.substring(0, 12) : "";
-  return (
-    <div
-      className="tree-mcp-item"
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onClick={onClick}
-      onKeyDown={
-        onClick
-          ? (e: React.KeyboardEvent) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
-    >
-      <Wrench size={12} />
-      <div className="tree-container-info">
-        <span className="tree-container-name">{conn.name}</span>
-        <span className="tree-container-sub">
-          {serviceLabel(conn.type) || conn.type}
-          {boundContainerId ? ` · ${boundName}…` : ""}
-          {" · "}{mcpStatusLabel[conn.status || "stopped"]}
-          {conn.toolCount > 0 ? ` · ${conn.toolCount} tools` : ""}
-        </span>
-      </div>
-      <div className="tree-container-side">
-        <StatusDot alive={conn.status === "running"} unknown={conn.status !== "running" && conn.status !== "stopped"} />
-      </div>
-    </div>
-  );
-}
   // ---- 容器列表子组件（内部调用 TanStack Query） ----
   function ServerContainers({
     nodeletId,
@@ -157,7 +104,6 @@ function MCPTreeItem({
           const portsText = c.ports && c.ports.length > 0
             ? c.ports.map((p) => p.hostPort ? `${p.hostPort}->${p.containerPort}/${p.protocol || "tcp"}` : `${p.containerPort}/${p.protocol || "tcp"}`).join(", ")
             : "";
-          const boundMCP = mcpByContainerKey[`${nodeletId}:${c.id}`];
           return (
             <div
               key={c.id}
@@ -189,12 +135,6 @@ function MCPTreeItem({
                   <EyeOff size={12} />
                 </Button>
                 {label && <span className="tree-container-type">{label}</span>}
-                {boundMCP && (
-                  <span className="tree-container-mcp" title={`MCP: ${boundMCP.name} · ${mcpStatusLabel[boundMCP.status || "stopped"]} · ${boundMCP.toolCount} tools`}>
-                    <Wrench size={11} />
-                    <StatusDot alive={boundMCP.status === "running"} loading={false} unknown={boundMCP.status !== "running" && boundMCP.status !== "stopped"} />
-                  </span>
-                )}
                 <StatusDot alive={c.state === "running"} />
               </div>
             </div>
@@ -256,6 +196,18 @@ function MCPTreeItem({
     });
   }
 
+  function commitTitle() {
+    setTitle(titleDraft.trim() || title);
+    setTitleEditing(false);
+  }
+
+  React.useEffect(() => {
+    if (titleEditing && titleInputRef.current) {
+      titleInputRef.current.focus();
+      titleInputRef.current.select();
+    }
+  }, [titleEditing]);
+
   const addError = deleteServer.error || addServer.error
     ? getErrorMessage(deleteServer.error || addServer.error, "操作失败")
     : "";
@@ -264,15 +216,32 @@ function MCPTreeItem({
   const existingIDs = new Set(servers.map((s) => s.nodelet.id));
   const availableNodelets = nodelets.filter((n) => !existingIDs.has(n.id));
 
-  // 有多少 MCP 连接没有绑定到具体容器（仅 nodelet 级别）。
-  const nodeletOnlyMCPCount = mcpConns.filter((c) => c.scope === "nodelet").length;
-  const containerMCPCount = mcpConns.filter((c) => c.scope === "container").length;
-
   return (
     <aside className="server-tree">
+      {/* Header — 可编辑标题 */}
       <div className="tree-header">
         <Server size={16} />
-        <span>服务器</span>
+        {titleEditing ? (
+          <input
+            ref={titleInputRef}
+            className="tree-header-input"
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={commitTitle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitTitle();
+              if (e.key === "Escape") { setTitleDraft(title); setTitleEditing(false); }
+            }}
+          />
+        ) : (
+          <span
+            className="tree-header-title"
+            onClick={() => { setTitleDraft(title); setTitleEditing(true); }}
+            title="点击编辑标题"
+          >
+            {title}
+          </span>
+        )}
         <Button variant="ghost" size="sm" className="tree-add-btn" title="添加服务器" aria-label="添加服务器" onClick={openAddModal}>
           <Plus size={14} />
         </Button>
@@ -281,105 +250,117 @@ function MCPTreeItem({
       {serverError && <div className="error-banner">{serverError}</div>}
       {addError && <div className="error-banner">{addError}</div>}
 
+      {/* ---- 统一滚动区：服务器区 + MCP 区 ---- */}
       <div className="tree-list">
-        {serversLoading && servers.length === 0 && (
-          <div className="skeleton-block">
-            <div className="skeleton-line lg" />
-            <div className="skeleton-line md" />
-            <div className="skeleton-line md" />
-          </div>
-        )}
-        {!serversLoading && servers.length === 0 && <div className="tree-empty">暂无服务器</div>}
-        {servers.length > 0 &&
-          servers.map((sw) => {
-            const isExpanded = expandedServers.has(sw.nodelet.id);
-            const isStatusUnknown = !sw.host?.available && !sw.error;
-            const nid = sw.nodelet.id;
-            const nodeletMCPConns = mcpByNodelet[nid] || [];
-            // Separate MCP connections that are container-bound vs nodelet-only for this server.
-            const containerMCPs = nodeletMCPConns.filter((c) => c.scope === "container");
-            const nodeletOnlyMCPs = nodeletMCPConns.filter((c) => c.scope === "nodelet");
-            return (
-              <div key={sw.nodelet.id} className="tree-node">
-                <div className="tree-node-main">
-                  <button
-                    className={`tree-server ${sw.host?.available ? "alive" : "dead"}`}
-                    onClick={() => onToggleServer(sw.nodelet.id)}
-                  >
-                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    <Server size={15} />
-                    <div className="tree-server-info">
-                      <strong>{sw.nodelet.name}</strong>
-                      <small>{sw.nodelet.address}</small>
-                    </div>
-                    <StatusDot alive={sw.host?.available ?? false} unknown={isStatusUnknown} />
-                  </button>
-                  <Button size="xs" variant="ghost" className="tree-remove-btn" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
-                    <Trash2 size={12} />
-                  </Button>
-                </div>
-
-                {isExpanded && (
-                  <ServerContainers
-                    nodeletId={sw.nodelet.id}
-                    serverError={sw.error}
-                    onSelectContainer={(cid) => onSelectContainer(sw.nodelet.id, cid)}
-                  />
-                )}
-
-                {/* MCP 连接 sub-section: shown when server is expanded and has MCP */}
-                {isExpanded && nodeletMCPConns.length > 0 && (
-                  <div className="tree-node-detail">
-                    <div className="tree-mcp-group-header">
-                      <Wrench size={12} />
-                      <span>MCP 连接</span>
-                      <span className="tree-mcp-group-count">{nodeletMCPConns.length}</span>
-                    </div>
-                    {/* container-bound MCP rows */}
-                    {containerMCPs.map((conn) => (
-                      <MCPTreeItem
-                        key={conn.id}
-                        conn={conn}
-                        boundContainerId={conn.containerId}
-                        onClick={
-                          conn.containerId
-                            ? () => onSelectContainer(nid, conn.containerId!)
-                            : undefined
-                        }
-                      />
-                    ))}
-                    {/* nodelet-only MCP rows */}
-                    {nodeletOnlyMCPs.map((conn) => (
-                      <MCPTreeItem key={conn.id} conn={conn} />
-                    ))}
-                  </div>
-                )}
+        {/* ---- 服务器区（可折叠）---- */}
+        <button className="tree-section-toggle" onClick={toggleServers}>
+          {serversExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          <Server size={13} />
+          <span>服务器</span>
+          {servers.length > 0 && (
+            <span className="tree-section-count">{servers.length}</span>
+          )}
+        </button>
+        {serversExpanded && (
+          <div className="tree-section-body">
+            {serversLoading && servers.length === 0 && (
+              <div className="skeleton-block">
+                <div className="skeleton-line lg" />
+                <div className="skeleton-line md" />
+                <div className="skeleton-line md" />
               </div>
-            );
-          })}
+            )}
+            {!serversLoading && servers.length === 0 && <div className="tree-empty">暂无服务器</div>}
+            {servers.length > 0 &&
+              servers.map((sw) => {
+                const isExpanded = expandedServers.has(sw.nodelet.id);
+                const isStatusUnknown = !sw.host?.available && !sw.error;
+                return (
+                  <div key={sw.nodelet.id} className="tree-node">
+                    <div className="tree-node-main">
+                      <button
+                        className={`tree-server ${sw.host?.available ? "alive" : "dead"}`}
+                        onClick={() => onToggleServer(sw.nodelet.id)}
+                      >
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        <Server size={15} />
+                        <div className="tree-server-info">
+                          <strong>{sw.nodelet.name}</strong>
+                          <small>{sw.nodelet.address}</small>
+                        </div>
+                        <StatusDot alive={sw.host?.available ?? false} unknown={isStatusUnknown} />
+                      </button>
+                      <Button size="xs" variant="ghost" className="tree-remove-btn" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
+                        <Trash2 size={12} />
+                      </Button>
+                    </div>
 
-        {/* Global MCP section: only shown when there are connections */}
-        {!mcpLoading && mcpConns.length > 0 && (
-          <div className="tree-mcp-summary">
-            <Wrench size={13} />
-            <span>
-              {nodeletOnlyMCPCount > 0 && containerMCPCount > 0
-                ? `${mcpConns.length} 个 MCP（${containerMCPCount} 绑定容器 + ${nodeletOnlyMCPCount} 服务器级）`
-                : `${mcpConns.length} 个 MCP 连接`
-              }
-            </span>
+                    {isExpanded && (
+                      <ServerContainers
+                        nodeletId={sw.nodelet.id}
+                        serverError={sw.error}
+                        onSelectContainer={(cid) => onSelectContainer(sw.nodelet.id, cid)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
           </div>
         )}
-        {!mcpLoading && mcpConns.length === 0 && !serversLoading && servers.length > 0 && (
-          <div className="tree-mcp-summary tree-mcp-summary--empty">
-            <Wrench size={13} />
-            <span>暂无项目 MCP 连接</span>
+
+        {/* ---- MCP 连接区（可折叠，与服务器同级）---- */}
+        <button className="tree-section-toggle" onClick={toggleMCP}>
+          {mcpExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          <Wrench size={13} />
+          <span>MCP 连接</span>
+          {mcpConns.length > 0 && (
+            <span className="tree-section-count">{mcpConns.length}</span>
+          )}
+        </button>
+        {mcpExpanded && (
+          <div className="tree-section-body">
+            {mcpError && <div className="tree-node-error">{mcpError}</div>}
+            {mcpLoading && mcpConns.length === 0 && (
+              <div className="loading-overlay"><span className="spinner spinner-sm" /> 读取中...</div>
+            )}
+            {!mcpLoading && mcpConns.length === 0 && !mcpError && (
+              <div className="tree-empty">暂无 MCP 连接</div>
+            )}
+            {mcpConns.map((conn) => {
+              const Icon = serviceTypeIcons[conn.type] || serviceTypeIcons.unknown;
+              const isSelected = selectedMCPConnectionID === conn.id;
+              return (
+                <div
+                  key={conn.id}
+                  className={`tree-container tree-mcp-row ${isSelected ? "selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectMCPConnection(conn)}
+                  onKeyDown={(e: React.KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectMCPConnection(conn);
+                    }
+                  }}
+                >
+                  <span className="tree-row-toggle-spacer" aria-hidden="true" />
+                  <Icon size={14} />
+                  <div className="tree-container-info">
+                    <span className="tree-container-name">{conn.name}</span>
+                    <span className="tree-container-sub">
+                      {mcpStatusLabel[conn.status || "stopped"]}
+                      {conn.toolCount > 0 ? ` · ${conn.toolCount} tools` : ""}
+                    </span>
+                  </div>
+                  <div className="tree-container-side">
+                    <StatusDot alive={conn.status === "running"} unknown={conn.status !== "running" && conn.status !== "stopped"} />
+                  </div>
+                  <span className="tree-row-action-spacer" aria-hidden="true" />
+                </div>
+              );
+            })}
           </div>
         )}
-        {mcpLoading && (
-          <div className="loading-overlay"><span className="spinner spinner-sm" /> 读取 MCP 连接中...</div>
-        )}
-        {mcpError && <div className="tree-node-error">{mcpError}</div>}
       </div>
 
       {showAddModal && (

@@ -3,7 +3,6 @@ import {
   Sparkles,
   FolderKanban,
   LayoutDashboard,
-  Wrench,
   Search,
   Server,
   Database,
@@ -274,7 +273,6 @@ export const navigation = [
 
 export const projectNavigation = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
-  { id: "mcp", label: "MCP 连接", icon: Wrench },
   { id: "tools", label: "工具管理", icon: Cog },
   { id: "skills", label: "技能管理", icon: BookOpen },
   { id: "chat", label: "助手", icon: Sparkles },

@@ -2,8 +2,7 @@ import React from "react";
 import { Plus, FolderKanban, Trash2, Edit3, ChevronRight, Github } from "lucide-react";
 import type { Project } from "../types";
 import { useModal } from "../hooks/useModal";
-import { apiRequest, getErrorMessage } from "../lib/api";
-import { projectBasePaths, projectPaths } from "../lib/paths";
+import { getErrorMessage, useCreateProject, useDeleteProject, useUpdateProject } from "../hooks/useProjects";
 import { Modal } from "./Modal";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
@@ -13,7 +12,11 @@ function emptyProject(): Project {
 }
 
 function savePayload(project: Project) {
-  return { id: project.id, name: project.name, description: project.description || "", githubRepo: project.githubRepo || "" };
+  return {
+    name: project.name.trim(),
+    description: (project.description || "").trim(),
+    githubRepo: (project.githubRepo || "").trim(),
+  };
 }
 
 export function ProjectsView({
@@ -29,21 +32,27 @@ export function ProjectsView({
   onSelect: (id: string) => void;
   onRefresh: () => void;
 }) {
-  const [saving, setSaving] = React.useState(false);
   const [formError, setFormError] = React.useState("");
   const [deleteError, setDeleteError] = React.useState("");
+  const [formMode, setFormMode] = React.useState<"create" | "edit">("create");
   const githubInputRef = React.useRef<HTMLInputElement>(null);
+  const createProject = useCreateProject();
+  const updateProject = useUpdateProject();
+  const deleteProject = useDeleteProject();
 
   const formModal = useModal<Project>();
-  const isNew = formModal.data ? formModal.data.id === "" : true;
+  const isNew = formMode === "create";
+  const saving = createProject.isPending || updateProject.isPending;
 
   function openAdd() {
     setFormError("");
+    setFormMode("create");
     formModal.onOpen(emptyProject());
   }
 
   function openEdit(p: Project, focusGithub?: boolean) {
     setFormError("");
+    setFormMode("edit");
     formModal.onOpen({ ...p });
     if (focusGithub) {
       setTimeout(() => githubInputRef.current?.focus(), 50);
@@ -58,26 +67,19 @@ export function ProjectsView({
 
   async function handleSave() {
     if (!formModal.data || saving) return;
-    setSaving(true);
     setFormError("");
-    const url = isNew ? projectBasePaths.create : projectPaths(formModal.data!.id).detail;
-    const method = isNew ? "POST" : "PUT";
-
     try {
-      const created = await apiRequest<Project>(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(savePayload(formModal.data!)),
-      });
+      const payload = savePayload(formModal.data);
+      const saved = isNew
+        ? await createProject.mutateAsync(payload)
+        : await updateProject.mutateAsync({ id: formModal.data.id, ...payload });
       closeForm();
-      if (isNew && created?.id) {
-        onSelect(created.id);
+      if (isNew && saved?.id) {
+        onSelect(saved.id);
       }
       onRefresh();
     } catch (err) {
       setFormError(getErrorMessage(err, "保存失败"));
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -85,7 +87,7 @@ export function ProjectsView({
     if (!window.confirm(`确定要删除该项目吗？`)) return;
     setDeleteError("");
     try {
-      await apiRequest(projectPaths(id).detail, { method: "DELETE" });
+      await deleteProject.mutateAsync(id);
       onRefresh();
     } catch (err) {
       setDeleteError(getErrorMessage(err, "删除失败"));
@@ -171,7 +173,7 @@ export function ProjectsView({
           <FormInput
             id="project-name"
             value={formModal.data.name}
-            onChange={(e) => formModal.setData({ ...formModal.data!, name: e.target.value, id: formModal.data!.id || `${e.target.value.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}` })}
+            onChange={(e) => formModal.setData({ ...formModal.data!, name: e.target.value })}
             placeholder="例如: CCNU Box"
           />
           <label htmlFor="project-desc">描述</label>

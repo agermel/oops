@@ -4,13 +4,15 @@ import type {
   Project,
   ServerWithNodelet,
   LogEntry,
+  ProjectMCPConnection,
 } from "../types";
 import { ServerTree } from "./ServerTree";
 import { ContainerDetailView } from "./ContainerDetail";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
-import { apiRequest, getErrorMessage } from "../lib/api";
-import { projectPaths } from "../lib/paths";
+import { getErrorMessage } from "../lib/api";
+import { useUpdateProject } from "../hooks/useProjects";
+import { useProjectMCPConnections } from "../hooks/useServers";
 
 export function ProjectDetailView({
   project,
@@ -19,6 +21,7 @@ export function ProjectDetailView({
   serverError,
   selectedNodeletID,
   selectedContainerID,
+  selectedMCPConnectionID,
   expandedServers,
   logs,
   logsLoading,
@@ -27,6 +30,8 @@ export function ProjectDetailView({
   onBack,
   onToggleServer,
   onSelectContainer,
+  onSelectMCPConnection,
+  onEditMCPConnection,
   onAutoScrollChange,
   onClearLogs,
   logsPanelRef,
@@ -38,6 +43,7 @@ export function ProjectDetailView({
   serverError: string;
   selectedNodeletID: string;
   selectedContainerID: string;
+  selectedMCPConnectionID?: string;
   expandedServers: Set<string>;
   logs: LogEntry[];
   logsLoading: boolean;
@@ -46,6 +52,8 @@ export function ProjectDetailView({
   onBack: () => void;
   onToggleServer: (id: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
+  onSelectMCPConnection: (conn: ProjectMCPConnection) => void;
+  onEditMCPConnection?: (conn: ProjectMCPConnection) => void;
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
@@ -53,11 +61,18 @@ export function ProjectDetailView({
 }) {
   const nodeletAddress = servers.find((s) => s.nodelet.id === selectedNodeletID)?.nodelet.address;
 
+  // Look up the selected MCP connection from cached data
+  const { data: mcpConns = [] } = useProjectMCPConnections(project.id);
+  const selectedMCPConnection = selectedMCPConnectionID
+    ? mcpConns.find((c) => c.id === selectedMCPConnectionID)
+    : undefined;
+
   // GitHub 仓库 inline 编辑状态。
   const [editingRepo, setEditingRepo] = React.useState(false);
   const [repoValue, setRepoValue] = React.useState(project.githubRepo || "");
   const [repoSaving, setRepoSaving] = React.useState(false);
   const [repoError, setRepoError] = React.useState("");
+  const updateProject = useUpdateProject();
 
   React.useEffect(() => {
     setRepoValue(project.githubRepo || "");
@@ -68,15 +83,11 @@ export function ProjectDetailView({
     setRepoSaving(true);
     setRepoError("");
     try {
-      await apiRequest(projectPaths(project.id).detail, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: project.id,
-          name: project.name,
-          description: project.description || "",
-          githubRepo: repoValue.trim(),
-        }),
+      await updateProject.mutateAsync({
+        id: project.id,
+        name: project.name,
+        description: project.description || "",
+        githubRepo: repoValue.trim(),
       });
       setEditingRepo(false);
       // 通知父组件刷新。
@@ -143,10 +154,12 @@ export function ProjectDetailView({
           serversLoading={serversLoading}
           serverError={serverError}
           selectedContainerID={selectedContainerID}
+          selectedMCPConnectionID={selectedMCPConnectionID}
           expandedServers={expandedServers}
           excludedContainerRefs={project.excludedContainerRefs || []}
           onToggleServer={onToggleServer}
           onSelectContainer={onSelectContainer}
+          onSelectMCPConnection={onSelectMCPConnection}
         />
 
         <ContainerDetailView
@@ -161,6 +174,12 @@ export function ProjectDetailView({
           containerId={selectedContainerID}
           projectId={project.id}
           nodeletAddress={nodeletAddress}
+          mcpConnection={selectedMCPConnection}
+          onEditMCP={onEditMCPConnection}
+          onMCPDeleted={() => {
+            onMCPChanged();
+          }}
+          onNavigateToContainer={onSelectContainer}
           onMCPChanged={onMCPChanged}
         />
       </div>
