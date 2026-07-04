@@ -13,6 +13,7 @@ import (
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
+	runtimestore "oops/internal/store/runtime"
 
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
@@ -62,6 +63,7 @@ type Server struct {
 	mcpManager     *mcp.Manager
 	projectStore   *config.ProjectStore
 	dsnStore       *config.ContainerDSNStore
+	runtimeStore   *runtimestore.Store
 	sessionStore   *llm.SessionStore
 	UserStore      *auth.Store
 	TokenService   *auth.TokenService
@@ -70,10 +72,14 @@ type Server struct {
 
 // NewFromConfig 使用配置创建中心端 API 服务。
 func NewFromConfig(cfg config.Config) *Server {
-	nm, err := nodelet.NewNodeletManager(nodelet.DefaultConfigPath)
+	runtimeStore, err := runtimestore.OpenRuntime()
 	if err != nil {
-		logutil.Error("nodelet: manager", zap.Error(err))
-		nm, _ = nodelet.NewNodeletManager(nodelet.FallbackConfigPath) // fallback: empty
+		logutil.Fatal("runtime store: open", zap.Error(err))
+	}
+
+	nm, err := nodelet.NewNodeletManagerWithRuntime(runtimeStore)
+	if err != nil {
+		logutil.Fatal("nodelet: manager", zap.Error(err))
 	}
 
 	// 后台保活探测器。
@@ -83,39 +89,37 @@ func NewFromConfig(cfg config.Config) *Server {
 	s := New(Options{
 		NodeletManager: nm,
 		NodeletClient:  nodelet.NewClient(nil),
-		LLMEnabled:    cfg.LLM.Enabled,
-		LLMConfig:     cfg.LLM,
+		LLMEnabled:     cfg.LLM.Enabled,
+		LLMConfig:      cfg.LLM,
 	})
 	s.nodeletProber = prober
+	s.runtimeStore = runtimeStore
 
 	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
-	mgr, err := mcp.NewManager(mcp.DefaultConfigPath, func(mcpBaseTools []tool.BaseTool) {
+	mgr, err := mcp.NewManagerWithRuntime(runtimeStore, func(mcpBaseTools []tool.BaseTool) {
 		s.onMCPToolsChanged(mcpBaseTools)
 	})
 	if err != nil {
-		logutil.Error("mcp: manager", zap.Error(err))
-	} else {
-		s.mcpManager = mgr
+		logutil.Fatal("mcp: manager", zap.Error(err))
 	}
+	s.mcpManager = mgr
 
 	// 项目存储。
-	projectStore, err := config.NewProjectStore(config.DefaultProjectsPath)
+	projectStore, err := config.NewProjectStoreWithRuntime(runtimeStore)
 	if err != nil {
-		logutil.Error("projects: store", zap.Error(err))
-	} else {
-		s.projectStore = projectStore
+		logutil.Fatal("projects: store", zap.Error(err))
 	}
+	s.projectStore = projectStore
 
 	// 容器 DSN 覆盖值存储。
-	dsnStore, err := config.NewContainerDSNStore(config.DefaultDSNPath)
+	dsnStore, err := config.NewContainerDSNStoreWithRuntime(runtimeStore)
 	if err != nil {
-		logutil.Error("dsn: store", zap.Error(err))
-	} else {
-		s.dsnStore = dsnStore
+		logutil.Fatal("dsn: store", zap.Error(err))
 	}
+	s.dsnStore = dsnStore
 
 	// 用户认证。
-	userStore, err := auth.NewStore(auth.DefaultPath)
+	userStore, err := auth.NewStoreFromRuntime(runtimeStore)
 	if err != nil {
 		logutil.Error("auth: user store", zap.Error(err))
 	}
@@ -296,6 +300,9 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{pid}/servers", authed(s.handleProjectServersAdd))
 	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}", authed(s.handleProjectServersRemove))
 
+	// ---- Project MCP Connections ----
+	mux.HandleFunc("GET /api/projects/{pid}/mcp/connections", authed(s.handleProjectMCPList))
+
 	// ---- Project Containers ----
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers", authed(s.handleProjectContainers))
 	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}", authed(s.handleContainerDetail))
@@ -307,7 +314,6 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNDelete))
 }
 
-
 // findNodelet 按配置 ID 查找 Nodelet。
 func (s *Server) findNodelet(id string) (nodelet.NodeletConfig, bool) {
 	if s.nodeletManager == nil {
@@ -315,5 +321,3 @@ func (s *Server) findNodelet(id string) (nodelet.NodeletConfig, bool) {
 	}
 	return s.nodeletManager.Find(id)
 }
-
-

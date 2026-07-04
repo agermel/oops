@@ -1,6 +1,8 @@
 import React from "react";
 import { Info, Wrench, FileText, Settings } from "lucide-react";
 import type { ContainerDetail as ContainerDetailType, LogEntry } from "../types";
+import { useContainerDetail } from "../hooks/useContainerDetail";
+import { getErrorMessage } from "../lib/api";
 import { ContainerOverview } from "./ContainerOverview";
 import { ContainerMCP } from "./ContainerMCP";
 import { ContainerLogs } from "./ContainerLogs";
@@ -16,9 +18,6 @@ const TABS = [
 type TabID = (typeof TABS)[number]["id"];
 
 export function ContainerDetailView({
-  detail,
-  loading,
-  error,
   logs,
   logsLoading,
   logsError,
@@ -32,9 +31,6 @@ export function ContainerDetailView({
   nodeletAddress,
   onMCPChanged,
 }: {
-  detail?: ContainerDetailType;
-  loading: boolean;
-  error: string;
   logs: LogEntry[];
   logsLoading: boolean;
   logsError: string;
@@ -49,6 +45,11 @@ export function ContainerDetailView({
   onMCPChanged: () => void;
 }) {
   const [activeTab, setActiveTab] = React.useState<TabID>("overview");
+
+  const { data: detail, isLoading: loading, error: queryError } = useContainerDetail(
+    projectId, nodeletId, containerId
+  );
+  const error = queryError ? getErrorMessage(queryError, "读取容器详情失败") : "";
 
   function handleEditDSN() {
     setActiveTab("dsn");

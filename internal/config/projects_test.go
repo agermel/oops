@@ -1,19 +1,28 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
+
+	runtimestore "oops/internal/store/runtime"
 )
 
-func TestProjectStoreCRUD(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "projects.json")
-
-	store, err := NewProjectStore(path)
+func newTestProjectStore(t *testing.T) *ProjectStore {
+	t.Helper()
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
 	if err != nil {
-		t.Fatalf("NewProjectStore: %v", err)
+		t.Fatalf("open runtime: %v", err)
 	}
+	t.Cleanup(func() { runtime.Close() })
+	store, err := NewProjectStoreWithRuntime(runtime)
+	if err != nil {
+		t.Fatalf("NewProjectStoreWithRuntime: %v", err)
+	}
+	return store
+}
+
+func TestProjectStoreCRUD(t *testing.T) {
+	store := newTestProjectStore(t)
 
 	// 初始为空。
 	if len(store.List()) != 0 {
@@ -83,21 +92,31 @@ func TestProjectStoreCRUD(t *testing.T) {
 
 func TestProjectStorePersistence(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "projects.json")
+	dbPath := filepath.Join(dir, "runtime.db")
 
-	// 创建并写入。
-	store1, err := NewProjectStore(path)
+	runtime1, err := runtimestore.Open(dbPath)
 	if err != nil {
-		t.Fatalf("NewProjectStore: %v", err)
+		t.Fatalf("open runtime1: %v", err)
+	}
+	store1, err := NewProjectStoreWithRuntime(runtime1)
+	if err != nil {
+		t.Fatalf("NewProjectStoreWithRuntime: %v", err)
 	}
 	if err := store1.Add(Project{ID: "p1", Name: "Test"}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
+	if err := runtime1.Close(); err != nil {
+		t.Fatalf("close runtime1: %v", err)
+	}
 
-	// 重新加载。
-	store2, err := NewProjectStore(path)
+	runtime2, err := runtimestore.Open(dbPath)
 	if err != nil {
-		t.Fatalf("NewProjectStore (reload): %v", err)
+		t.Fatalf("open runtime2: %v", err)
+	}
+	defer runtime2.Close()
+	store2, err := NewProjectStoreWithRuntime(runtime2)
+	if err != nil {
+		t.Fatalf("NewProjectStoreWithRuntime reload: %v", err)
 	}
 	got := store2.Get("p1")
 	if got == nil || got.Name != "Test" {
@@ -106,13 +125,7 @@ func TestProjectStorePersistence(t *testing.T) {
 }
 
 func TestProjectStoreUpdatePreservesNodelets(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "projects.json")
-
-	store, err := NewProjectStore(path)
-	if err != nil {
-		t.Fatalf("NewProjectStore: %v", err)
-	}
+	store := newTestProjectStore(t)
 
 	// 创建带 server 的项目。
 	if err := store.Add(Project{ID: "p1", Name: "Test", NodeletIDs: []string{"n1", "n2"}}); err != nil {
@@ -140,18 +153,16 @@ func TestProjectStoreUpdatePreservesNodelets(t *testing.T) {
 	}
 }
 
-func TestProjectStoreEmptyFile(t *testing.T) {
+func TestProjectStoreRuntimeStartsEmpty(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "projects.json")
-
-	// 创建空文件。
-	if err := os.WriteFile(path, []byte(`{"projects":[]}`), 0600); err != nil {
-		t.Fatalf("write empty file: %v", err)
-	}
-
-	store, err := NewProjectStore(path)
+	runtime, err := runtimestore.Open(filepath.Join(dir, "runtime.db"))
 	if err != nil {
-		t.Fatalf("NewProjectStore: %v", err)
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer runtime.Close()
+	store, err := NewProjectStoreWithRuntime(runtime)
+	if err != nil {
+		t.Fatalf("NewProjectStoreWithRuntime: %v", err)
 	}
 	if len(store.List()) != 0 {
 		t.Fatal("expected empty store")

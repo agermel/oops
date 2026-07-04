@@ -8,7 +8,8 @@ config/mcp_connections.json
 config/projects.json
 config/nodelets.json
 config/container_dsn.json
-data/users.yml
+data/runtime.db
+data/runtime.db-*
 data/events.db
 data/sessions/
 internal/api/data/

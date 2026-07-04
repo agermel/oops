@@ -1,7 +1,74 @@
 /* ============================================
-   Responsive — max-width: 900px
+   Responsive — 多级断点适配
    ============================================ */
 
+/* ---- ≤1100px：收缩侧栏 & 项目分栏 ---- */
+@media (max-width: 1100px) {
+  .shell {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .rail-menu {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .rail-menu span,
+  .rail-nav button span {
+    display: none;
+  }
+
+  .rail-nav {
+    padding: var(--space-3) var(--space-2);
+  }
+
+  .rail-nav button {
+    width: 48px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  /* 项目分栏：左侧服务器树变窄 */
+  .server-tree {
+    width: 240px;
+    min-width: 200px;
+  }
+
+  .detail-body {
+    padding: var(--space-4) var(--space-4) var(--space-5);
+  }
+
+  .detail-tabs {
+    padding: 0 var(--space-3);
+  }
+
+  .detail-tabs button {
+    padding: 0 var(--space-2);
+    font-size: var(--text-sm);
+  }
+
+  .container-overview .overview-header h2 {
+    font-size: var(--text-lg);
+  }
+
+  .chat-header {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .chat-header-left {
+    font-size: var(--text-sm);
+  }
+
+  .chat-body {
+    padding: var(--space-3);
+  }
+
+  .chat-footer {
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
+/* ---- ≤900px：移动优先单列布局 ---- */
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 64px minmax(0, 1fr);
@@ -58,7 +125,7 @@
   }
 
   .workspace-card {
-    padding: var(--space-5);
+    padding: var(--space-4);
   }
 
   .chat-workspace {
@@ -73,19 +140,77 @@
     font-size: var(--text-2xl);
   }
 
+  /* 项目详情 → 上下堆叠 */
+  .project-detail {
+    height: auto;
+    min-height: calc(100dvh - 54px - (var(--space-3) * 2));
+  }
+
+  .project-breadcrumb {
+    flex-wrap: wrap;
+    padding-bottom: var(--space-3);
+    font-size: var(--text-sm);
+  }
+
   .project-split {
-    grid-template-columns: 1fr;
     flex-direction: column;
-    align-items: stretch;
+    gap: var(--space-3);
   }
 
   .server-tree {
     width: 100%;
     min-width: 0;
-    min-height: 280px;
+    max-height: 320px;
   }
 
   .container-detail {
     width: 100%;
+    min-height: 400px;
+    flex: 1 1 auto;
+  }
+
+  .detail-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    min-height: 46px;
+    padding: 0 var(--space-3);
+    gap: 0;
+  }
+
+  .detail-tabs button {
+    height: 46px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: var(--text-sm);
+    padding: 0 var(--space-2);
+  }
+
+  .detail-body {
+    padding: var(--space-3) var(--space-3) var(--space-4);
+  }
+
+  .detail-body > [role="tabpanel"] {
+    overflow-y: auto;
+    padding: 0;
+  }
+
+  .project-github-inline {
+    width: 100%;
+    margin-left: 0;
+    margin-top: var(--space-1);
+  }
+
+  /* 容器概览 */
+  .container-overview .overview-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    padding-bottom: var(--space-3);
+  }
+
+  .container-overview .overview-header h2 {
+    font-size: var(--text-base);
   }
 }

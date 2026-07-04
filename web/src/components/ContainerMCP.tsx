@@ -2,6 +2,7 @@ import React from "react";
 import { Wrench, Plus, Trash2, Edit3, RotateCw } from "lucide-react";
 import type { MCPStatus, MCPConnectionStatus, MCPConnectionConfig, DSNInfo, MCPPrefill, PortMapping } from "../types";
 import { mcpStatusLabel } from "../types";
+import { useModal } from "../hooks/useModal";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { serverPaths } from "../lib/paths";
 import { MCPFormModal } from "./MCPFormModal";
@@ -37,8 +38,7 @@ export function ContainerMCP({
   const [error, setError] = React.useState("");
 
   // 表单模态框控制
-  const [showForm, setShowForm] = React.useState(false);
-  const [editItem, setEditItem] = React.useState<MCPConnectionStatus | null>(null);
+  const formModal = useModal<MCPConnectionStatus>();
   const [formPrefill, setFormPrefill] = React.useState<MCPPrefill | null>(null);
 
   const [deleting, setDeleting] = React.useState(false);
@@ -142,27 +142,22 @@ export function ContainerMCP({
 
   function openAdd() {
     setFormPrefill(buildPrefill());
-    setEditItem(null);
-    setShowForm(true);
+    formModal.onOpen();
   }
 
   function openEdit() {
     if (!connection) return;
-    setEditItem(connection);
     setFormPrefill(null);
-    setShowForm(true);
+    formModal.onOpen(connection);
   }
 
   // 容器切换时：新建模式下用新容器 DSN 刷新，编辑模式下关闭
   React.useEffect(() => {
-    if (showForm) {
-      if (!editItem) {
-        // 新建模式：用新容器的 DSN 刷新预填
+    if (formModal.open) {
+      if (!formModal.data) {
         setFormPrefill(buildPrefill());
       } else {
-        // 编辑模式：编辑的是另一个容器的连接，关闭表单
-        setShowForm(false);
-        setEditItem(null);
+        formModal.onClose();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,7 +197,7 @@ export function ContainerMCP({
       {loading && <div className="empty-state">正在加载 MCP 配置</div>}
 
       {/* 无连接 - 显示空状态 */}
-      {!loading && !connection && !showForm && (
+      {!loading && !connection && !formModal.open && (
         <div className="mcp-status-card">
           <div className="mcp-config-empty">
             <p>MCP 连接未配置</p>
@@ -215,7 +210,7 @@ export function ContainerMCP({
       )}
 
       {/* 有连接 - 显示完整配置 */}
-      {!loading && connection && !showForm && (
+      {!loading && connection && !formModal.open && (
         <div className="mcp-status-card">
           <div className="mcp-status-row">
             <span>状态</span>
@@ -304,16 +299,17 @@ export function ContainerMCP({
       )}
 
       {/* MCP 表单模态框 */}
-      {showForm && (
+      {formModal.open && (
         <MCPFormModal
-          editItem={editItem}
+          editItem={formModal.data}
           prefill={formPrefill}
           onClose={() => {
-            setShowForm(false);
-            setEditItem(null);
+            formModal.onClose();
             setFormPrefill(null);
           }}
           onSaved={() => {
+            formModal.onClose();
+            setFormPrefill(null);
             fetchConnection();
             onMCPChanged();
           }}

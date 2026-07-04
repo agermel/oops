@@ -24,7 +24,7 @@ func (f *fakeOpsData) ListNodelets(_ context.Context) ([]NodeletSummary, error) 
 	return f.nodelets, f.err
 }
 
-func (f *fakeOpsData) ListContainers(_ context.Context, _ string, _ string) ([]nodelet.Container, error) {
+func (f *fakeOpsData) ListContainers(_ context.Context, _ string, _ string, _ string) ([]nodelet.Container, error) {
 	return f.containers, f.err
 }
 

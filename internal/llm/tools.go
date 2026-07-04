@@ -19,7 +19,8 @@ type OpsData interface {
 	ListNodelets(ctx context.Context) ([]NodeletSummary, error)
 
 	// ListContainers 返回指定 Nodelet 上的容器列表。status 为空时返回全部。
-	ListContainers(ctx context.Context, nodeletID, status string) ([]nodelet.Container, error)
+	// projectID 不为空时会过滤掉项目已隐藏的容器。
+	ListContainers(ctx context.Context, projectID, nodeletID, status string) ([]nodelet.Container, error)
 
 	// GetLogs 返回指定容器的历史日志。
 	GetLogs(ctx context.Context, nodeletID, containerID string, tail int) ([]nodelet.LogEntry, error)
@@ -50,6 +51,7 @@ type NodeletSummary struct {
 type listNodeletsInput struct{}
 
 type listContainersInput struct {
+	ProjectID string `json:"project_id,omitempty" jsonschema:"description=当前项目 ID（见系统提示中的 '## 当前项目 > ID'），传入后会过滤已隐藏的容器"`
 	NodeletID string `json:"nodelet_id" jsonschema:"required,description=要查询的 Nodelet ID"`
 	Status    string `json:"status,omitempty" jsonschema:"description=按状态过滤（running | stopped | restarting 等），不传返回全部。建议先查 running 缩小范围"`
 }
@@ -98,7 +100,7 @@ func NewListContainersTool(ops OpsData) (tool.InvokableTool, error) {
 			var containers []nodelet.Container
 			err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
 				var callErr error
-				containers, callErr = ops.ListContainers(ctx, input.NodeletID, input.Status)
+				containers, callErr = ops.ListContainers(ctx, input.ProjectID, input.NodeletID, input.Status)
 				return callErr
 			})
 			if err != nil {

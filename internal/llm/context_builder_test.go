@@ -307,6 +307,7 @@ func TestContextBuilder_prependSystemPrompt_WithProject(t *testing.T) {
 	}
 
 	project := &ProjectContext{
+		ID:          "proj-1",
 		Name:        "TestProject",
 		Description: "A test project",
 		GitHubRepo:  "https://github.com/user/repo",

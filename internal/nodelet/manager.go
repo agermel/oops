@@ -9,16 +9,10 @@ import (
 	"time"
 
 	"oops/internal/logutil"
-	"oops/internal/store"
+	runtimestore "oops/internal/store/runtime"
 
 	"go.uber.org/zap"
 )
-
-// DefaultConfigPath is the default path for the nodelet configuration file.
-const DefaultConfigPath = "config/nodelets.json"
-
-// FallbackConfigPath is used when the primary config cannot be loaded.
-const FallbackConfigPath = "/dev/null"
 
 // NodeletConfig 保存一台 oops-nodelet 的访问信息。
 // ID 是系统自动生成的主键（用户不可见），Name 是用户指定的唯一展示名称。
@@ -32,7 +26,7 @@ type NodeletConfig struct {
 	HasToken bool   `json:"hasToken"`
 }
 
-// persistedNodelet 是 nodelets.json 的磁盘格式 —— 包含 token。
+// persistedNodelet 是运行态持久化形态，包含 token。
 type persistedNodelet struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -48,26 +42,24 @@ func toPersisted(cfg NodeletConfig) persistedNodelet {
 	return persistedNodelet{ID: cfg.ID, Name: cfg.Name, Address: cfg.Address, Token: cfg.Token}
 }
 
-// nodeletConfigFile 是 manager 持久化文件的顶层结构。
-type nodeletConfigFile struct {
+type nodeletState struct {
 	Nodelets    []persistedNodelet `json:"nodelets"`
 	NextCounter int                `json:"nextCounter"`
 }
 
-// NodeletManager 管理 nodelet 配置的 CRUD，持久化到 JSON 文件。
+// NodeletManager 管理 nodelet 配置的 CRUD，运行态持久化到 SQLite。
 type NodeletManager struct {
-	mu         sync.Mutex
-	configPath string
-	config     nodeletConfigFile
+	mu      sync.Mutex
+	runtime *runtimestore.Store
+	config  nodeletState
 }
 
-// NewNodeletManager 加载 JSON 文件，不存在时初始化为空列表。
-// configPath 为空时创建纯内存 manager（测试用途）。
-func NewNodeletManager(configPath string) (*NodeletManager, error) {
-	m := &NodeletManager{configPath: configPath}
-	if configPath == "" {
-		return m, nil
+// NewNodeletManagerWithRuntime loads nodelets from SQLite.
+func NewNodeletManagerWithRuntime(runtime *runtimestore.Store) (*NodeletManager, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime store is required")
 	}
+	m := &NodeletManager{runtime: runtime}
 	if err := m.load(); err != nil {
 		return nil, fmt.Errorf("load nodelets: %w", err)
 	}
@@ -248,18 +240,56 @@ func (m *NodeletManager) Test(cfg NodeletConfig) error {
 // --- internal ---
 
 func (m *NodeletManager) load() error {
-	if err := store.LoadJSON(m.configPath, &m.config); err != nil {
+	ctx := context.Background()
+	records, err := m.runtime.ListNodelets(ctx)
+	if err != nil {
 		return err
 	}
+	m.config.Nodelets = nodeletsFromRuntime(records)
 	if m.config.Nodelets == nil {
 		m.config.Nodelets = []persistedNodelet{}
 	}
+	m.config.NextCounter = maxNumericNodeletID(m.config.Nodelets)
 	return nil
 }
 
 func (m *NodeletManager) saveLocked() error {
-	if m.configPath == "" {
-		return nil
+	return m.runtime.ReplaceNodelets(context.Background(), nodeletsToRuntime(m.config.Nodelets))
+}
+
+func nodeletsToRuntime(nodelets []persistedNodelet) []runtimestore.NodeletRecord {
+	records := make([]runtimestore.NodeletRecord, len(nodelets))
+	for i, n := range nodelets {
+		records[i] = runtimestore.NodeletRecord{
+			ID:      n.ID,
+			Name:    n.Name,
+			Address: n.Address,
+			Token:   n.Token,
+		}
 	}
-	return store.SaveJSON(m.configPath, m.config)
+	return records
+}
+
+func nodeletsFromRuntime(records []runtimestore.NodeletRecord) []persistedNodelet {
+	nodelets := make([]persistedNodelet, len(records))
+	for i, r := range records {
+		nodelets[i] = persistedNodelet{
+			ID:      r.ID,
+			Name:    r.Name,
+			Address: r.Address,
+			Token:   r.Token,
+		}
+	}
+	return nodelets
+}
+
+func maxNumericNodeletID(nodelets []persistedNodelet) int {
+	maxID := 0
+	for _, n := range nodelets {
+		id, err := strconv.Atoi(n.ID)
+		if err == nil && id > maxID {
+			maxID = id
+		}
+	}
+	return maxID
 }

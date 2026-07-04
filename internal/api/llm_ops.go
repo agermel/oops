@@ -64,7 +64,8 @@ func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error)
 
 // ListContainers 实现 llm.OpsData，返回指定 Nodelet 的容器列表。
 // status 不为空时仅返回匹配状态的容器。
-func (s *Server) ListContainers(ctx context.Context, nodeletID, status string) ([]nodelet.Container, error) {
+// projectID 不为空时会过滤掉项目已隐藏的容器（excludedContainerRefs）。
+func (s *Server) ListContainers(ctx context.Context, projectID, nodeletID, status string) ([]nodelet.Container, error) {
 	item, ok := s.findNodelet(nodeletID)
 	if !ok {
 		return nil, fmt.Errorf("nodelet %q not found", nodeletID)
@@ -73,6 +74,27 @@ func (s *Server) ListContainers(ctx context.Context, nodeletID, status string) (
 	if err != nil {
 		return nil, err
 	}
+
+	// 过滤项目已隐藏的容器。
+	if projectID != "" && s.projectStore != nil {
+		if p := s.projectStore.Get(projectID); p != nil {
+			excluded := make(map[string]bool, len(p.ExcludedContainerRefs))
+			for _, ref := range p.ExcludedContainerRefs {
+				excluded[ref] = true
+			}
+			if len(excluded) > 0 {
+				filtered := make([]nodelet.Container, 0, len(containers))
+				for _, c := range containers {
+					ref := nodeletID + "/" + c.ID
+					if !excluded[ref] {
+						filtered = append(filtered, c)
+					}
+				}
+				containers = filtered
+			}
+		}
+	}
+
 	if status == "" {
 		return containers, nil
 	}

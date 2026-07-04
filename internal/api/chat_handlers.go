@@ -139,6 +139,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	if projectID != "" && s.projectStore != nil {
 		if p := s.projectStore.Get(projectID); p != nil {
 			projectCtx = &llm.ProjectContext{
+				ID:          p.ID,
 				Name:        p.Name,
 				Description: p.Description,
 				GitHubRepo:  p.GitHubRepo,

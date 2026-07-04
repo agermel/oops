@@ -32,6 +32,7 @@ func DefaultCompactionConfig() (maxTokens int, keepRecent int) {
 
 // ProjectContext 包含注入 system prompt 的项目元数据。
 type ProjectContext struct {
+	ID          string
 	Name        string
 	Description string
 	GitHubRepo  string
@@ -155,6 +156,7 @@ func (cb *ContextBuilder) prependSystemPrompt(msgs []*schema.Message, project *P
 func FormatProjectContext(p *ProjectContext) string {
 	var b strings.Builder
 	b.WriteString("## 当前项目\n")
+	fmt.Fprintf(&b, "- ID: %s\n", p.ID)
 	fmt.Fprintf(&b, "- 名称: %s\n", p.Name)
 	if p.Description != "" {
 		fmt.Fprintf(&b, "- 描述: %s\n", p.Description)

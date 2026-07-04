@@ -5,18 +5,36 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"oops/internal/auth"
 	"oops/internal/nodelet"
+	runtimestore "oops/internal/store/runtime"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
 type fakeNodeletClient struct {
 	streamTail string
+}
+
+func testNodeletManager(t *testing.T) *nodelet.NodeletManager {
+	t.Helper()
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = runtime.Close()
+	})
+	nm, err := nodelet.NewNodeletManagerWithRuntime(runtime)
+	if err != nil {
+		t.Fatalf("NewNodeletManagerWithRuntime: %v", err)
+	}
+	return nm
 }
 
 // Host 返回测试用 Nodelet 主机信息。
@@ -65,7 +83,7 @@ func TestNodeletRoutes(t *testing.T) {
 	}
 
 	client := &fakeNodeletClient{}
-	nm, _ := nodelet.NewNodeletManager("")
+	nm := testNodeletManager(t)
 	_ = nm.Add(&nodelet.NodeletConfig{ID: "local", Name: "local", Address: "http://nodelet", Token: "secret"})
 	server := New(Options{
 		NodeletManager: nm,
@@ -92,7 +110,7 @@ func TestNodeletRoutes(t *testing.T) {
 func testAuthSetup(t *testing.T) (*auth.Store, *auth.TokenService, string) {
 	t.Helper()
 	user := &auth.User{Username: "admin", Name: "Admin", Password: hashPassword(t, "test")}
-	store := &auth.Store{User: user}
+	store := auth.NewStoreInMemory(user)
 	ts := auth.NewTokenService(user.Password, 24*time.Hour)
 	token, err := ts.CreateToken("admin", "Admin")
 	if err != nil {
@@ -116,7 +134,7 @@ func TestHandleNodeletLogsStream(t *testing.T) {
 	userStore, tokenService, jwtToken := testAuthSetup(t)
 
 	client := &fakeNodeletClient{}
-	nm, _ := nodelet.NewNodeletManager("")
+	nm := testNodeletManager(t)
 	_ = nm.Add(&nodelet.NodeletConfig{ID: "local", Name: "local", Address: "http://nodelet", Token: "secret"})
 	server := New(Options{
 		NodeletManager: nm,

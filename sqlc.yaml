@@ -1,0 +1,11 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "internal/store/runtime/schema.sql"
+    queries: "internal/store/runtime/queries.sql"
+    gen:
+      go:
+        package: "runtime"
+        out: "internal/store/runtime"
+        sql_package: "database/sql"
+        emit_json_tags: true

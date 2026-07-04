@@ -1,27 +1,25 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
-	"oops/internal/store"
+	runtimestore "oops/internal/store/runtime"
 )
-
-// DefaultProjectsPath 是项目配置文件的默认路径。
-const DefaultProjectsPath = "config/projects.json"
 
 // Project 表示一个用户创建的项目，包含多台服务器（Nodelet）。
 type Project struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	GitHubRepo  string    `json:"githubRepo,omitempty"`
-	NodeletIDs           []string  `json:"nodeletIds"`
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Description           string    `json:"description,omitempty"`
+	GitHubRepo            string    `json:"githubRepo,omitempty"`
+	NodeletIDs            []string  `json:"nodeletIds"`
 	ExcludedContainerRefs []string  `json:"excludedContainerRefs,omitempty"`
 	CreatedAt             time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
 }
 
 // UnmarshalJSON 实现自定义反序列化，兼容前端发送的空字符串时间字段。
@@ -54,26 +52,25 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ProjectStoreConfig 是项目存储文件的顶层结构。
-type ProjectStoreConfig struct {
+type projectState struct {
 	Projects []Project `json:"projects"`
 }
 
-// ProjectStore 提供项目的持久化 CRUD 操作。零值不可用，使用 NewProjectStore 创建。
+// ProjectStore 提供项目的持久化 CRUD 操作。运行态持久化到 SQLite。
 type ProjectStore struct {
-	mu     sync.RWMutex
-	path   string
-	config ProjectStoreConfig
+	mu      sync.RWMutex
+	runtime *runtimestore.Store
+	config  projectState
 }
 
-// NewProjectStore 从指定路径加载项目存储。如果文件不存在则创建空存储。
-func NewProjectStore(path string) (*ProjectStore, error) {
-	s := &ProjectStore{path: path}
-	if err := store.LoadJSON(path, &s.config); err != nil {
-		return nil, err
+// NewProjectStoreWithRuntime loads projects from SQLite.
+func NewProjectStoreWithRuntime(runtime *runtimestore.Store) (*ProjectStore, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime store is required")
 	}
-	if s.config.Projects == nil {
-		s.config.Projects = []Project{}
+	s := &ProjectStore{runtime: runtime}
+	if err := s.load(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -275,5 +272,64 @@ func (s *ProjectStore) IncludeContainer(projectID string, ref string) error {
 }
 
 func (s *ProjectStore) saveLocked() error {
-	return store.SaveJSON(s.path, s.config)
+	return s.runtime.ReplaceProjects(context.Background(), projectsToRuntime(s.config.Projects))
+}
+
+func (s *ProjectStore) load() error {
+	ctx := context.Background()
+	records, err := s.runtime.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	s.config.Projects = projectsFromRuntime(records)
+	s.ensureDefaults()
+	return nil
+}
+
+func (s *ProjectStore) ensureDefaults() {
+	if s.config.Projects == nil {
+		s.config.Projects = []Project{}
+	}
+	for i := range s.config.Projects {
+		if s.config.Projects[i].NodeletIDs == nil {
+			s.config.Projects[i].NodeletIDs = []string{}
+		}
+		if s.config.Projects[i].ExcludedContainerRefs == nil {
+			s.config.Projects[i].ExcludedContainerRefs = []string{}
+		}
+	}
+}
+
+func projectsToRuntime(projects []Project) []runtimestore.ProjectRecord {
+	records := make([]runtimestore.ProjectRecord, len(projects))
+	for i, p := range projects {
+		records[i] = runtimestore.ProjectRecord{
+			ID:                    p.ID,
+			Name:                  p.Name,
+			Description:           p.Description,
+			GitHubRepo:            p.GitHubRepo,
+			NodeletIDs:            append([]string{}, p.NodeletIDs...),
+			ExcludedContainerRefs: append([]string{}, p.ExcludedContainerRefs...),
+			CreatedAt:             p.CreatedAt,
+			UpdatedAt:             p.UpdatedAt,
+		}
+	}
+	return records
+}
+
+func projectsFromRuntime(records []runtimestore.ProjectRecord) []Project {
+	projects := make([]Project, len(records))
+	for i, r := range records {
+		projects[i] = Project{
+			ID:                    r.ID,
+			Name:                  r.Name,
+			Description:           r.Description,
+			GitHubRepo:            r.GitHubRepo,
+			NodeletIDs:            append([]string{}, r.NodeletIDs...),
+			ExcludedContainerRefs: append([]string{}, r.ExcludedContainerRefs...),
+			CreatedAt:             r.CreatedAt,
+			UpdatedAt:             r.UpdatedAt,
+		}
+	}
+	return projects
 }

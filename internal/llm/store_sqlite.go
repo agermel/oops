@@ -115,8 +115,15 @@ func (es *EventStore) GetEvents(runID string) ([]StepEvent, error) {
 // GetSessionMessages 从事件表重建会话消息列表（用于 SessionStore 冷启动恢复）。
 func (es *EventStore) GetSessionMessages(sessionID string) ([]storedMessage, error) {
 	rows, err := es.db.Query(
-		`SELECT DISTINCT ON (seq) type, content, tool_name, tool_call_id, seq, run_id
-		 FROM events WHERE session_id = ? ORDER BY seq`, sessionID)
+		`SELECT type, content, tool_name, tool_call_id, seq, run_id
+		 FROM (
+		   SELECT type, content, tool_name, tool_call_id, seq, run_id,
+		          ROW_NUMBER() OVER (PARTITION BY seq ORDER BY id) AS rn
+		   FROM events
+		   WHERE session_id = ?
+		 )
+		 WHERE rn = 1
+		 ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, err
 	}

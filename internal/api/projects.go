@@ -8,6 +8,7 @@ import (
 
 	"oops/internal/config"
 	"oops/internal/docker"
+	"oops/internal/mcp"
 	"oops/internal/nodelet"
 )
 
@@ -272,3 +273,63 @@ func (s *Server) handleProjectIncludeContainer(w http.ResponseWriter, r *http.Re
 	writeJSONOK(w)
 }
 
+// ---- Project MCP ----
+
+// projectMCPScope 标识项目 MCP 连接的绑定粒度。
+type projectMCPScope string
+
+const (
+	mcpScopeContainer projectMCPScope = "container"
+	mcpScopeNodelet   projectMCPScope = "nodelet"
+)
+
+// projectMCPConnection 是带 scope 注解的项目级 MCP 连接。
+type projectMCPConnection struct {
+	mcp.ConnectionWithStatus
+	Scope projectMCPScope `json:"scope"`
+}
+
+// handleProjectMCPList handles GET /api/projects/{pid}/mcp/connections.
+func (s *Server) handleProjectMCPList(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("pid")
+
+	if s.projectStore == nil {
+		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if s.mcpManager == nil {
+		writeJSON(w, []projectMCPConnection{})
+		return
+	}
+
+	p := s.projectStore.Get(projectID)
+	if p == nil {
+		writeJSONError(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	nodeletSet := make(map[string]struct{}, len(p.NodeletIDs))
+	for _, nid := range p.NodeletIDs {
+		nodeletSet[nid] = struct{}{}
+	}
+
+	result := make([]projectMCPConnection, 0)
+	for _, conn := range s.mcpManager.List() {
+		if conn.NodeletID == "" {
+			continue
+		}
+		if _, ok := nodeletSet[conn.NodeletID]; !ok {
+			continue
+		}
+		scope := mcpScopeNodelet
+		if conn.ContainerID != "" {
+			scope = mcpScopeContainer
+		}
+		result = append(result, projectMCPConnection{
+			ConnectionWithStatus: conn,
+			Scope:                scope,
+		})
+	}
+
+	writeJSON(w, result)
+}

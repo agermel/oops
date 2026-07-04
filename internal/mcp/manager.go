@@ -13,7 +13,7 @@ import (
 	"oops/internal/config"
 	"oops/internal/console"
 	"oops/internal/logutil"
-	"oops/internal/store"
+	runtimestore "oops/internal/store/runtime"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -28,9 +28,6 @@ var (
 	// ErrToolCallFailed indicates the transport-level call to the MCP tool failed.
 	ErrToolCallFailed = errors.New("tool call failed")
 )
-
-// DefaultConfigPath is the default path for the MCP connections file.
-const DefaultConfigPath = "config/mcp_connections.json"
 
 // allowedCommands returns the list of MCP stdio commands permitted to execute.
 // Controlled via OOPS_MCP_ALLOWED_COMMANDS (comma-separated). When the env var
@@ -99,8 +96,7 @@ type ConnectionWithStatus struct {
 	Tools     []ToolInfo `json:"tools,omitempty"`
 }
 
-// ManagerConfig is the top-level structure of mcp_connections.json.
-type ManagerConfig struct {
+type managerState struct {
 	Connections []ConnectionConfig `json:"connections"`
 }
 
@@ -115,30 +111,30 @@ type managedProcess struct {
 
 // Manager manages MCP server subprocess lifecycles and persists configuration.
 type Manager struct {
-	mu         sync.Mutex
-	configPath string
-	config     ManagerConfig
-	processes  map[string]*managedProcess // id → running process
-	errors     map[string]string          // id → last error
-	onChange   func([]tool.BaseTool)
+	mu        sync.Mutex
+	runtime   *runtimestore.Store
+	config    managerState
+	processes map[string]*managedProcess // id → running process
+	errors    map[string]string          // id → last error
+	onChange  func([]tool.BaseTool)
 }
 
-// NewManager loads persisted connections, starts all enabled ones,
-// and calls onChange whenever the tool list changes.
-func NewManager(configPath string, onChange func([]tool.BaseTool)) (*Manager, error) {
+// NewManagerWithRuntime loads MCP connections from SQLite.
+func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]tool.BaseTool)) (*Manager, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime store is required")
+	}
 	m := &Manager{
-		configPath: configPath,
-		processes:  make(map[string]*managedProcess),
-		errors:     make(map[string]string),
-		onChange:   onChange,
+		runtime:   runtime,
+		processes: make(map[string]*managedProcess),
+		errors:    make(map[string]string),
+		onChange:  onChange,
 	}
 
 	if err := m.load(); err != nil {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 
-	// Start all enabled connections asynchronously on startup.
-	// 每个连接独立 goroutine，互不阻塞；启动完成后通过 notifyChange 推送工具变更。
 	m.mu.Lock()
 	for i := range m.config.Connections {
 		cfg := m.config.Connections[i]
@@ -616,9 +612,12 @@ func expandEnvSlice(vals []string) []string {
 }
 
 func (m *Manager) load() error {
-	if err := store.LoadJSON(m.configPath, &m.config); err != nil {
+	ctx := context.Background()
+	records, err := m.runtime.ListMCPConnections(ctx)
+	if err != nil {
 		return err
 	}
+	m.config.Connections = mcpConnectionsFromRuntime(records)
 	if m.config.Connections == nil {
 		m.config.Connections = []ConnectionConfig{}
 	}
@@ -626,7 +625,47 @@ func (m *Manager) load() error {
 }
 
 func (m *Manager) saveLocked() error {
-	return store.SaveJSON(m.configPath, m.config)
+	return m.runtime.ReplaceMCPConnections(context.Background(), mcpConnectionsToRuntime(m.config.Connections))
+}
+
+func mcpConnectionsToRuntime(connections []ConnectionConfig) []runtimestore.MCPConnectionRecord {
+	records := make([]runtimestore.MCPConnectionRecord, len(connections))
+	for i, c := range connections {
+		records[i] = runtimestore.MCPConnectionRecord{
+			ID:          c.ID,
+			Name:        c.Name,
+			Type:        c.Type,
+			Transport:   c.Transport,
+			Command:     c.Command,
+			Args:        append([]string{}, c.Args...),
+			Env:         append([]string{}, c.Env...),
+			URL:         c.URL,
+			Enabled:     c.Enabled,
+			ContainerID: c.ContainerID,
+			NodeletID:   c.NodeletID,
+		}
+	}
+	return records
+}
+
+func mcpConnectionsFromRuntime(records []runtimestore.MCPConnectionRecord) []ConnectionConfig {
+	connections := make([]ConnectionConfig, len(records))
+	for i, r := range records {
+		connections[i] = ConnectionConfig{
+			ID:          r.ID,
+			Name:        r.Name,
+			Type:        r.Type,
+			Transport:   r.Transport,
+			Command:     r.Command,
+			Args:        append([]string{}, r.Args...),
+			Env:         append([]string{}, r.Env...),
+			URL:         r.URL,
+			Enabled:     r.Enabled,
+			ContainerID: r.ContainerID,
+			NodeletID:   r.NodeletID,
+		}
+	}
+	return connections
 }
 
 func (m *Manager) startLocked(cfg ConnectionConfig) error {

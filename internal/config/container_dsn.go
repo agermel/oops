@@ -1,36 +1,31 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"sync"
 
-	"oops/internal/store"
+	runtimestore "oops/internal/store/runtime"
 )
 
-// DefaultDSNPath is the default path for the container DSN overrides file.
-const DefaultDSNPath = "config/container_dsn.json"
-
 // ContainerDSNStore persists user DSN overrides per container.
-// It follows the same load/save pattern as ProjectStore and mcp.Manager.
+// Runtime writes go to SQLite.
 type ContainerDSNStore struct {
 	mu      sync.RWMutex
-	path    string
+	runtime *runtimestore.Store
 	entries map[string]map[string]string // key: "nodeletID/containerID", value: user KV overrides
 }
 
-// dsnStoreConfig is the on-disk structure of container_dsn.json.
-type dsnStoreConfig struct {
-	Entries map[string]map[string]string `json:"entries"`
-}
-
-// NewContainerDSNStore loads the container DSN store from path.
-// If the file does not exist, an empty store is created.
-func NewContainerDSNStore(path string) (*ContainerDSNStore, error) {
+// NewContainerDSNStoreWithRuntime loads DSN overrides from SQLite.
+func NewContainerDSNStoreWithRuntime(runtime *runtimestore.Store) (*ContainerDSNStore, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime store is required")
+	}
 	s := &ContainerDSNStore{
-		path:    path,
+		runtime: runtime,
 		entries: make(map[string]map[string]string),
 	}
-
 	if err := s.load(); err != nil {
 		return nil, fmt.Errorf("load container dsn: %w", err)
 	}
@@ -89,11 +84,12 @@ func (s *ContainerDSNStore) Delete(nodeletID, containerID string) error {
 }
 
 func (s *ContainerDSNStore) load() error {
-	var cfg dsnStoreConfig
-	if err := store.LoadJSON(s.path, &cfg); err != nil {
+	ctx := context.Background()
+	records, err := s.runtime.ListDSNRecords(ctx)
+	if err != nil {
 		return err
 	}
-	s.entries = cfg.Entries
+	s.entries = dsnEntriesFromRuntime(records)
 	if s.entries == nil {
 		s.entries = make(map[string]map[string]string)
 	}
@@ -101,5 +97,37 @@ func (s *ContainerDSNStore) load() error {
 }
 
 func (s *ContainerDSNStore) saveLocked() error {
-	return store.SaveJSON(s.path, dsnStoreConfig{Entries: s.entries})
+	return s.runtime.ReplaceDSNRecords(context.Background(), dsnEntriesToRuntime(s.entries))
+}
+
+func dsnEntriesToRuntime(entries map[string]map[string]string) []runtimestore.DSNRecord {
+	records := make([]runtimestore.DSNRecord, 0, len(entries))
+	for key, pairs := range entries {
+		nodeletID, containerID, ok := strings.Cut(key, "/")
+		if !ok {
+			continue
+		}
+		cp := make(map[string]string, len(pairs))
+		for k, v := range pairs {
+			cp[k] = v
+		}
+		records = append(records, runtimestore.DSNRecord{
+			NodeletID:   nodeletID,
+			ContainerID: containerID,
+			Pairs:       cp,
+		})
+	}
+	return records
+}
+
+func dsnEntriesFromRuntime(records []runtimestore.DSNRecord) map[string]map[string]string {
+	entries := make(map[string]map[string]string, len(records))
+	for _, record := range records {
+		cp := make(map[string]string, len(record.Pairs))
+		for k, v := range record.Pairs {
+			cp[k] = v
+		}
+		entries[containerKey(record.NodeletID, record.ContainerID)] = cp
+	}
+	return entries
 }

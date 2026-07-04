@@ -3,19 +3,31 @@ package nodelet
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
+
+	runtimestore "oops/internal/store/runtime"
 )
 
-// ---- 内存模式（configPath=""）----
+func newTestNodeletManager(t *testing.T) *NodeletManager {
+	t.Helper()
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	t.Cleanup(func() { runtime.Close() })
+	m, err := NewNodeletManagerWithRuntime(runtime)
+	if err != nil {
+		t.Fatalf("NewNodeletManagerWithRuntime: %v", err)
+	}
+	return m
+}
+
+// ---- 内存模式 ----
 
 // TestNodeletManager_NewInMemory 测试空路径创建纯内存 manager。
 func TestNodeletManager_NewInMemory(t *testing.T) {
-	m, err := NewNodeletManager("")
-	if err != nil {
-		t.Fatalf("NewNodeletManager: %v", err)
-	}
+	m := newTestNodeletManager(t)
 	if m == nil {
 		t.Fatal("expected non-nil manager")
 	}
@@ -27,7 +39,7 @@ func TestNodeletManager_NewInMemory(t *testing.T) {
 
 // TestNodeletManager_Add 测试新增 nodelet。
 func TestNodeletManager_Add(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	cfg := NodeletConfig{ID: "node-1", Name: "node-1", Address: "http://10.0.0.1:8080", Token: "secret"}
 	if err := m.Add(&cfg); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -55,7 +67,7 @@ func TestNodeletManager_Add(t *testing.T) {
 
 // TestNodeletManager_Add_Duplicate 测试重复名称被拒绝。
 func TestNodeletManager_Add_Duplicate(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	_ = m.Add(&NodeletConfig{ID: "dup", Name: "dup", Token: "t1"})
 	err := m.Add(&NodeletConfig{ID: "dup", Name: "dup", Token: "t2"})
 	if err == nil {
@@ -68,7 +80,7 @@ func TestNodeletManager_Add_Duplicate(t *testing.T) {
 
 // TestNodeletManager_Add_EmptyToken 测试空 Token 被拒绝。
 func TestNodeletManager_Add_EmptyToken(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Add(&NodeletConfig{ID: "no-token", Name: "no-token"})
 	if err == nil {
 		t.Fatal("expected error for empty token")
@@ -80,7 +92,7 @@ func TestNodeletManager_Add_EmptyToken(t *testing.T) {
 
 // TestNodeletManager_Add_EmptyName 测试空名称被拒绝。
 func TestNodeletManager_Add_EmptyName(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Add(&NodeletConfig{Name: "", Token: "t"})
 	if err == nil {
 		t.Fatal("expected error for empty name")
@@ -92,7 +104,7 @@ func TestNodeletManager_Add_EmptyName(t *testing.T) {
 
 // TestNodeletManager_List_CopySemantics 测试 List 返回的是副本。
 func TestNodeletManager_List_CopySemantics(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	_ = m.Add(&NodeletConfig{ID: "original", Name: "original", Token: "t1"})
 
 	list1 := m.List()
@@ -106,7 +118,7 @@ func TestNodeletManager_List_CopySemantics(t *testing.T) {
 
 // TestNodeletManager_Find_NotFound 测试查找不存在的 ID。
 func TestNodeletManager_Find_NotFound(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	_, ok := m.Find("nonexistent")
 	if ok {
 		t.Error("Find should return false for nonexistent ID")
@@ -115,7 +127,7 @@ func TestNodeletManager_Find_NotFound(t *testing.T) {
 
 // TestNodeletManager_Update 测试更新已有 nodelet。
 func TestNodeletManager_Update(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Address: "http://old:8080", Token: "t1"})
 
 	err := m.Update(NodeletConfig{ID: "n1", Name: "n1", Address: "http://new:8080", Token: "t"})
@@ -131,7 +143,7 @@ func TestNodeletManager_Update(t *testing.T) {
 
 // TestNodeletManager_Update_NotFound 测试更新不存在的名称。
 func TestNodeletManager_Update_NotFound(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Update(NodeletConfig{ID: "ghost", Name: "ghost", Token: "t"})
 	if err == nil {
 		t.Fatal("expected error for updating nonexistent ID")
@@ -143,7 +155,7 @@ func TestNodeletManager_Update_NotFound(t *testing.T) {
 
 // TestNodeletManager_Remove 测试删除已有 nodelet。
 func TestNodeletManager_Remove(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	_ = m.Add(&NodeletConfig{ID: "n1", Name: "n1", Token: "t1"})
 
 	if err := m.Remove("n1"); err != nil {
@@ -160,7 +172,7 @@ func TestNodeletManager_Remove(t *testing.T) {
 
 // TestNodeletManager_Remove_NotFound 测试删除不存在的 ID。
 func TestNodeletManager_Remove_NotFound(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Remove("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for removing nonexistent ID")
@@ -170,78 +182,53 @@ func TestNodeletManager_Remove_NotFound(t *testing.T) {
 	}
 }
 
-// ---- 持久化模式 ----
+// ---- SQLite 持久化 ----
 
-// TestNodeletManager_NewFromFile 测试从预写 JSON 文件加载。
-func TestNodeletManager_NewFromFile(t *testing.T) {
+func TestNodeletManager_RuntimeStartsEmpty(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "nodelets.json")
-	content := `{"nodelets":[{"id":"loaded","name":"loaded","address":"http://a:1","token":"t1"}]}`
-	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	m, err := NewNodeletManager(p)
+	runtime, err := runtimestore.Open(filepath.Join(dir, "runtime.db"))
 	if err != nil {
-		t.Fatalf("NewNodeletManager: %v", err)
+		t.Fatalf("open runtime: %v", err)
 	}
+	defer runtime.Close()
 
-	list := m.List()
-	if len(list) != 1 {
-		t.Fatalf("List len = %d, want 1", len(list))
-	}
-	if list[0].Name != "loaded" {
-		t.Errorf("Name = %q, want %q", list[0].Name, "loaded")
-	}
-}
-
-// TestNodeletManager_NewFromMissingFile 测试文件不存在时成功初始化为空。
-func TestNodeletManager_NewFromMissingFile(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "missing.json")
-
-	m, err := NewNodeletManager(p)
+	m, err := NewNodeletManagerWithRuntime(runtime)
 	if err != nil {
-		t.Fatalf("NewNodeletManager: %v", err)
+		t.Fatalf("NewNodeletManagerWithRuntime: %v", err)
 	}
 	if len(m.List()) != 0 {
-		t.Error("List should be empty when file is missing")
+		t.Error("List should be empty when runtime DB is empty")
 	}
 }
 
-// TestNodeletManager_NewFromMalformedFile 测试非法 JSON 返回错误。
-func TestNodeletManager_NewFromMalformedFile(t *testing.T) {
+func TestNodeletManager_RuntimePersistRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "bad.json")
-	if err := os.WriteFile(p, []byte(`garbage`), 0644); err != nil {
-		t.Fatal(err)
-	}
+	dbPath := filepath.Join(dir, "runtime.db")
 
-	_, err := NewNodeletManager(p)
-	if err == nil {
-		t.Fatal("expected error for malformed JSON")
-	}
-}
-
-// TestNodeletManager_PersistRoundTrip 测试增删改后重新加载一致。
-func TestNodeletManager_PersistRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "nodelets.json")
-
-	// 第一次创建并修改
-	m1, err := NewNodeletManager(p)
+	runtime1, err := runtimestore.Open(dbPath)
 	if err != nil {
-		t.Fatalf("first NewNodeletManager: %v", err)
+		t.Fatalf("open runtime1: %v", err)
+	}
+	m1, err := NewNodeletManagerWithRuntime(runtime1)
+	if err != nil {
+		t.Fatalf("first NewNodeletManagerWithRuntime: %v", err)
 	}
 	_ = m1.Add(&NodeletConfig{ID: "first", Name: "first", Token: "t1"})
 	_ = m1.Add(&NodeletConfig{ID: "second", Name: "second", Token: "t2"})
 	_ = m1.Update(NodeletConfig{ID: "first", Name: "first", Address: "http://updated:8080", Token: "t1"})
 	_ = m1.Remove("second")
+	if err := runtime1.Close(); err != nil {
+		t.Fatalf("close runtime1: %v", err)
+	}
 
-	// 第二次从同一文件加载
-	m2, err := NewNodeletManager(p)
+	runtime2, err := runtimestore.Open(dbPath)
 	if err != nil {
-		t.Fatalf("second NewNodeletManager: %v", err)
+		t.Fatalf("open runtime2: %v", err)
+	}
+	defer runtime2.Close()
+	m2, err := NewNodeletManagerWithRuntime(runtime2)
+	if err != nil {
+		t.Fatalf("second NewNodeletManagerWithRuntime: %v", err)
 	}
 
 	list := m2.List()
@@ -269,7 +256,7 @@ func TestNodeletManager_Test_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Test(NodeletConfig{Address: srv.URL, Token: "secret"})
 	if err != nil {
 		t.Fatalf("Test: expected nil, got %v", err)
@@ -283,7 +270,7 @@ func TestNodeletManager_Test_Unauthorized(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Test(NodeletConfig{Address: srv.URL, Token: "wrong"})
 	if err == nil {
 		t.Fatal("expected error for unauthorized")
@@ -300,7 +287,7 @@ func TestNodeletManager_Test_Non200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Test(NodeletConfig{Address: srv.URL, Token: "t"})
 	if err == nil {
 		t.Fatal("expected error for non-200 host")
@@ -312,7 +299,7 @@ func TestNodeletManager_Test_Non200(t *testing.T) {
 
 // TestNodeletManager_Test_BadAddress 测试非法地址立即失败。
 func TestNodeletManager_Test_BadAddress(t *testing.T) {
-	m, _ := NewNodeletManager("")
+	m := newTestNodeletManager(t)
 	err := m.Test(NodeletConfig{Address: "://invalid", Token: "t"})
 	if err == nil {
 		t.Fatal("expected error for bad address")
