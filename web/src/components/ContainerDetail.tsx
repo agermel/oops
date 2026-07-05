@@ -300,7 +300,11 @@ export function MCPDetailView({
                   <dl>
                     <dt>状态</dt>
                     <dd className="mcp-status-row">
-                      <StatusDot alive={conn.status === "running"} unknown={conn.status !== "running" && conn.status !== "stopped"} />
+                      <StatusDot
+                        alive={conn.status === "running"}
+                        loading={conn.status === "starting"}
+                        unknown={conn.status !== "running" && conn.status !== "stopped" && conn.status !== "starting"}
+                      />
                       <span style={{ marginLeft: 6 }}>{mcpStatusLabel[conn.status || "stopped"]}</span>
                     </dd>
                     <dt>工具数</dt>

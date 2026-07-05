@@ -1,6 +1,6 @@
 #!/bin/bash
-# Nacos MCP Server wrapper
-# Uses the official nacos-group/nacos-mcp-server (Python, Apache 2.0).
+# Nacos MCP Router wrapper
+# Uses the official Nacos MCP Router package.
+# Configure via env: NACOS_ADDR, NACOS_USERNAME, NACOS_PASSWORD, NACOS_NAMESPACE.
 # uvx downloads and caches on first run; subsequent runs are fast.
-# https://github.com/nacos-group/nacos-mcp-server
-exec uvx --from mcp-server-nacos mcp-server-nacos "$@"
+exec uvx --from nacos-mcp-router@latest nacos-mcp-router "$@"

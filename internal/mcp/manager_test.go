@@ -22,7 +22,7 @@ func TestManagerRuntimeLoadsSQLiteConnections(t *testing.T) {
 			Type:        "mysql",
 			Transport:   "stdio",
 			Command:     "mysql-mcp-server",
-			Args:        []string{"--read-only"},
+			Args:        []string{"--flag"},
 			Env:         []string{"MYSQL_DSN=x"},
 			Enabled:     false,
 			ContainerID: "c1",
@@ -40,7 +40,7 @@ func TestManagerRuntimeLoadsSQLiteConnections(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("len(list) = %d, want 1", len(list))
 	}
-	if list[0].ID != "mysql-1" || list[0].Args[0] != "--read-only" || list[0].Env[0] != "MYSQL_DSN=x" {
+	if list[0].ID != "mysql-1" || list[0].Args[0] != "--flag" || list[0].Env[0] != "MYSQL_DSN=x" {
 		t.Fatalf("imported connection = %+v", list[0])
 	}
 	if list[0].Status != "stopped" {

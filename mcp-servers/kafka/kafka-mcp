@@ -1,6 +1,68 @@
-#!/bin/bash
-# Kafka MCP Server wrapper
-# Uses the community kafka-mcp (Python, Apache 2.0).
-# uvx downloads and caches on first run; subsequent runs are fast.
-# https://github.com/wklee610/kafka-mcp
-exec uvx --python 3.12 --with httpx --with fastmcp kafka-mcp "$@"
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Kafka MCP Server wrapper for Confluent's official MCP server.
+# The production Docker image preinstalls @confluentinc/mcp-confluent.
+# npx is only a bare-metal fallback.
+# https://github.com/confluentinc/mcp-confluent
+
+MCP_CONFLUENT_PACKAGE="@confluentinc/mcp-confluent@1.4.0"
+MCP_SDK_PACKAGE="@modelcontextprotocol/sdk@1.27.1"
+ZOD_PACKAGE="zod@4.4.3"
+NODE_BIN="${OOPS_MCP_NODE_BIN:-node}"
+NPX_BIN="${OOPS_MCP_NPX_BIN:-npx}"
+NODE_MAJOR_TARGET="${OOPS_MCP_NODE_MAJOR:-22}"
+MCP_CONFLUENT_BIN="${OOPS_MCP_CONFLUENT_BIN:-/opt/oops/mcp-confluent/node_modules/.bin/mcp-confluent}"
+
+if [[ -n "${KAFKA_BOOTSTRAP_SERVERS:-}" && -z "${BOOTSTRAP_SERVERS:-}" ]]; then
+  export BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS}"
+fi
+
+if [[ -n "${KAFKA_REST_URL:-}" && -z "${KAFKA_REST_ENDPOINT:-}" ]]; then
+  export KAFKA_REST_ENDPOINT="${KAFKA_REST_URL}"
+fi
+
+if [[ -x "${MCP_CONFLUENT_BIN}" ]]; then
+  exec "${MCP_CONFLUENT_BIN}" "$@"
+fi
+
+run_confluent() {
+  exec "${NPX_BIN}" -y \
+    --package "${MCP_CONFLUENT_PACKAGE}" \
+    --package "${MCP_SDK_PACKAGE}" \
+    --package "${ZOD_PACKAGE}" \
+    mcp-confluent "$@"
+}
+
+node_major="$("${NODE_BIN}" -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')"
+if ! [[ "${node_major}" =~ ^[0-9]+$ ]] || (( node_major == 0 )); then
+  echo "Kafka MCP requires Node.js ${NODE_MAJOR_TARGET} LTS and npx. Set OOPS_MCP_NODE_BIN/OOPS_MCP_NPX_BIN if Node is installed outside PATH." >&2
+  exit 127
+fi
+
+if (( node_major < NODE_MAJOR_TARGET )); then
+  echo "Kafka MCP requires Node.js ${NODE_MAJOR_TARGET} LTS. Current node: $("${NODE_BIN}" --version 2>/dev/null || printf 'unknown')" >&2
+  exit 1
+fi
+
+if (( node_major > NODE_MAJOR_TARGET )); then
+  if command -v fnm >/dev/null 2>&1 && fnm list 2>/dev/null | grep -Eq "v${NODE_MAJOR_TARGET}\\."; then
+    export npm_config_cache="${OOPS_MCP_NPM_CACHE:-${HOME}/.cache/oops/mcp-confluent-node22-npm}"
+    mkdir -p "${npm_config_cache}"
+    exec fnm exec --using "${NODE_MAJOR_TARGET}" npx -y \
+      --package "${MCP_CONFLUENT_PACKAGE}" \
+      --package "${MCP_SDK_PACKAGE}" \
+      --package "${ZOD_PACKAGE}" \
+      mcp-confluent "$@"
+  fi
+
+  if [[ "${OOPS_MCP_ALLOW_UNTESTED_NODE:-}" != "1" ]]; then
+    echo "Kafka MCP official server is pinned to Node.js ${NODE_MAJOR_TARGET} LTS because its native Kafka dependency is not reliable on Node ${node_major}." >&2
+    echo "Install Node ${NODE_MAJOR_TARGET} on Linux, or set OOPS_MCP_NODE_BIN/OOPS_MCP_NPX_BIN to Node ${NODE_MAJOR_TARGET} binaries." >&2
+    exit 1
+  fi
+fi
+
+export npm_config_cache="${OOPS_MCP_NPM_CACHE:-${HOME}/.cache/oops/mcp-confluent-npm}"
+mkdir -p "${npm_config_cache}"
+run_confluent "$@"

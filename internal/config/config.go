@@ -35,7 +35,7 @@ type LLMConfig struct {
 //
 //	transport: "stdio"
 //	command: "mysql-mcp-server"
-//	args: ["--read-only"]
+//	args: []
 //	env: ["MYSQL_DSN=user:pass@tcp(...)"]
 //
 // 跨网络部署时用 sse 模式：

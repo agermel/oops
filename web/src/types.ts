@@ -156,7 +156,7 @@ export type ToolTestResult = {
 
 // MCPConnectionStatus 是带运行时状态的 MCP 连接。
 export type MCPConnectionStatus = MCPConnectionConfig & {
-  status: "running" | "stopped" | "error";
+  status: "running" | "starting" | "stopped" | "error";
   error?: string;
   toolCount: number;
   tools?: ToolInfo[];
@@ -304,6 +304,7 @@ export const serviceTypeIcons: Record<string, typeof Database> = {
   elasticsearch: Search,
   kafka: Layers,
   etcd: Layers,
+  nacos: Globe,
   clickhouse: Database,
   minio: Database,
   consul: Globe,
@@ -404,6 +405,7 @@ export const ansiConvertor = new AnsiConvertor({
 
 export const mcpStatusLabel: Record<string, string> = {
   running: "运行中",
+  starting: "启动中",
   stopped: "已停止",
   error: "异常",
 };

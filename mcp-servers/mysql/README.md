@@ -16,7 +16,7 @@
   "name": "MySQL",
   "type": "mysql",
   "command": "./mcp-servers/mysql/mysql-mcp-server",
-  "args": ["--silent"],
+  "args": [],
   "env": ["MYSQL_DSN=user:pass@tcp(host:3306)/db"],
   "enabled": true
 }

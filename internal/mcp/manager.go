@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,9 @@ var (
 	ErrConnectionNotRunning = errors.New("connection not running")
 	// ErrToolCallFailed indicates the transport-level call to the MCP tool failed.
 	ErrToolCallFailed = errors.New("tool call failed")
+	// ErrTestConnectFailed indicates the transport-level connection attempt failed
+	// during Test() (e.g., SSE unreachable, subprocess failed to start).
+	ErrTestConnectFailed = errors.New("test connect failed")
 )
 
 // allowedCommands returns the list of MCP stdio commands permitted to execute.
@@ -90,7 +94,7 @@ type ConnectionConfig struct {
 // ConnectionWithStatus is the public-facing view of a connection.
 type ConnectionWithStatus struct {
 	ConnectionConfig
-	Status    string     `json:"status"` // "running" | "stopped" | "error"
+	Status    string     `json:"status"` // "running" | "starting" | "stopped" | "error"
 	Error     string     `json:"error,omitempty"`
 	ToolCount int        `json:"toolCount"`
 	Tools     []ToolInfo `json:"tools,omitempty"`
@@ -101,12 +105,16 @@ type managerState struct {
 }
 
 type managedProcess struct {
-	cfg       ConnectionConfig
-	session   MCPSession // retained for per-tool testing
-	closer    func()
-	tools     []tool.BaseTool
-	exitCh    <-chan struct{} // closed when the subprocess exits (nil for SSE)
-	stderrBuf *StderrBuffer   // captured stderr; nil for SSE
+	cfg          ConnectionConfig
+	session      MCPSession // retained for per-tool testing
+	closer       func()
+	tools        []tool.BaseTool
+	healthCancel context.CancelFunc // cancel periodic health check on stop
+}
+
+type connectionStart struct {
+	cfg   ConnectionConfig
+	token int64
 }
 
 // Manager manages MCP server subprocess lifecycles and persists configuration.
@@ -115,8 +123,11 @@ type Manager struct {
 	runtime   *runtimestore.Store
 	config    managerState
 	processes map[string]*managedProcess // id → running process
-	errors    map[string]string          // id → last error
+	starting  map[string]int64           // id → active start token
+	nextStart int64
+	errors    map[string]string // id → last error
 	onChange  func([]tool.BaseTool)
+	closed    bool
 }
 
 // NewManagerWithRuntime loads MCP connections from SQLite.
@@ -127,6 +138,7 @@ func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]tool.Bas
 	m := &Manager{
 		runtime:   runtime,
 		processes: make(map[string]*managedProcess),
+		starting:  make(map[string]int64),
 		errors:    make(map[string]string),
 		onChange:  onChange,
 	}
@@ -135,24 +147,20 @@ func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]tool.Bas
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 
+	var starts []connectionStart
 	m.mu.Lock()
 	for i := range m.config.Connections {
 		cfg := m.config.Connections[i]
 		if !cfg.Enabled {
 			continue
 		}
-		go func(cfg ConnectionConfig) {
-			m.mu.Lock()
-			err := m.startLocked(cfg)
-			if err != nil {
-				logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
-				m.errors[cfg.ID] = err.Error()
-			}
-			m.mu.Unlock()
-			m.notifyChange()
-		}(cfg)
+		token := m.scheduleStartLocked(cfg.ID)
+		starts = append(starts, connectionStart{cfg: cfg, token: token})
 	}
 	m.mu.Unlock()
+	for _, start := range starts {
+		go m.startAsync(start.cfg, start.token)
+	}
 
 	m.notifyChange()
 	return m, nil
@@ -179,8 +187,12 @@ func (m *Manager) List() []ConnectionWithStatus {
 				}
 			}
 		} else if cfg.Enabled {
-			item.Status = "error"
-			item.Error = m.errors[cfg.ID]
+			if _, ok := m.starting[cfg.ID]; ok {
+				item.Status = "starting"
+			} else {
+				item.Status = "error"
+				item.Error = m.errors[cfg.ID]
+			}
 		} else {
 			item.Status = "stopped"
 		}
@@ -202,8 +214,12 @@ func (m *Manager) FindByContainer(nodeletID, containerID string) *ConnectionWith
 				item.Status = "running"
 				item.ToolCount = len(proc.tools)
 			} else if cfg.Enabled {
-				item.Status = "error"
-				item.Error = m.errors[cfg.ID]
+				if _, ok := m.starting[cfg.ID]; ok {
+					item.Status = "starting"
+				} else {
+					item.Status = "error"
+					item.Error = m.errors[cfg.ID]
+				}
 			} else {
 				item.Status = "stopped"
 			}
@@ -279,22 +295,16 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 		return fmt.Errorf("save: %w", err)
 	}
 
-	// 先持久化并返回，后台异步启动子进程。
+	var startToken int64
 	if cfg.Enabled {
-		go func() {
-			m.mu.Lock()
-			err := m.startLocked(cfg)
-			if err != nil {
-				logutil.Error("mcp: add start", zap.String("id", cfg.ID), zap.Error(err))
-				m.errors[cfg.ID] = err.Error()
-			}
-			m.mu.Unlock()
-			m.notifyChange()
-		}()
+		startToken = m.scheduleStartLocked(cfg.ID)
 	}
 
 	m.notifyChangeLocked()
 	m.mu.Unlock()
+	if cfg.Enabled {
+		go m.startAsync(cfg, startToken)
+	}
 	return nil
 }
 
@@ -350,22 +360,16 @@ func (m *Manager) Update(cfg ConnectionConfig) error {
 		return fmt.Errorf("save: %w", err)
 	}
 
-	// 先持久化并返回，后台异步启动新进程。
+	var startToken int64
 	if cfg.Enabled {
-		go func() {
-			m.mu.Lock()
-			err := m.startLocked(cfg)
-			if err != nil {
-				logutil.Error("mcp: update start", zap.String("id", cfg.ID), zap.Error(err))
-				m.errors[cfg.ID] = err.Error()
-			}
-			m.mu.Unlock()
-			m.notifyChange()
-		}()
+		startToken = m.scheduleStartLocked(cfg.ID)
 	}
 
 	m.notifyChangeLocked()
 	m.mu.Unlock()
+	if cfg.Enabled {
+		go m.startAsync(cfg, startToken)
+	}
 	return nil
 }
 
@@ -387,6 +391,7 @@ func (m *Manager) Remove(id string) error {
 
 	m.stopLocked(id)
 	delete(m.errors, id)
+	delete(m.starting, id)
 
 	m.config.Connections = append(m.config.Connections[:idx], m.config.Connections[idx+1:]...)
 	if err := m.saveLocked(); err != nil {
@@ -547,8 +552,15 @@ func inferStringDefault(name string) string {
 }
 
 // Test attempts a temporary connection to verify the config works.
-// It does not persist or affect running processes.
+// When the tested config matches a saved connection, the runtime status is
+// updated so the UI reflects current MCP availability.
 func (m *Manager) Test(cfg ConnectionConfig) error {
+	err := m.testConnection(cfg)
+	m.applyTestResult(cfg, err)
+	return err
+}
+
+func (m *Manager) testConnection(cfg ConnectionConfig) error {
 	if cfg.Transport == "sse" {
 		if cfg.URL == "" {
 			return fmt.Errorf("url is required for sse transport")
@@ -575,16 +587,251 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 		URL:       cfg.URL,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	_, _, closer, _, _, err := Connect(ctx, mcpCfg)
+	session, tools, closer, err := Connect(ctx, mcpCfg)
 	if err != nil {
 		// stderr 已由 Connect/connectStdio 附在 error 中，此处不再重复拼接。
-		return fmt.Errorf("test connect: %w", err)
+		return fmt.Errorf("%w: test connect: %w", ErrTestConnectFailed, err)
 	}
-	closer()
+	defer closer()
+	if err := verifyBackend(ctx, cfg, session, tools); err != nil {
+		return fmt.Errorf("%w: test backend: %w", ErrTestConnectFailed, err)
+	}
 	return nil
+}
+
+func (m *Manager) applyTestResult(cfg ConnectionConfig, testErr error) {
+	if cfg.ID == "" {
+		return
+	}
+
+	m.mu.Lock()
+	if _, ok := m.connectionLocked(cfg.ID); !ok {
+		m.mu.Unlock()
+		return
+	}
+
+	if testErr == nil {
+		if _, ok := m.processes[cfg.ID]; ok {
+			delete(m.errors, cfg.ID)
+		}
+		m.notifyChangeLocked()
+		m.mu.Unlock()
+		return
+	}
+
+	proc, running := m.processes[cfg.ID]
+	if !running {
+		delete(m.starting, cfg.ID)
+		m.errors[cfg.ID] = testErr.Error()
+		m.notifyChangeLocked()
+		m.mu.Unlock()
+		return
+	}
+	if sameRuntimeConfig(proc.cfg, cfg) {
+		m.markProcessErrorLocked(cfg.ID, testErr)
+		m.mu.Unlock()
+		return
+	}
+
+	currentCfg := proc.cfg
+	session := proc.session
+	tools := proc.tools
+	m.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	currentErr := verifyBackend(ctx, currentCfg, session, tools)
+	cancel()
+	if currentErr == nil {
+		return
+	}
+
+	m.mu.Lock()
+	if currentProc, stillRunning := m.processes[cfg.ID]; stillRunning && currentProc == proc {
+		m.markProcessErrorLocked(cfg.ID, currentErr)
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) connectionLocked(id string) (ConnectionConfig, bool) {
+	for _, cfg := range m.config.Connections {
+		if cfg.ID == id {
+			return cfg, true
+		}
+	}
+	return ConnectionConfig{}, false
+}
+
+func sameRuntimeConfig(a, b ConnectionConfig) bool {
+	return a.Type == b.Type &&
+		normalizedTransport(a.Transport) == normalizedTransport(b.Transport) &&
+		a.Command == b.Command &&
+		a.URL == b.URL &&
+		slices.Equal(a.Args, b.Args) &&
+		slices.Equal(a.Env, b.Env)
+}
+
+func normalizedTransport(transport string) string {
+	if transport == "" {
+		return "stdio"
+	}
+	return transport
+}
+
+func (m *Manager) markProcessErrorLocked(id string, err error) {
+	delete(m.starting, id)
+	m.errors[id] = err.Error()
+	if proc, ok := m.processes[id]; ok {
+		if proc.healthCancel != nil {
+			proc.healthCancel()
+		}
+		proc.closer()
+		delete(m.processes, id)
+	}
+	m.notifyChangeLocked()
+}
+
+type backendProbe struct {
+	name string
+	args map[string]any
+}
+
+func verifyBackend(ctx context.Context, cfg ConnectionConfig, session MCPSession, tools []tool.BaseTool) error {
+	for _, probe := range backendProbes(cfg) {
+		if !hasTool(ctx, tools, probe.name) {
+			continue
+		}
+		return callBackendProbe(ctx, session, probe)
+	}
+
+	return Verify(ctx, session)
+}
+
+func callBackendProbe(ctx context.Context, session MCPSession, probe backendProbe) error {
+	req := mcp.CallToolRequest{}
+	req.Params.Name = probe.name
+	req.Params.Arguments = probe.args
+	if req.Params.Arguments == nil {
+		req.Params.Arguments = map[string]any{}
+	}
+
+	result, err := session.CallTool(ctx, req)
+	if err != nil {
+		return fmt.Errorf("call %q: %w", probe.name, err)
+	}
+	if result.IsError {
+		errMsg := toolErrorText(result)
+		if errMsg == "" {
+			errMsg = "returned error with no message"
+		}
+		return fmt.Errorf("call %q: %s", probe.name, errMsg)
+	}
+	if failure := probeFailureText(result); failure != "" {
+		return fmt.Errorf("call %q: %s", probe.name, failure)
+	}
+	return nil
+}
+
+func backendProbes(cfg ConnectionConfig) []backendProbe {
+	switch strings.ToLower(cfg.Type) {
+	case "mysql":
+		return []backendProbe{
+			{name: "ping"},
+			{name: "server_info"},
+			{name: "list_databases"},
+		}
+	case "redis":
+		return []backendProbe{
+			{name: "info"},
+			{name: "dbsize"},
+		}
+	case "postgres":
+		return []backendProbe{
+			{name: "query", args: map[string]any{"sql": "SELECT 1"}},
+		}
+	case "etcd":
+		return []backendProbe{
+			{name: "etcd_health"},
+			{name: "etcd_status"},
+		}
+	case "elasticsearch":
+		return []backendProbe{
+			{name: "get_cluster_health"},
+			{name: "list_indices"},
+		}
+	case "kafka":
+		return []backendProbe{
+			{name: "list-topics"},
+		}
+	case "nacos":
+		return []backendProbe{{
+			name: "search_mcp_server",
+			args: map[string]any{
+				"task_description": "健康检查\nhealth check",
+				"key_words":        "health,nacos",
+			},
+		}}
+	default:
+		return nil
+	}
+}
+
+func hasTool(ctx context.Context, tools []tool.BaseTool, name string) bool {
+	for _, bt := range tools {
+		info, err := bt.Info(ctx)
+		if err != nil || info == nil {
+			continue
+		}
+		if info.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func toolErrorText(result *mcp.CallToolResult) string {
+	var msgs []string
+	for _, block := range result.Content {
+		if tb, ok := block.(mcp.TextContent); ok {
+			msgs = append(msgs, tb.Text)
+		}
+	}
+	return strings.Join(msgs, "; ")
+}
+
+func probeFailureText(result *mcp.CallToolResult) string {
+	text := toolErrorText(result)
+	lower := strings.ToLower(text)
+	if strings.HasPrefix(strings.TrimSpace(lower), "error ") {
+		return text
+	}
+	markers := []string{
+		"failed with message",
+		"unexpected error",
+		"unauthorized",
+		"forbidden",
+		"authentication failed",
+		"connection refused",
+		"no such host",
+		"i/o timeout",
+		"dial tcp",
+		"could not connect",
+		"server selection timeout",
+		"error retrieving",
+		"error getting",
+		"mcp-confluent",
+		"kafkaerror",
+		"all brokers down",
+		"no kafka clusters",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return text
+		}
+	}
+	return ""
 }
 
 // Close stops all running subprocesses.
@@ -592,6 +839,10 @@ func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.closed = true
+	for id := range m.starting {
+		delete(m.starting, id)
+	}
 	for id := range m.processes {
 		m.stopLocked(id)
 	}
@@ -668,7 +919,73 @@ func mcpConnectionsFromRuntime(records []runtimestore.MCPConnectionRecord) []Con
 	return connections
 }
 
-func (m *Manager) startLocked(cfg ConnectionConfig) error {
+func (m *Manager) scheduleStartLocked(id string) int64 {
+	m.nextStart++
+	token := m.nextStart
+	m.starting[id] = token
+	delete(m.errors, id)
+	return token
+}
+
+func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
+	proc, err := startProcess(cfg)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	currentToken, isStarting := m.starting[cfg.ID]
+	if !isStarting || currentToken != token {
+		if proc != nil {
+			proc.closer()
+		}
+		return
+	}
+
+	currentCfg, exists := m.connectionLocked(cfg.ID)
+	if m.closed || !exists || !currentCfg.Enabled || !sameRuntimeConfig(currentCfg, cfg) {
+		delete(m.starting, cfg.ID)
+		if proc != nil {
+			proc.closer()
+		}
+		m.notifyChangeLocked()
+		return
+	}
+
+	delete(m.starting, cfg.ID)
+	if err != nil {
+		logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
+		m.errors[cfg.ID] = err.Error()
+		m.notifyChangeLocked()
+		return
+	}
+	if proc == nil {
+		logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(errors.New("start returned nil process")))
+		m.errors[cfg.ID] = "start returned nil process"
+		m.notifyChangeLocked()
+		return
+	}
+
+	if oldProc, ok := m.processes[cfg.ID]; ok {
+		if oldProc.healthCancel != nil {
+			oldProc.healthCancel()
+		}
+		oldProc.closer()
+	}
+
+	proc.cfg = currentCfg
+	healthCtx, healthCancel := context.WithCancel(context.Background())
+	proc.healthCancel = healthCancel
+	m.processes[cfg.ID] = proc
+	delete(m.errors, cfg.ID)
+	logutil.Info("mcp: started",
+		zap.String("id", cfg.ID),
+		zap.Int("tools", len(proc.tools)),
+	)
+	go m.runHealthCheck(healthCtx, cfg.ID)
+	m.notifyChangeLocked()
+}
+
+func startProcess(cfg ConnectionConfig) (*managedProcess, error) {
 	transport := cfg.Transport
 	if transport == "" {
 		transport = "stdio"
@@ -686,31 +1003,24 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
-		session, tools, closer, exitCh, stderrBuf, err := Connect(ctx, mcpCfg)
+		session, tools, closer, err := Connect(ctx, mcpCfg)
+		if err == nil {
+			if verifyErr := verifyBackend(ctx, cfg, session, tools); verifyErr != nil {
+				closer()
+				err = fmt.Errorf("backend verify: %w", verifyErr)
+			}
+		}
 		cancel()
 
 		if err == nil {
-			m.processes[cfg.ID] = &managedProcess{
-				cfg:       cfg,
-				session:   session,
-				closer:    closer,
-				tools:     tools,
-				exitCh:    exitCh,
-				stderrBuf: stderrBuf,
-			}
-			logutil.Info("mcp: started",
-				zap.String("id", cfg.ID),
-				zap.Int("tools", len(tools)),
-			)
-
-			// 后台监控子进程退出：当 exitCh 关闭时，更新状态并通知前端。
-			if exitCh != nil {
-				go m.monitorExit(cfg.ID, exitCh)
-			}
-
-			return nil
+			return &managedProcess{
+				cfg:     cfg,
+				session: session,
+				closer:  closer,
+				tools:   tools,
+			}, nil
 		}
 
 		lastErr = err
@@ -725,64 +1035,72 @@ func (m *Manager) startLocked(cfg ConnectionConfig) error {
 		}
 	}
 
-	return fmt.Errorf("connect (%d attempts): %w", maxRetries, lastErr)
+	return nil, fmt.Errorf("connect (%d attempts): %w", maxRetries, lastErr)
 }
 
-// monitorExit 监控子进程退出 channel，退出时更新连接状态。
-func (m *Manager) monitorExit(id string, exitCh <-chan struct{}) {
-	<-exitCh
+// runHealthCheck 在后台周期性对已启动的连接执行 verifyBackend。
+// 检查到后端不可达时标记为 error 并移除进程；恢复时清除错误。
+// 使用轻量 Verify (MCP Ping) 避免阻塞，耗时通常 <1s。
+func (m *Manager) runHealthCheck(ctx context.Context, id string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-	// 先复制 session 引用再释放锁，避免在持锁期间进行网络调用。
-	m.mu.Lock()
-	proc, ok := m.processes[id]
-	if !ok {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		m.mu.Lock()
+		proc, ok := m.processes[id]
+		if !ok {
+			m.mu.Unlock()
+			return
+		}
+		cfg := proc.cfg
+		session := proc.session
+		tools := proc.tools
 		m.mu.Unlock()
-		return // already stopped/removed
-	}
-	session := proc.session
-	stderrBuf := proc.stderrBuf
-	m.mu.Unlock()
 
-	// 进程已退出，检查是否还能通信。
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+		verifyCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		verifyErr := verifyBackend(verifyCtx, cfg, session, tools)
+		cancel()
 
-	err := session.Ping(ctx)
+		m.mu.Lock()
+		if currentProc, stillThere := m.processes[id]; !stillThere || currentProc != proc {
+			m.mu.Unlock()
+			return
+		}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 再次检查（可能在等待期间被 stop/remove）。
-	if _, stillThere := m.processes[id]; !stillThere {
-		return
-	}
-
-	if err != nil {
-		errMsg := fmt.Sprintf("进程意外退出: %v", err)
-		if stderrBuf != nil {
-			if s := stderrBuf.String(); s != "" {
-				errMsg += "\nstderr: " + s
+		if verifyErr != nil {
+			logutil.Error("mcp: health check failed",
+				zap.String("id", id),
+				zap.String("name", cfg.Name),
+				zap.Error(verifyErr),
+			)
+			console.Feed("mcp error: connection %q health check failed: %v", cfg.Name, verifyErr)
+			m.markProcessErrorLocked(id, verifyErr)
+		} else {
+			if _, hadError := m.errors[id]; hadError {
+				delete(m.errors, id)
+				logutil.Info("mcp: health check recovered", zap.String("id", id), zap.String("name", cfg.Name))
+				console.Feed("mcp info: connection %q recovered", cfg.Name)
+				m.notifyChangeLocked()
 			}
 		}
-		logutil.Error("mcp: process exited unexpectedly",
-			zap.String("id", id),
-			zap.Error(err),
-		)
-		console.Feed("mcp error: connection %q exited unexpectedly: %v", id, err)
-		delete(m.processes, id)
-		m.errors[id] = errMsg
-	} else {
-		// 虽然 stderr 管道关闭了，但 session 仍能通信（可能是 stderr 被关闭但进程还在）。
-		// 暂时保留运行状态。
-		logutil.Warn("mcp: stderr closed but session still alive", zap.String("id", id))
+		m.mu.Unlock()
 	}
-	m.notifyChangeLocked()
 }
 
 func (m *Manager) stopLocked(id string) {
+	delete(m.starting, id)
 	proc, ok := m.processes[id]
 	if !ok {
 		return
+	}
+	if proc.healthCancel != nil {
+		proc.healthCancel()
 	}
 	proc.closer()
 	delete(m.processes, id)

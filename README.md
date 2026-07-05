@@ -223,6 +223,8 @@ docker compose -f docker-compose.nodelet.yml up -d
 
 在 Web UI 的 MCP 管理面板中添加连接即可使用。MCP Server 二进制文件放在 `mcp-servers/<name>/` 目录下，该目录会以只读方式挂载到 Ops Plane 容器内。
 
+Kafka 使用 Confluent 官方 MCP Server（`@confluentinc/mcp-confluent`）。默认 Docker 镜像会在构建阶段预装并编译 Kafka MCP 依赖，运行时直接使用 `/opt/oops/mcp-confluent/node_modules/.bin/mcp-confluent`。裸机 Linux 部署时请安装 Node.js 22 LTS 和 npm，或通过 `OOPS_MCP_NODE_BIN` / `OOPS_MCP_NPX_BIN` 指向 Node 22 的二进制。
+
 ---
 
 ## 项目结构

@@ -221,7 +221,8 @@
   border: 1px solid var(--error-border);
 }
 
-.status-pill.unknown {
+.status-pill.unknown,
+.status-pill.starting {
   color: var(--muted);
   background: var(--surface-subtle);
   border: 1px solid var(--border);

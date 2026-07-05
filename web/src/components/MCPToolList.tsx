@@ -1,7 +1,7 @@
 import React from "react";
 import { Play, RotateCw, AlertTriangle, WifiOff, XCircle } from "lucide-react";
 import type { ToolInfo, ToolTestResult } from "../types";
-import { getErrorMessage } from "../lib/api";
+import { getErrorMessage, apiRequest, ApiError } from "../lib/api";
 import { mcpConnectionPaths } from "../lib/paths";
 import { useToolToggle, useTools } from "../hooks/useTools";
 import { ToggleSwitch } from "./ToggleSwitch";
@@ -67,28 +67,22 @@ export function MCPToolList({
     setTestingTools((prev) => new Set(prev).add(key));
     setToolTests((prev) => ({ ...prev, [key]: { status: "testing" } }));
     try {
-      const resp = await fetch(
+      const data = await apiRequest<{ status: string; output?: string; error?: string }>(
         mcpConnectionPaths.toolTest(connectionId, toolName),
         { method: "POST" },
       );
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        // HTTP 错误：区分后端不可达 (502/503) 和业务错误 (4xx)
-        const isTransport = resp.status >= 500 || resp.status === 0;
-        const result: ToolTestResult = {
-          status: isTransport ? "transport_error" : (data?.status || "error"),
-          error: data?.error || `HTTP ${resp.status}`,
-        };
-        setToolTests((prev) => ({ ...prev, [key]: result }));
-        return;
-      }
-      const result: ToolTestResult = data?.status === "ok"
+      const result: ToolTestResult = data.status === "ok"
         ? { status: "ok", output: data.output }
-        : { status: data?.status || "error", error: data?.error || "未知错误" };
+        : { status: (data.status as ToolTestResult["status"]) || "error", error: data.error || "未知错误" };
       setToolTests((prev) => ({ ...prev, [key]: result }));
     } catch (err) {
-      // fetch 本身抛出的异常（网络断开等）→ 传输层错误
-      const result: ToolTestResult = { status: "transport_error", error: getErrorMessage(err, "网络请求失败") };
+      const isTransport = err instanceof ApiError
+        ? err.status >= 500 || err.status === 0
+        : true;
+      const result: ToolTestResult = {
+        status: isTransport ? "transport_error" : "error",
+        error: getErrorMessage(err, "网络请求失败"),
+      };
       setToolTests((prev) => ({ ...prev, [key]: result }));
     } finally {
       setTestingTools((prev) => {

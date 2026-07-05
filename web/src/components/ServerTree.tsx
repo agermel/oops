@@ -365,9 +365,6 @@ export function ServerTree({
             {title}
           </span>
         )}
-        <Button variant="ghost" size="sm" className="tree-add-btn" title="添加服务器" aria-label="添加服务器" onClick={openAddModal}>
-          <Plus size={14} />
-        </Button>
       </div>
 
       {serverError && <div className="error-banner">{serverError}</div>}
@@ -376,14 +373,26 @@ export function ServerTree({
       {/* ---- 统一滚动区：服务器区 + MCP 区 ---- */}
       <div className="tree-list" ref={treeListRef}>
         {/* ---- 服务器区（可折叠）---- */}
-        <button className="tree-section-toggle" onClick={toggleServers}>
-          {serversExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          <Server size={13} />
-          <span>服务器</span>
-          {servers.length > 0 && (
-            <span className="tree-section-count">{servers.length}</span>
-          )}
-        </button>
+        <div className="tree-section-header">
+          <button className="tree-section-toggle" onClick={toggleServers}>
+            {serversExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <Server size={13} />
+            <span>服务器</span>
+            {servers.length > 0 && (
+              <span className="tree-section-count">{servers.length}</span>
+            )}
+          </button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="tree-section-action"
+            title="添加服务器"
+            aria-label="添加服务器"
+            onClick={openAddModal}
+          >
+            <Plus size={14} />
+          </Button>
+        </div>
         {serversExpanded && (
           <div className="tree-section-body">
             {serversLoading && servers.length === 0 && (
@@ -494,7 +503,11 @@ export function ServerTree({
                     </span>
                   </div>
                   <div className="tree-container-side">
-                    <StatusDot alive={conn.status === "running"} unknown={conn.status !== "running" && conn.status !== "stopped"} />
+                    <StatusDot
+                      alive={conn.status === "running"}
+                      loading={conn.status === "starting"}
+                      unknown={conn.status !== "running" && conn.status !== "stopped" && conn.status !== "starting"}
+                    />
                   </div>
                 </div>
               );

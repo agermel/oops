@@ -1,0 +1,15 @@
+{
+  "name": "oops-mcp-confluent-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@confluentinc/mcp-confluent": "1.4.0",
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "zod": "4.4.3"
+  },
+  "overrides": {
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "zod": "4.4.3"
+  }
+}

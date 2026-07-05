@@ -47,51 +47,41 @@ func (b *StderrBuffer) String() string {
 
 // Connect connects to an MCP server as configured in cfg, initializes the
 // session, and returns every tool the server exposes. The returned closer
-// function should be called to tear down the connection. The exitCh is
-// closed when the underlying subprocess exits (always nil for SSE).
-// The stderrBuf captures the subprocess stderr stream; it is nil for SSE
-// transports.
+// function should be called to tear down the connection.
 //
 // Two transports are supported:
 //
 //	transport: "stdio"  → launches a child process (command + args)
 //	transport: "sse"    → connects to a remote SSE endpoint (url)
-func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), <-chan struct{}, *StderrBuffer, error) {
+func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
 	switch cfg.Transport {
 	case "stdio":
 		return connectStdio(ctx, cfg)
 	case "sse":
 		return connectSSE(ctx, cfg)
 	default:
-		return nil, nil, nil, nil, nil, fmt.Errorf("unsupported mcp transport: %q", cfg.Transport)
+		return nil, nil, nil, fmt.Errorf("unsupported mcp transport: %q", cfg.Transport)
 	}
 }
 
-func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), <-chan struct{}, *StderrBuffer, error) {
+func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("stdio: create client: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdio: create client: %w", err)
 	}
 
-	exitCh := make(chan struct{})
 	stderrBuf := &StderrBuffer{}
 
-	// MCP 子进程 stderr 同时输出到控制台（实时可见）和 buffer（错误时回显）。
+	// MCP 子进程 stderr 输出到控制台（实时可见），同时缓冲用于错误回显。
 	stderrReader, hasStderr := mcpclient.GetStderr(c)
 	if hasStderr {
 		pipeWriter := console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command))
 		go func() {
 			_, _ = io.Copy(io.MultiWriter(pipeWriter, stderrBuf), stderrReader)
-			// 关闭 pipe writer，让 NewLineWriter 内部的 scanner goroutine
-			// 收到 EOF 后正常退出，避免 goroutine 泄漏。
 			if closer, ok := pipeWriter.(io.Closer); ok {
 				_ = closer.Close()
 			}
-			close(exitCh) // stderr pipe closed ⟹ process exited
 		}()
-	} else {
-		// 没有 stderr 时无法检测退出，关闭 exitCh 以避免监听者永久阻塞。
-		close(exitCh)
 	}
 
 	// Give the MCP server time to connect to its backend before init.
@@ -100,9 +90,9 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 		c.Close()
 		stderr := stderrBuf.String()
 		if stderr != "" {
-			return nil, nil, nil, nil, stderrBuf, fmt.Errorf("stdio: startup timeout: %w\nstderr: %s", ctx.Err(), stderr)
+			return nil, nil, nil, fmt.Errorf("stdio: startup timeout: %w\nstderr: %s", ctx.Err(), stderr)
 		}
-		return nil, nil, nil, nil, stderrBuf, ctx.Err()
+		return nil, nil, nil, ctx.Err()
 	case <-time.After(2 * time.Second):
 	}
 
@@ -117,9 +107,9 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 		c.Close()
 		stderr := stderrBuf.String()
 		if stderr != "" {
-			return nil, nil, nil, nil, stderrBuf, fmt.Errorf("stdio: initialize: %w\nstderr: %s", err, stderr)
+			return nil, nil, nil, fmt.Errorf("stdio: initialize: %w\nstderr: %s", err, stderr)
 		}
-		return nil, nil, nil, nil, stderrBuf, fmt.Errorf("stdio: initialize: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdio: initialize: %w", err)
 	}
 
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
@@ -127,23 +117,23 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 		c.Close()
 		stderr := stderrBuf.String()
 		if stderr != "" {
-			return nil, nil, nil, nil, stderrBuf, fmt.Errorf("stdio: get tools: %w\nstderr: %s", err, stderr)
+			return nil, nil, nil, fmt.Errorf("stdio: get tools: %w\nstderr: %s", err, stderr)
 		}
-		return nil, nil, nil, nil, stderrBuf, fmt.Errorf("stdio: get tools: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdio: get tools: %w", err)
 	}
 
-	return c, tools, func() { c.Close() }, exitCh, stderrBuf, nil
+	return c, tools, func() { c.Close() }, nil
 }
 
-func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), <-chan struct{}, *StderrBuffer, error) {
+func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
 	c, err := mcpclient.NewSSEMCPClient(cfg.URL)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("sse: create client: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: create client: %w", err)
 	}
 
 	if err := c.Start(ctx); err != nil {
 		c.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("sse: start: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: start: %w", err)
 	}
 
 	initReq := mcp.InitializeRequest{}
@@ -155,17 +145,16 @@ func connectSSE(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.B
 
 	if _, err = c.Initialize(ctx, initReq); err != nil {
 		c.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("sse: initialize: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: initialize: %w", err)
 	}
 
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
 	if err != nil {
 		c.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("sse: get tools: %w", err)
+		return nil, nil, nil, fmt.Errorf("sse: get tools: %w", err)
 	}
 
-	// SSE 连接没有子进程退出概念，返回 nil channel 和 nil stderr。
-	return c, tools, func() { c.Close() }, nil, nil, nil
+	return c, tools, func() { c.Close() }, nil
 }
 
 // ---- 连接验证 ----

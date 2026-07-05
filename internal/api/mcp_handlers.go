@@ -227,7 +227,12 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.mcpManager.Test(cfg); err != nil {
 		logutil.Error("api: mcp test", zap.Error(err))
-		writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+		switch {
+		case errors.Is(err, mcp.ErrTestConnectFailed):
+			writeJSON(w, map[string]string{"status": "transport_error", "error": err.Error()})
+		default:
+			writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+		}
 		return
 	}
 	writeJSONOK(w)

@@ -101,8 +101,8 @@ export function ContainerMCP({
     } else if (type === "redis") {
       if (host) env.push(`REDIS_HOST=${host}`);
       if (port) env.push(`REDIS_PORT=${port}`);
-      env.push("REDIS_DB=0");
-      env.push("REDIS_PWD=");
+      if (dsn?.user) env.push(`REDIS_USERNAME=${dsn.user}`);
+      if (dsn?.database) env.push(`REDIS_DB=${dsn.database}`);
     } else if (type === "postgres") {
       if (dsn?.raw) {
         env.push(`DATABASE_URL=${dsn.raw}`);
@@ -111,15 +111,15 @@ export function ContainerMCP({
       }
     } else if (type === "elasticsearch") {
       if (dsn?.raw) {
-        env.push(`ELASTICSEARCH_URL=${dsn.raw}`);
+        env.push(`ELASTICSEARCH_HOSTS=${dsn.raw}`);
       } else if (host) {
-        env.push(`ELASTICSEARCH_URL=http://${host}:${port || "9200"}`);
+        env.push(`ELASTICSEARCH_HOSTS=http://${host}:${port || "9200"}`);
       }
     } else if (type === "kafka") {
       if (dsn?.raw) {
-        env.push(`KAFKA_BOOTSTRAP_SERVERS=${dsn.raw}`);
+        env.push(`BOOTSTRAP_SERVERS=${dsn.raw}`);
       } else if (host) {
-        env.push(`KAFKA_BOOTSTRAP_SERVERS=${host}:${port || "9092"}`);
+        env.push(`BOOTSTRAP_SERVERS=${host}:${port || "9092"}`);
       }
     } else if (type === "mongo" && dsn?.raw) {
       env.push(`MONGO_URI=${dsn.raw}`);
@@ -316,6 +316,10 @@ export function ContainerMCP({
           onSaved={() => {
             formModal.onClose();
             setFormPrefill(null);
+            fetchConnection();
+            onMCPChanged();
+          }}
+          onTested={() => {
             fetchConnection();
             onMCPChanged();
           }}

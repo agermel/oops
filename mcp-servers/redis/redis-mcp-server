@@ -3,4 +3,36 @@
 # Uses the official redis/mcp-redis community MCP server (Python, MIT).
 # uvx downloads and caches on first run; subsequent runs are fast.
 # https://github.com/redis/mcp-redis
-exec uvx --python 3.12 --from redis-mcp-server@latest redis-mcp-server "$@"
+#
+# Fixes two issues in redis-mcp-server + redis-py 8.x:
+# 1. Click CLI defaults (--host 127.0.0.1 etc.) override REDIS_HOST env var
+# 2. redis-py 8.x RESP3 HELLO handshake injects "default" username,
+#    breaking old-style requirepass Redis without ACL users.
+
+exec uvx --python 3.12 --from redis-mcp-server@latest python -c "
+import os, sys
+
+# ---- force RESP2 to avoid redis-py 8.x injecting 'default' username ----
+import redis.utils
+redis.utils.DEFAULT_RESP_VERSION = 2
+
+# ---- build CLI args from env vars so Click defaults don't override ----
+args = ['redis-mcp-server']
+for env_var, flag in [
+    ('REDIS_HOST', '--host'),
+    ('REDIS_PORT', '--port'),
+    ('REDIS_DB', '--db'),
+    ('REDIS_USERNAME', '--username'),
+    ('REDIS_PWD', '--password'),
+]:
+    value = os.environ.get(env_var)
+    if value:
+        args.extend([flag, value])
+
+# forward extra arguments passed by oops
+args.extend(sys.argv[1:])
+sys.argv = args
+
+from src.main import cli
+cli()
+" "$@"

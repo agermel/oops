@@ -595,16 +595,6 @@
   min-width: 0;
 }
 
-.tree-add-btn {
-  margin-left: auto;
-  opacity: 0.6;
-  transition: opacity 0.15s;
-}
-
-.tree-add-btn:hover {
-  opacity: 1;
-}
-
 /* ---- MCP detail header actions (in tab bar) ---- */
 .mcp-detail-header-actions {
   display: flex;
@@ -1594,6 +1584,13 @@
 
 .creds-grid label {
   margin-top: var(--space-1);
+}
+
+.mcp-raw-textarea {
+  min-height: 88px;
+  max-height: 160px;
+  resize: none;
+  overflow: auto;
 }
 
 /* ---- Panel ---- */

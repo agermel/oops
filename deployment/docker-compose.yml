@@ -10,7 +10,7 @@ services:
       - OOPS_ADDR=:8081
       - OOPS_CONFIG=config/config.yaml
       # - OOPS_LLM_API_KEY=sk-...
-      # - OOPS_MCP_ALLOWED_COMMANDS=mysql-mcp-server,redis-mcp-server
+      # - OOPS_MCP_ALLOWED_COMMANDS=mysql-mcp-server,redis-mcp-server,kafka-mcp
     volumes:
       # 配置文件目录（config.yaml, mcp_connections.json）
       - ../config:/opt/oops/config
