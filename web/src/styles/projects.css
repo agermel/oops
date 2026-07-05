@@ -1023,6 +1023,7 @@
 .mcp-tool-col-status { width: 40px; }
 .mcp-tool-col-name { width: 160px; }
 .mcp-tool-col-desc { }
+.mcp-tool-col-toggle { width: 72px; text-align: center; }
 .mcp-tool-col-test { width: 80px; text-align: center; }
 
 .mcp-tool-row td {
@@ -1036,6 +1037,23 @@
   background: var(--blue-50);
   padding: 1px var(--space-1);
   border-radius: 3px;
+}
+
+.mcp-tool-row.tool-disabled {
+  background: var(--surface-subtle);
+}
+
+.mcp-tool-row.tool-disabled code {
+  color: var(--muted);
+  background: var(--surface-subtle);
+}
+
+.mcp-tool-toggle-cell {
+  text-align: center;
+}
+
+.mcp-tool-toggle-cell .tool-toggle {
+  justify-content: center;
 }
 
 .mcp-tool-desc {

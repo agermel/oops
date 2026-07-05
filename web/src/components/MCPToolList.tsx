@@ -3,6 +3,8 @@ import { Play, RotateCw, AlertTriangle, WifiOff, XCircle } from "lucide-react";
 import type { ToolInfo, ToolTestResult } from "../types";
 import { getErrorMessage } from "../lib/api";
 import { mcpConnectionPaths } from "../lib/paths";
+import { useToolToggle, useTools } from "../hooks/useTools";
+import { ToggleSwitch } from "./ToggleSwitch";
 import { Button } from "./ui/Button";
 
 // toolTestStatus 返回测试结果的显示信息。
@@ -34,8 +36,26 @@ export function MCPToolList({
 }) {
   const [toolTests, setToolTests] = React.useState<Record<string, ToolTestResult>>({});
   const [testingTools, setTestingTools] = React.useState<Set<string>>(new Set());
+  const { data: toolsData, isLoading: toolsLoading, error: toolsQueryError } = useTools();
+  const toggleMutation = useToolToggle();
   // 用 ref 保留测试结果，父组件刷新时不清除。
   const toolTestsRef = React.useRef<Record<string, ToolTestResult>>({});
+
+  const enabledByName = React.useMemo(() => {
+    const result = new Map<string, boolean>();
+    if (!toolsData) return result;
+    for (const t of toolsData.native) {
+      result.set(t.name, t.enabled);
+    }
+    for (const mcpTools of Object.values(toolsData.mcp)) {
+      for (const t of mcpTools) {
+        result.set(t.name, t.enabled);
+      }
+    }
+    return result;
+  }, [toolsData]);
+
+  const toolToggleError = toolsQueryError ? getErrorMessage(toolsQueryError, "读取工具开关状态失败") : "";
 
   // Keep ref in sync with state — no side effects inside setState updaters.
   React.useEffect(() => {
@@ -95,12 +115,14 @@ export function MCPToolList({
           </Button>
         )}
       </div>
+      {toolToggleError && <div className="error-banner">{toolToggleError}</div>}
       <table className="mcp-tools-subtable">
         <thead>
           <tr>
             <th className="mcp-tool-col-status">状态</th>
             <th className="mcp-tool-col-name">工具名称</th>
             <th className="mcp-tool-col-desc">描述</th>
+            <th className="mcp-tool-col-toggle">启用</th>
             <th className="mcp-tool-col-test">测试</th>
           </tr>
         </thead>
@@ -111,12 +133,22 @@ export function MCPToolList({
             const testing = testingTools.has(tkey);
             const { icon, cls } = toolTestStatus(tr, testing);
             const showDetail = tr && (tr.status === "ok" || tr.status === "error" || tr.status === "unavailable" || tr.status === "transport_error");
+            const enabled = enabledByName.get(t.name) ?? true;
+            const toggling = toggleMutation.isPending && toggleMutation.variables?.name === t.name;
+            const toggleDisabled = toolsLoading || !!toolsQueryError || toggling;
             return (
               <React.Fragment key={t.name}>
-                <tr className="mcp-tool-row">
+                <tr className={`mcp-tool-row ${!enabled ? "tool-disabled" : ""}`}>
                   <td>{icon}</td>
                   <td><code>{t.name}</code></td>
                   <td className="mcp-tool-desc">{t.description}</td>
+                  <td className="mcp-tool-toggle-cell">
+                    <ToggleSwitch
+                      checked={enabled}
+                      disabled={toggleDisabled}
+                      onChange={(next) => toggleMutation.mutate({ name: t.name, enabled: next })}
+                    />
+                  </td>
                   <td>
                     <Button
                       variant="ghost"
@@ -131,7 +163,7 @@ export function MCPToolList({
                 </tr>
                 {showDetail && (
                   <tr className="tool-test-detail-row">
-                    <td colSpan={4}>
+                    <td colSpan={5}>
                       <div className={`tool-test-detail-body ${cls}`}>
                         {tr!.status === "error" || tr!.status === "unavailable" || tr!.status === "transport_error"
                           ? tr!.error

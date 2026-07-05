@@ -1,69 +1,18 @@
 import React from "react";
 import { Cog, RefreshCw } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getErrorMessage } from "../lib/api";
-import { toolPaths } from "../lib/paths";
-import { queryKeys } from "../hooks/queries";
+import { getErrorMessage } from "../lib/api";
+import { useToolToggle, useTools, type ToolItem } from "../hooks/useTools";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { Button } from "./ui/Button";
-
-// ---- 类型 ----
-
-type ToolItem = {
-  name: string;
-  description: string;
-  enabled: boolean;
-};
-
-type ToolsData = {
-  native: ToolItem[];
-  mcp: Record<string, ToolItem[]>;
-};
 
 // ---- 组件 ----
 
 export function ToolsView() {
-  const queryClient = useQueryClient();
-
-  const { data, isLoading: loading, error: queryError, refetch } = useQuery<ToolsData>({
-    queryKey: queryKeys.tools.all,
-    queryFn: () => apiRequest<ToolsData>(toolPaths.list),
-  });
+  const { data, isLoading: loading, error: queryError, refetch } = useTools();
 
   const error = queryError ? getErrorMessage(queryError, "读取工具列表失败") : "";
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
-      apiRequest(toolPaths.detail(name), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      }),
-    onMutate: async ({ name, enabled }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.tools.all });
-      const previous = queryClient.getQueryData<ToolsData>(queryKeys.tools.all);
-      queryClient.setQueryData<ToolsData>(queryKeys.tools.all, (prev) => {
-        if (!prev) return prev;
-        const update = (items: ToolItem[]) =>
-          items.map((t) => (t.name === name ? { ...t, enabled } : t));
-        return {
-          native: update(prev.native),
-          mcp: Object.fromEntries(
-            Object.entries(prev.mcp).map(([conn, tools]) => [conn, update(tools)])
-          ),
-        };
-      });
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(queryKeys.tools.all, context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tools.all });
-    },
-  });
+  const toggleMutation = useToolToggle();
 
   const hasMCP = data && Object.keys(data.mcp).length > 0;
   const hasContent = data && (data.native.length > 0 || hasMCP);

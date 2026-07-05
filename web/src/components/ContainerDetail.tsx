@@ -83,7 +83,7 @@ export function ContainerDetailView({
 
   // Render MCP connection detail
   if (mcpConnection) {
-    return <MCPDetailView conn={mcpConnection} activeTab={activeTab as MCPTabID} onTabChange={setActiveTab} onEdit={onEditMCP} onDeleted={onMCPDeleted} onNavigateToContainer={onNavigateToContainer} />;
+    return <MCPDetailView projectId={projectId} conn={mcpConnection} activeTab={activeTab as MCPTabID} onTabChange={setActiveTab} onEdit={onEditMCP} onDeleted={onMCPDeleted} onNavigateToContainer={onNavigateToContainer} />;
   }
 
   // Render container detail
@@ -167,6 +167,7 @@ export function ContainerDetailView({
 // ---- MCP 详情视图（内嵌在 ContainerDetailView 中）----
 
 function MCPDetailView({
+  projectId,
   conn,
   activeTab,
   onTabChange,
@@ -174,6 +175,7 @@ function MCPDetailView({
   onDeleted,
   onNavigateToContainer,
 }: {
+  projectId: string;
   conn: ProjectMCPConnection;
   activeTab: MCPTabID;
   onTabChange: (id: MCPTabID) => void;
@@ -217,6 +219,7 @@ function MCPDetailView({
         body: JSON.stringify(body),
       });
       queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(projectId) });
     } catch (err) {
       alert(getErrorMessage(err, "更新失败"));
     } finally {
@@ -348,7 +351,7 @@ function MCPDetailView({
                 <MCPToolList
                   connectionId={conn.id}
                   tools={conn.tools!}
-                  onRefreshTools={() => queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all })}
+                  onRefreshTools={() => queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(projectId) })}
                 />
               </div>
             ) : (
