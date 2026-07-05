@@ -181,6 +181,14 @@ export type MCPPrefill = {
   nodeletId?: string;
 };
 
+export type MCPContainerBindingOption = {
+  nodeletId: string;
+  nodeletName: string;
+  containerId: string;
+  containerName: string;
+  serviceType: string;
+};
+
 export type ContainerDetail = {
   container: ContainerInspect;
   serviceType: string;

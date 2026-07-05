@@ -1,8 +1,15 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { apiRequest } from "../lib/api";
-import { projectPaths, serverPaths, nodeletPaths, nodeletBasePaths, mcpConnectionPaths } from "../lib/paths";
+import { projectPaths, serverPaths, nodeletBasePaths, mcpConnectionPaths } from "../lib/paths";
 import { queryKeys } from "./queries";
-import type { ServerWithNodelet, NodeletStatusItem, ContainerWithType, MCPConnectionStatus, ProjectMCPConnection } from "../types";
+import type {
+  ServerWithNodelet,
+  NodeletStatusItem,
+  ContainerWithType,
+  MCPConnectionStatus,
+  ProjectMCPConnection,
+  MCPContainerBindingOption,
+} from "../types";
 
 // ---- Servers ----
 
@@ -66,6 +73,34 @@ export function useContainers(projectId: string, nodeletId: string) {
     queryFn: () => apiRequest<ContainerWithType[]>(serverPaths(projectId, nodeletId).containers),
     enabled: !!projectId && !!nodeletId,
   });
+}
+
+export function useProjectContainerOptions(projectId: string, servers: ServerWithNodelet[], enabled: boolean) {
+  const results = useQueries({
+    queries: servers.map((server) => ({
+      queryKey: queryKeys.containers.byServer(projectId, server.nodelet.id),
+      queryFn: () => apiRequest<ContainerWithType[]>(serverPaths(projectId, server.nodelet.id).containers),
+      enabled: enabled && !!projectId && !!server.nodelet.id,
+    })),
+  });
+
+  const data: MCPContainerBindingOption[] = results.flatMap((result, index) => {
+    const server = servers[index];
+    if (!server || !result.data) return [];
+    return result.data.map((container) => ({
+      nodeletId: server.nodelet.id,
+      nodeletName: server.nodelet.name,
+      containerId: container.id,
+      containerName: container.name,
+      serviceType: container.serviceType,
+    }));
+  });
+
+  return {
+    data,
+    isLoading: results.some((result) => result.isLoading),
+    error: results.find((result) => result.error)?.error,
+  };
 }
 
 // ---- Container Exclusions ----

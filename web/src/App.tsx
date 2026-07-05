@@ -5,6 +5,7 @@ import type {
   SessionDetail,
   MCPConnectionStatus,
   ProjectMCPConnection,
+  MCPPrefill,
 } from "./types";
 import { SESSION_STORAGE_KEY } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -13,13 +14,17 @@ import { useSet } from "./hooks/useSet";
 import { useLogStream } from "./hooks/useLogStream";
 import { usePathRouter } from "./hooks/usePathRouter";
 import { useProjects } from "./hooks/useProjects";
-import { useProjectServers, useNodeletStatus } from "./hooks/useServers";
+import {
+  useProjectServers,
+  useNodeletStatus,
+  useProjectContainerOptions,
+} from "./hooks/useServers";
 import { useSkills } from "./hooks/useSkills";
 import { useSessions } from "./hooks/useSessions";
 import { queryKeys } from "./hooks/queries";
 import { pageConfig } from "./lib/config";
 import { apiRequest, getErrorMessage } from "./lib/api";
-import { projectPaths, sessionPaths, authPaths, chatPaths, nodeletPaths } from "./lib/paths";
+import { projectPaths, sessionPaths, authPaths, chatPaths } from "./lib/paths";
 import { deserializeSessionMessages } from "./lib/session";
 import { shouldAutoExpandFirstServer } from "./lib/serverTreeState";
 import { Header } from "./components/Header";
@@ -99,7 +104,7 @@ export function App() {
 
   // MCP 新建/编辑连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
   const mcpForm = useModal<MCPConnectionStatus>();
-  const [mcpQuickType, setMCPQuickType] = React.useState<string | undefined>(undefined);
+  const [mcpPrefill, setMCPPrefill] = React.useState<MCPPrefill | null>(null);
 
   // MCP 连接选择状态 —— 当用户在左侧栏点击 MCP 连接时设置
   const [selectedMCPConnectionID, setSelectedMCPConnectionID] = React.useState("");
@@ -153,6 +158,11 @@ export function App() {
       };
     });
   }, [rawServers, nodeletStatusItems]);
+
+  const {
+    data: mcpContainerOptions = [],
+    isLoading: mcpContainerOptionsLoading,
+  } = useProjectContainerOptions(selectedProjectID_clean, servers, authenticated && !!selectedProjectID_clean && mcpForm.open);
 
   // ---- 服务器展开/折叠 ----
   const expandedServers = useSet();
@@ -212,7 +222,7 @@ export function App() {
   // Prober 状态通过 useNodeletStatus() 的 refetchInterval: 30_000 自动轮询，
   // servers 的合并通过 useMemo 完成（见上方），无需额外的 effect。
 
-  // toggleServer 展开时触发即时探测，容器由 ServerTree 内部的 useContainers 管理。
+  // toggleServer 只管理展开状态，容器列表由 ServerTree 内部查询加载。
 
   async function sendChat(question?: string) {
     const q = (question ?? chatInput).trim();
@@ -437,9 +447,16 @@ export function App() {
     setSelectedMCPConnectionID(conn.id);
     // 如果 MCP 连接绑定了容器，同步选中对应的 nodelet 和容器
     if (conn.nodeletId) setSelectedNodeletID(conn.nodeletId);
+    setSelectedContainerID(conn.containerId || "");
+  }
+
+  function createMCPConnection(prefill: MCPPrefill) {
+    setMCPPrefill(prefill);
+    mcpForm.onOpen();
   }
 
   function editMCPConnection(conn: ProjectMCPConnection) {
+    setMCPPrefill(null);
     mcpForm.onOpen(conn);
   }
 
@@ -447,8 +464,6 @@ export function App() {
     if (expandedServers.set.has(nodeletID)) {
       expandedServers.remove(nodeletID);
     } else {
-      // 展开并选中：触发即时探测获取最新连通状态，容器由 ServerTree 的 useContainers 自动加载
-      apiRequest(nodeletPaths(nodeletID).probe, { method: "POST" }).catch(() => {});
       expandedServers.add(nodeletID);
       selectServerFromUI(nodeletID);
     }
@@ -617,6 +632,7 @@ export function App() {
             onToggleServer={toggleServer}
             onSelectContainer={selectContainerFromUI}
             onSelectMCPConnection={selectMCPConnection}
+            onCreateMCPConnection={createMCPConnection}
             onEditMCPConnection={editMCPConnection}
             onAutoScrollChange={setAutoScroll}
             onClearLogs={clearLogs}
@@ -692,17 +708,20 @@ export function App() {
       {mcpForm.open && (
         <MCPFormModal
           editItem={mcpForm.data}
-          prefill={!mcpForm.data && mcpQuickType ? {
-            name: "",
-            type: mcpQuickType,
-            env: [],
-          } : null}
-          onClose={() => { mcpForm.onClose(); setMCPQuickType(undefined); }}
-          onSaved={() => {
+          prefill={!mcpForm.data ? mcpPrefill : null}
+          containerOptions={mcpContainerOptions}
+          containerOptionsLoading={mcpContainerOptionsLoading}
+          onClose={() => { mcpForm.onClose(); setMCPPrefill(null); }}
+          onSaved={(config) => {
             mcpForm.onClose();
-            setMCPQuickType(undefined);
+            setMCPPrefill(null);
+            setSelectedMCPConnectionID(config.id);
+            if (config.nodeletId) setSelectedNodeletID(config.nodeletId);
+            setSelectedContainerID(config.containerId || "");
             // Refresh project-scoped MCP list so overview picks up new/edited connections.
             queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(selectedProjectID) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+            queryClient.invalidateQueries({ queryKey: queryKeys.tools.all });
           }}
         />
       )}

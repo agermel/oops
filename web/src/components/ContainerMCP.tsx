@@ -66,33 +66,25 @@ export function ContainerMCP({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, nodeletId, containerId, mcp?.connectionId]);
 
-  // 从 nodelet 地址提取服务器 IP（去掉协议和 nodelet API 端口）
   function serverIP(): string {
     if (!nodeletAddress) return "";
     try {
-      const u = new URL(nodeletAddress);
-      return u.hostname;
+      return new URL(nodeletAddress).hostname;
     } catch {
-      // 如果不是合法 URL，原样返回
       return nodeletAddress.replace(/^https?:\/\//, "").replace(/:\d+$/, "");
     }
   }
 
-  // 从容器的端口映射里取第一个对外暴露的端口号
   function publishedPort(): string {
     if (!containerPorts || containerPorts.length === 0) return "";
     for (const p of containerPorts) {
       if (p.hostPort) return p.hostPort;
     }
-    // 没有 hostPort 就用容器内部端口
     return String(containerPorts[0].containerPort || "");
   }
 
-  // 构建一键配置预填
   function buildPrefill(): MCPPrefill {
-    // 预填主机：优先用 DSN 检测到的，其次用节点服务器 IP
     const host = dsn?.host || serverIP();
-    // 预填端口：优先用 DSN 检测到的，其次用容器暴露端口
     const port = dsn?.port ? String(dsn.port) : publishedPort();
     const user = dsn?.user || "";
     const database = dsn?.database || "";
@@ -123,8 +115,8 @@ export function ContainerMCP({
       } else if (host) {
         env.push(`ELASTICSEARCH_URL=http://${host}:${port || "9200"}`);
       }
-    } else if (type === "mongo") {
-      if (dsn?.raw) env.push(`MONGO_URI=${dsn.raw}`);
+    } else if (type === "mongo" && dsn?.raw) {
+      env.push(`MONGO_URI=${dsn.raw}`);
     }
 
     return {
@@ -303,6 +295,13 @@ export function ContainerMCP({
         <MCPFormModal
           editItem={formModal.data}
           prefill={formPrefill}
+          containerOptions={[{
+            nodeletId,
+            nodeletName: nodeletId,
+            containerId,
+            containerName,
+            serviceType,
+          }]}
           onClose={() => {
             formModal.onClose();
             setFormPrefill(null);

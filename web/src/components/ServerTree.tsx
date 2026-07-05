@@ -1,9 +1,16 @@
 import { Server, ChevronDown, ChevronRight, Plus, Trash2, EyeOff, Eye, Wrench } from "lucide-react";
 import React from "react";
-import type { ServerWithNodelet, ProjectMCPConnection } from "../types";
+import type { ServerWithNodelet, ProjectMCPConnection, MCPPrefill } from "../types";
 import { serviceTypeIcons, serviceLabel, mcpStatusLabel } from "../types";
 import { getErrorMessage } from "../lib/api";
-import { useDeleteServer, useAddServer, useExcludeContainer, useIncludeContainer, useContainers, useProjectMCPConnections } from "../hooks/useServers";
+import {
+  useDeleteServer,
+  useAddServer,
+  useExcludeContainer,
+  useIncludeContainer,
+  useContainers,
+  useProjectMCPConnections,
+} from "../hooks/useServers";
 import { useNodelets } from "../hooks/useNodelets";
 import { useToggle } from "../hooks/useToggle";
 import { Modal } from "./Modal";
@@ -181,6 +188,7 @@ export function ServerTree({
   onToggleServer,
   onSelectContainer,
   onSelectMCPConnection,
+  onCreateMCPConnection,
 }: {
   projectId: string;
   servers: ServerWithNodelet[];
@@ -194,6 +202,7 @@ export function ServerTree({
   onToggleServer: (nodeletID: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
   onSelectMCPConnection: (conn: ProjectMCPConnection) => void;
+  onCreateMCPConnection?: (prefill: MCPPrefill) => void;
 }) {
   const [showAddModal, setShowAddModal] = React.useState(false);
   const [titleEditing, setTitleEditing] = React.useState(false);
@@ -202,7 +211,7 @@ export function ServerTree({
   const titleInputRef = React.useRef<HTMLInputElement>(null);
 
   const [serversExpanded, { toggle: toggleServers }] = useToggle(true);
-  const [mcpExpanded, { toggle: toggleMCP }] = useToggle(false);
+  const [mcpExpanded, { toggle: toggleMCP, on: openMCPSection }] = useToggle(false);
 
   const { data: nodelets = [], isLoading: nodeletsLoading } = useNodelets();
   const deleteServer = useDeleteServer(projectId);
@@ -233,6 +242,20 @@ export function ServerTree({
   function handleAddServer(nodeletID: string) {
     addServer.mutate(nodeletID, {
       onSuccess: () => setShowAddModal(false),
+    });
+  }
+
+  function createMCPConnection(e: React.MouseEvent<HTMLButtonElement>) {
+    e.stopPropagation();
+    const nodelet =
+      servers.find((s) => s.nodelet.id === selectedNodeletID)?.nodelet ?? servers[0]?.nodelet;
+    if (!nodelet || !onCreateMCPConnection) return;
+    openMCPSection();
+    onCreateMCPConnection({
+      name: "",
+      type: "mysql",
+      env: [],
+      nodeletId: nodelet.id,
     });
   }
 
@@ -355,14 +378,27 @@ export function ServerTree({
         )}
 
         {/* ---- MCP 连接区（可折叠，与服务器同级）---- */}
-        <button className="tree-section-toggle" onClick={toggleMCP}>
-          {mcpExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          <Wrench size={13} />
-          <span>MCP 连接</span>
-          {mcpConns.length > 0 && (
-            <span className="tree-section-count">{mcpConns.length}</span>
-          )}
-        </button>
+        <div className="tree-section-header">
+          <button className="tree-section-toggle" onClick={toggleMCP}>
+            {mcpExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <Wrench size={13} />
+            <span>MCP 连接</span>
+            {mcpConns.length > 0 && (
+              <span className="tree-section-count">{mcpConns.length}</span>
+            )}
+          </button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="tree-section-action"
+            title={servers.length === 0 ? "先添加服务器" : "新增 MCP 连接"}
+            aria-label="新增 MCP 连接"
+            disabled={servers.length === 0 || !onCreateMCPConnection}
+            onClick={createMCPConnection}
+          >
+            <Plus size={14} />
+          </Button>
+        </div>
         {mcpExpanded && (
           <div className="tree-section-body">
             {mcpError && <div className="tree-node-error">{mcpError}</div>}
@@ -401,7 +437,6 @@ export function ServerTree({
                   <div className="tree-container-side">
                     <StatusDot alive={conn.status === "running"} unknown={conn.status !== "running" && conn.status !== "stopped"} />
                   </div>
-                  <span className="tree-row-action-spacer" aria-hidden="true" />
                 </div>
               );
             })}

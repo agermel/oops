@@ -1,5 +1,11 @@
 import React from "react";
-import type { MCPConnectionConfig, MCPConnectionStatus, MCPPrefill } from "../types";
+import type {
+  MCPConnectionConfig,
+  MCPConnectionStatus,
+  MCPPrefill,
+  MCPContainerBindingOption,
+} from "../types";
+import { serviceLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
 import { mcpConnectionPaths } from "../lib/paths";
 import { Modal } from "./Modal";
@@ -224,15 +230,41 @@ function formToConfig(form: MCPConnectionStatus): MCPConnectionConfig {
   };
 }
 
+function bindingOptionLabel(option: MCPContainerBindingOption): string {
+  return [
+    option.containerName,
+    option.nodeletName,
+    bindingServiceText(option),
+    option.containerId.slice(0, 12),
+  ].filter(Boolean).join(" · ");
+}
+
+function bindingOptionSearchText(option: MCPContainerBindingOption): string {
+  return [
+    option.containerName,
+    option.nodeletName,
+    bindingServiceText(option),
+    option.containerId,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function bindingServiceText(option: MCPContainerBindingOption): string {
+  return serviceLabel(option.serviceType);
+}
+
 // ---- MCPFormModal ----
 export function MCPFormModal({
   editItem,
   prefill,
+  containerOptions = [],
+  containerOptionsLoading = false,
   onClose,
   onSaved,
 }: {
   editItem?: MCPConnectionStatus | null;
   prefill?: MCPPrefill | null;
+  containerOptions?: MCPContainerBindingOption[];
+  containerOptionsLoading?: boolean;
   onClose: () => void;
   onSaved?: (config: MCPConnectionConfig) => void;
 }) {
@@ -243,16 +275,40 @@ export function MCPFormModal({
   const [testResult, setTestResult] = React.useState("");
   const [testing, setTesting] = React.useState(false);
   const [creds, setCreds] = React.useState<Credentials>(emptyCreds());
+  const [bindingInput, setBindingInput] = React.useState("");
+  const [bindingOpen, setBindingOpen] = React.useState(false);
+  const lastBindingKeyRef = React.useRef("");
+  const lastBindingLabelRef = React.useRef("");
 
   // Track meaningful prefill identity to avoid re-init on every render.
   const prefillKey = prefill ? `${prefill.containerId || ""}:${prefill.nodeletId || ""}:${prefill.name || ""}` : "";
+  const selectedBindingKey = editing?.nodeletId && editing.containerId
+    ? `${editing.nodeletId}/${editing.containerId}`
+    : "";
+  const selectedBindingLabel = React.useMemo(() => {
+    if (!editing?.nodeletId || !editing.containerId) return "";
+    const option = containerOptions.find((item) =>
+      item.nodeletId === editing.nodeletId && item.containerId === editing.containerId
+    );
+    return option
+      ? bindingOptionLabel(option)
+      : `${editing.containerId.slice(0, 12)} · ${editing.nodeletId}`;
+  }, [editing?.nodeletId, editing?.containerId, containerOptions]);
+  const filteredBindingOptions = React.useMemo(() => {
+    const q = bindingInput.trim().toLowerCase();
+    if (!q || bindingInput === selectedBindingLabel) return containerOptions;
+    return containerOptions.filter((option) => bindingOptionSearchText(option).includes(q));
+  }, [bindingInput, containerOptions, selectedBindingLabel]);
 
   // 初始化：editItem 优先（编辑模式），否则 prefill 或空白（新建模式）
   React.useEffect(() => {
+    lastBindingKeyRef.current = "";
+    lastBindingLabelRef.current = "";
     if (editItem) {
       setIsNew(false);
       setEditing({ ...editItem });
       setCreds(parseCredentials(editItem.type, editItem.env));
+      setBindingInput("");
     } else {
       setIsNew(true);
       const form = emptyForm(prefill?.type || "mysql");
@@ -272,10 +328,28 @@ export function MCPFormModal({
         setCreds(parseCredentials(form.type, form.env));
       }
       setEditing(form);
+      setBindingInput("");
     }
     setTestResult("");
     setSaveError("");
   }, [editItem, prefillKey]);
+
+  React.useEffect(() => {
+    const previousKey = lastBindingKeyRef.current;
+    const previousLabel = lastBindingLabelRef.current;
+
+    lastBindingKeyRef.current = selectedBindingKey;
+    lastBindingLabelRef.current = selectedBindingLabel;
+
+    if (selectedBindingKey !== previousKey) {
+      setBindingInput(selectedBindingLabel);
+      return;
+    }
+
+    if (bindingInput === previousLabel && selectedBindingLabel !== previousLabel) {
+      setBindingInput(selectedBindingLabel);
+    }
+  }, [bindingInput, selectedBindingKey, selectedBindingLabel]);
 
   function closeForm() {
     if (saving) return;
@@ -298,8 +372,38 @@ export function MCPFormModal({
     });
   }
 
+  function updateBindingInput(value: string) {
+    setBindingInput(value);
+    setBindingOpen(true);
+    const option = containerOptions.find((item) => bindingOptionLabel(item) === value);
+    if (option) {
+      setEditing((prev) => prev ? { ...prev, nodeletId: option.nodeletId, containerId: option.containerId } : prev);
+    } else if (value.trim() === "") {
+      setEditing((prev) => prev ? { ...prev, nodeletId: "", containerId: "" } : prev);
+    }
+  }
+
+  function clearBinding() {
+    setBindingInput("");
+    setBindingOpen(false);
+    setEditing((prev) => prev ? { ...prev, nodeletId: "", containerId: "" } : prev);
+  }
+
+  function selectBinding(option: MCPContainerBindingOption) {
+    setBindingInput(bindingOptionLabel(option));
+    setBindingOpen(false);
+    setSaveError("");
+    setEditing((prev) => prev ? { ...prev, nodeletId: option.nodeletId, containerId: option.containerId } : prev);
+  }
+
   async function handleSave() {
     if (!editing || saving) return;
+    if (bindingInput.trim()) {
+      if (bindingInput !== selectedBindingLabel) {
+        setSaveError("请从列表中选择绑定容器，或清空绑定");
+        return;
+      }
+    }
     setSaving(true);
     setSaveError("");
     const body = formToConfig(editing);
@@ -412,6 +516,66 @@ export function MCPFormModal({
         <option value="elasticsearch">Elasticsearch</option>
         <option value="other">其他</option>
       </select>
+
+      <label htmlFor="mcp-container-binding">绑定容器</label>
+      <div className="mcp-binding-control">
+        <div className="mcp-binding-row">
+          <FormInput
+            id="mcp-container-binding"
+            value={bindingInput}
+            onChange={(e) => updateBindingInput(e.target.value)}
+            onFocus={() => setBindingOpen(true)}
+            onBlur={() => window.setTimeout(() => setBindingOpen(false), 120)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setBindingOpen(false);
+            }}
+            placeholder={containerOptionsLoading ? "读取容器中..." : "搜索容器名、服务器或类型"}
+            disabled={containerOptionsLoading}
+            autoComplete="off"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clearBinding}
+            disabled={!editing?.containerId && !bindingInput}
+          >
+            清除
+          </Button>
+        </div>
+        {bindingOpen && (
+          <div className="mcp-binding-menu">
+            {containerOptionsLoading ? (
+              <div className="mcp-binding-empty">读取容器中...</div>
+            ) : filteredBindingOptions.length === 0 ? (
+              <div className="mcp-binding-empty">没有匹配容器</div>
+            ) : (
+              filteredBindingOptions.map((option) => {
+                const selected = editing?.nodeletId === option.nodeletId &&
+                  editing?.containerId === option.containerId;
+                const metaParts = [
+                  option.nodeletName,
+                  bindingServiceText(option),
+                  option.containerId.slice(0, 12),
+                ].filter(Boolean);
+                return (
+                  <button
+                    type="button"
+                    key={`${option.nodeletId}/${option.containerId}`}
+                    className={`mcp-binding-option ${selected ? "selected" : ""}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => selectBinding(option)}
+                  >
+                    <span className="mcp-binding-name">{option.containerName}</span>
+                    <span className="mcp-binding-meta">{metaParts.join(" · ")}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+      <div className="field-hint">选择容器后，此 MCP 连接会显示在对应项目和容器下。</div>
 
       <label htmlFor="mcp-transport">传输方式</label>
       <select

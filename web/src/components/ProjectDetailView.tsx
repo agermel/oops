@@ -5,6 +5,7 @@ import type {
   ServerWithNodelet,
   LogEntry,
   ProjectMCPConnection,
+  MCPPrefill,
 } from "../types";
 import { ServerTree } from "./ServerTree";
 import { ContainerDetailView } from "./ContainerDetail";
@@ -31,6 +32,7 @@ export function ProjectDetailView({
   onToggleServer,
   onSelectContainer,
   onSelectMCPConnection,
+  onCreateMCPConnection,
   onEditMCPConnection,
   onAutoScrollChange,
   onClearLogs,
@@ -53,6 +55,7 @@ export function ProjectDetailView({
   onToggleServer: (id: string) => void;
   onSelectContainer: (nodeletID: string, containerID: string) => void;
   onSelectMCPConnection: (conn: ProjectMCPConnection) => void;
+  onCreateMCPConnection?: (prefill: MCPPrefill) => void;
   onEditMCPConnection?: (conn: ProjectMCPConnection) => void;
   onAutoScrollChange: (v: boolean) => void;
   onClearLogs: () => void;
@@ -161,6 +164,7 @@ export function ProjectDetailView({
           onToggleServer={onToggleServer}
           onSelectContainer={onSelectContainer}
           onSelectMCPConnection={onSelectMCPConnection}
+          onCreateMCPConnection={onCreateMCPConnection}
         />
 
         <ContainerDetailView
