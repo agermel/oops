@@ -10,11 +10,170 @@ import { Modal } from "./Modal";
 import { StatusDot } from "./StatusPill";
 import { Button } from "./ui/Button";
 
+type ContainerVisibilityMutation = Pick<ReturnType<typeof useExcludeContainer>, "mutate">;
+
+function ServerContainers({
+  projectId,
+  nodeletId,
+  serverError: srvError,
+  selectedNodeletID,
+  selectedContainerID,
+  excludedContainerRefs,
+  onSelectContainer: onSelect,
+  excludeContainer,
+  includeContainer,
+}: {
+  projectId: string;
+  nodeletId: string;
+  serverError?: string;
+  selectedNodeletID: string;
+  selectedContainerID: string;
+  excludedContainerRefs?: string[];
+  onSelectContainer: (id: string) => void;
+  excludeContainer: ContainerVisibilityMutation;
+  includeContainer: ContainerVisibilityMutation;
+}) {
+  const { data: conts = [], isLoading, error: containerError } = useContainers(projectId, nodeletId);
+  const [expandedHidden, setExpandedHidden] = React.useState(false);
+  const onSelectRef = React.useRef(onSelect);
+  onSelectRef.current = onSelect;
+
+  const excludedRefs = React.useMemo(() => new Set(excludedContainerRefs || []), [excludedContainerRefs]);
+  const visibleContainers = React.useMemo(
+    () => conts.filter((c) => !excludedRefs.has(`${nodeletId}/${c.id}`)),
+    [conts, excludedRefs, nodeletId],
+  );
+  const hiddenContainers = React.useMemo(
+    () => conts.filter((c) => excludedRefs.has(`${nodeletId}/${c.id}`)),
+    [conts, excludedRefs, nodeletId],
+  );
+  const selectedInThisNodelet = selectedNodeletID === nodeletId;
+  const selectedHidden = selectedInThisNodelet && hiddenContainers.some((c) => c.id === selectedContainerID);
+
+  React.useEffect(() => {
+    if (!isLoading && conts.length > 0 && !selectedContainerID && selectedInThisNodelet) {
+      if (visibleContainers.length > 0) {
+        onSelectRef.current(visibleContainers[0].id);
+      }
+    }
+  }, [isLoading, conts.length, selectedContainerID, selectedInThisNodelet, visibleContainers]);
+
+  React.useEffect(() => {
+    if (selectedHidden) setExpandedHidden(true);
+  }, [selectedHidden]);
+
+  return (
+    <div className="tree-node-detail">
+      {srvError && <div className="tree-node-error">{srvError}</div>}
+      {containerError && <div className="tree-node-error">{getErrorMessage(containerError, "读取容器失败")}</div>}
+      {isLoading && conts.length === 0 && (
+        <div className="loading-overlay"><span className="spinner spinner-sm" /> 加载中...</div>
+      )}
+      {!isLoading && conts.length === 0 && !srvError && !containerError && (
+        <div className="tree-empty">暂无容器</div>
+      )}
+      {visibleContainers.map((c) => {
+        const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
+        const label = serviceLabel(c.serviceType);
+        const portsText = c.ports && c.ports.length > 0
+          ? c.ports.map((p) => p.hostPort ? `${p.hostPort}->${p.containerPort}/${p.protocol || "tcp"}` : `${p.containerPort}/${p.protocol || "tcp"}`).join(", ")
+          : "";
+        const selected = selectedInThisNodelet && selectedContainerID === c.id;
+        return (
+          <div
+            key={c.id}
+            className={`tree-container ${selected ? "selected" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(c.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(c.id);
+              }
+            }}
+          >
+            <Icon size={14} />
+            <div className="tree-container-info">
+              <span className="tree-container-name">{c.name}</span>
+              {(c.status || portsText) && (
+                <span className="tree-container-sub">
+                  {[c.status, portsText].filter(Boolean).join("  ·  ")}
+                </span>
+              )}
+            </div>
+            <div className="tree-container-side">
+              <Button
+                size="xs" variant="ghost" className="tree-hide-btn" title="隐藏此容器"
+                onClick={(e) => { e.stopPropagation(); excludeContainer.mutate({ nodeletId, containerId: c.id }); }}
+              >
+                <EyeOff size={12} />
+              </Button>
+              {label && <span className="tree-container-type">{label}</span>}
+              <StatusDot alive={c.state === "running"} />
+            </div>
+          </div>
+        );
+      })}
+      {hiddenContainers.length > 0 && (
+        <div className="tree-hidden-section">
+          <button
+            className="tree-hidden-toggle"
+            onClick={() => setExpandedHidden((p) => !p)}
+          >
+            {expandedHidden ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>已隐藏 ({hiddenContainers.length})</span>
+          </button>
+          {expandedHidden &&
+            hiddenContainers.map((c) => {
+              const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
+              const label = serviceLabel(c.serviceType);
+              const selected = selectedInThisNodelet && selectedContainerID === c.id;
+              return (
+                <div
+                  key={c.id}
+                  className={`tree-hidden-item ${selected ? "selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelect(c.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelect(c.id);
+                    }
+                  }}
+                >
+                  <Icon size={14} />
+                  <span className="tree-hidden-name">{c.name}</span>
+                  <div className="tree-container-side">
+                    {label && <span className="tree-container-type">{label}</span>}
+                    <button
+                      className="tree-restore-btn"
+                      title="恢复显示"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        includeContainer.mutate({ nodeletId, containerId: c.id });
+                      }}
+                    >
+                      <Eye size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ServerTree({
   projectId,
   servers,
   serversLoading,
   serverError,
+  selectedNodeletID,
   selectedContainerID,
   selectedMCPConnectionID,
   expandedServers,
@@ -27,6 +186,7 @@ export function ServerTree({
   servers: ServerWithNodelet[];
   serversLoading: boolean;
   serverError: string;
+  selectedNodeletID: string;
   selectedContainerID: string;
   selectedMCPConnectionID?: string;
   expandedServers: Set<string>;
@@ -56,126 +216,6 @@ export function ServerTree({
     error: mcpQueryError,
   } = useProjectMCPConnections(projectId);
   const mcpError = mcpQueryError ? getErrorMessage(mcpQueryError, "读取 MCP 连接失败") : "";
-
-  // ---- 容器列表子组件（内部调用 TanStack Query） ----
-  function ServerContainers({
-    nodeletId,
-    serverError: srvError,
-    onSelectContainer: onSelect,
-  }: {
-    nodeletId: string;
-    serverError?: string;
-    onSelectContainer: (id: string) => void;
-  }) {
-    const { data: conts = [], isLoading, error: containerError } = useContainers(projectId, nodeletId);
-    const [expandedHidden, setExpandedHidden] = React.useState(false);
-    const onSelectRef = React.useRef(onSelect);
-    onSelectRef.current = onSelect;
-
-    // 数据首次加载完成后自动选中第一个可见容器
-    React.useEffect(() => {
-      if (!isLoading && conts.length > 0 && !selectedContainerID) {
-        const excludedRefs = new Set(excludedContainerRefs || []);
-        const visible = conts.filter((c) => !excludedRefs.has(`${nodeletId}/${c.id}`));
-        if (visible.length > 0) {
-          onSelectRef.current(visible[0].id);
-        }
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isLoading, conts.length, selectedContainerID, excludedContainerRefs, nodeletId]);
-
-    const excludedRefs = new Set(excludedContainerRefs || []);
-    const visibleContainers = conts.filter((c) => !excludedRefs.has(`${nodeletId}/${c.id}`));
-    const hiddenContainers = conts.filter((c) => excludedRefs.has(`${nodeletId}/${c.id}`));
-
-    return (
-      <div className="tree-node-detail">
-        {srvError && <div className="tree-node-error">{srvError}</div>}
-        {containerError && <div className="tree-node-error">{getErrorMessage(containerError, "读取容器失败")}</div>}
-        {isLoading && conts.length === 0 && (
-          <div className="loading-overlay"><span className="spinner spinner-sm" /> 加载中...</div>
-        )}
-        {!isLoading && conts.length === 0 && !srvError && !containerError && (
-          <div className="tree-empty">暂无容器</div>
-        )}
-        {visibleContainers.map((c) => {
-          const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
-          const label = serviceLabel(c.serviceType);
-          const portsText = c.ports && c.ports.length > 0
-            ? c.ports.map((p) => p.hostPort ? `${p.hostPort}->${p.containerPort}/${p.protocol || "tcp"}` : `${p.containerPort}/${p.protocol || "tcp"}`).join(", ")
-            : "";
-          return (
-            <div
-              key={c.id}
-              className={`tree-container ${selectedContainerID === c.id ? "selected" : ""}`}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(c.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelect(c.id);
-                }
-              }}
-            >
-              <Icon size={14} />
-              <div className="tree-container-info">
-                <span className="tree-container-name">{c.name}</span>
-                {(c.status || portsText) && (
-                  <span className="tree-container-sub">
-                    {[c.status, portsText].filter(Boolean).join("  ·  ")}
-                  </span>
-                )}
-              </div>
-              <div className="tree-container-side">
-                <Button
-                  size="xs" variant="ghost" className="tree-hide-btn" title="隐藏此容器"
-                  onClick={(e) => { e.stopPropagation(); excludeContainer.mutate({ nodeletId, containerId: c.id }); }}
-                >
-                  <EyeOff size={12} />
-                </Button>
-                {label && <span className="tree-container-type">{label}</span>}
-                <StatusDot alive={c.state === "running"} />
-              </div>
-            </div>
-          );
-        })}
-        {hiddenContainers.length > 0 && (
-          <div className="tree-hidden-section">
-            <button
-              className="tree-hidden-toggle"
-              onClick={() => setExpandedHidden((p) => !p)}
-            >
-              {expandedHidden ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              <span>已隐藏 ({hiddenContainers.length})</span>
-            </button>
-            {expandedHidden &&
-              hiddenContainers.map((c) => {
-                const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
-                const label = serviceLabel(c.serviceType);
-                return (
-                  <div key={c.id} className="tree-hidden-item">
-                    <Icon size={14} />
-                    <span className="tree-hidden-name">{c.name}</span>
-                    <div className="tree-container-side">
-                      {label && <span className="tree-container-type">{label}</span>}
-                      <button
-                        className="tree-restore-btn"
-                        title="恢复显示"
-                        onClick={() => includeContainer.mutate({ nodeletId, containerId: c.id })}
-                      >
-                        <Eye size={12} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            }
-          </div>
-        )}
-      </div>
-    );
-  }
 
   function openAddModal() {
     setShowAddModal(true);
@@ -297,9 +337,15 @@ export function ServerTree({
 
                     {isExpanded && (
                       <ServerContainers
+                        projectId={projectId}
                         nodeletId={sw.nodelet.id}
                         serverError={sw.error}
+                        selectedNodeletID={selectedNodeletID}
+                        selectedContainerID={selectedContainerID}
+                        excludedContainerRefs={excludedContainerRefs}
                         onSelectContainer={(cid) => onSelectContainer(sw.nodelet.id, cid)}
+                        excludeContainer={excludeContainer}
+                        includeContainer={includeContainer}
                       />
                     )}
                   </div>

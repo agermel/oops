@@ -1908,6 +1908,21 @@
   color: var(--gray-400);
   font-size: 13px;
   opacity: 0.65;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.tree-hidden-item:hover {
+  background: var(--surface-hover);
+  color: var(--gray-600);
+  opacity: 0.9;
+}
+
+.tree-hidden-item.selected {
+  background: var(--blue-50);
+  color: var(--primary);
+  font-weight: var(--font-bold);
+  opacity: 1;
 }
 
 .tree-hidden-name {

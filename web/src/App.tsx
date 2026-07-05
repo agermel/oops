@@ -424,6 +424,9 @@ export function App() {
 
   function selectContainerFromUI(nodeletID: string, containerID: string) {
     if (!selectedProjectID) return;
+    if (!expandedServers.set.has(nodeletID)) {
+      expandedServers.add(nodeletID);
+    }
     setSelectedNodeletID(nodeletID);
     setSelectedContainerID(containerID);
     setSelectedMCPConnectionID("");

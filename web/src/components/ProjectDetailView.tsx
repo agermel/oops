@@ -153,6 +153,7 @@ export function ProjectDetailView({
           servers={servers}
           serversLoading={serversLoading}
           serverError={serverError}
+          selectedNodeletID={selectedNodeletID}
           selectedContainerID={selectedContainerID}
           selectedMCPConnectionID={selectedMCPConnectionID}
           expandedServers={expandedServers}
