@@ -1,6 +1,6 @@
 import React from "react";
 import { Info, Wrench, FileText, Settings, Edit3, Trash2, ArrowRight } from "lucide-react";
-import type { ContainerDetail as ContainerDetailType, LogEntry, ProjectMCPConnection, MCPConnectionConfig } from "../types";
+import type { LogEntry, ProjectMCPConnection, MCPConnectionConfig } from "../types";
 import { serviceTypeIcons, mcpStatusLabel } from "../types";
 import { useContainerDetail } from "../hooks/useContainerDetail";
 import { getErrorMessage, apiRequest } from "../lib/api";
@@ -44,10 +44,6 @@ export function ContainerDetailView({
   containerId,
   projectId,
   nodeletAddress,
-  mcpConnection,
-  onEditMCP,
-  onMCPDeleted,
-  onNavigateToContainer,
   onMCPChanged,
 }: {
   logs: LogEntry[];
@@ -61,32 +57,21 @@ export function ContainerDetailView({
   containerId: string;
   projectId: string;
   nodeletAddress?: string;
-  mcpConnection?: ProjectMCPConnection;
-  onEditMCP?: (conn: ProjectMCPConnection) => void;
-  onMCPDeleted?: () => void;
-  onNavigateToContainer?: (nodeletId: string, containerId: string) => void;
   onMCPChanged: () => void;
 }) {
-  const [activeTab, setActiveTab] = React.useState<ContainerTabID | MCPTabID>("overview");
+  const [activeTab, setActiveTab] = React.useState<ContainerTabID>("overview");
 
   const { data: detail, isLoading: loading, error: queryError } = useContainerDetail(
     projectId, nodeletId, containerId
   );
   const error = queryError ? getErrorMessage(queryError, "读取容器详情失败") : "";
 
-  // Reset tab when switching between container and MCP
-  React.useEffect(() => { setActiveTab("overview"); }, [containerId, mcpConnection?.id]);
+  React.useEffect(() => { setActiveTab("overview"); }, [containerId]);
 
   function handleEditDSN() {
     setActiveTab("dsn");
   }
 
-  // Render MCP connection detail
-  if (mcpConnection) {
-    return <MCPDetailView projectId={projectId} conn={mcpConnection} activeTab={activeTab as MCPTabID} onTabChange={setActiveTab} onEdit={onEditMCP} onDeleted={onMCPDeleted} onNavigateToContainer={onNavigateToContainer} />;
-  }
-
-  // Render container detail
   return (
     <div className="container-detail">
       <div className="detail-tabs" role="tablist" aria-label="容器详情标签页">
@@ -164,28 +149,25 @@ export function ContainerDetailView({
   );
 }
 
-// ---- MCP 详情视图（内嵌在 ContainerDetailView 中）----
-
-function MCPDetailView({
+export function MCPDetailView({
   projectId,
   conn,
-  activeTab,
-  onTabChange,
   onEdit,
   onDeleted,
   onNavigateToContainer,
 }: {
   projectId: string;
   conn: ProjectMCPConnection;
-  activeTab: MCPTabID;
-  onTabChange: (id: MCPTabID) => void;
   onEdit?: (conn: ProjectMCPConnection) => void;
   onDeleted?: () => void;
   onNavigateToContainer?: (nodeletId: string, containerId: string) => void;
 }) {
+  const [activeTab, setActiveTab] = React.useState<MCPTabID>("overview");
   const Icon = serviceTypeIcons[conn.type] || serviceTypeIcons.unknown;
   const queryClient = useQueryClient();
   const toggling = useSet();
+
+  React.useEffect(() => { setActiveTab("overview"); }, [conn.id]);
 
   async function handleDelete() {
     if (!window.confirm(`确定要删除 MCP 连接 "${conn.name}" 吗？`)) return;
@@ -237,7 +219,7 @@ function MCPDetailView({
             role="tab"
             aria-selected={activeTab === tab.id}
             className={activeTab === tab.id ? "active" : ""}
-            onClick={() => onTabChange(tab.id)}
+            onClick={() => setActiveTab(tab.id)}
           >
             <tab.icon size={15} />
             <span>{tab.label}</span>

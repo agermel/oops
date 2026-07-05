@@ -1,6 +1,6 @@
 import { Server, ChevronDown, ChevronRight, Plus, Trash2, EyeOff, Eye, Wrench } from "lucide-react";
 import React from "react";
-import type { ServerWithNodelet, ProjectMCPConnection, MCPPrefill } from "../types";
+import type { ServerWithNodelet, ProjectMCPConnection, MCPPrefill, ProjectSelection } from "../types";
 import { serviceTypeIcons, serviceLabel, mcpStatusLabel } from "../types";
 import { getErrorMessage } from "../lib/api";
 import {
@@ -23,8 +23,7 @@ function ServerContainers({
   projectId,
   nodeletId,
   serverError: srvError,
-  selectedNodeletID,
-  selectedContainerID,
+  selection,
   excludedContainerRefs,
   onSelectContainer: onSelect,
   excludeContainer,
@@ -33,8 +32,7 @@ function ServerContainers({
   projectId: string;
   nodeletId: string;
   serverError?: string;
-  selectedNodeletID: string;
-  selectedContainerID: string;
+  selection: ProjectSelection;
   excludedContainerRefs?: string[];
   onSelectContainer: (id: string) => void;
   excludeContainer: ContainerVisibilityMutation;
@@ -54,16 +52,19 @@ function ServerContainers({
     () => conts.filter((c) => excludedRefs.has(`${nodeletId}/${c.id}`)),
     [conts, excludedRefs, nodeletId],
   );
-  const selectedInThisNodelet = selectedNodeletID === nodeletId;
-  const selectedHidden = selectedInThisNodelet && hiddenContainers.some((c) => c.id === selectedContainerID);
+  const selectedContainerID =
+    selection.kind === "container" && selection.nodeletId === nodeletId ? selection.containerId : "";
+  const selectedHidden = hiddenContainers.some((c) => c.id === selectedContainerID);
+  const shouldAutoSelect =
+    selection.kind === "nodelet" && selection.nodeletId === nodeletId && selectedContainerID === "";
 
   React.useEffect(() => {
-    if (!isLoading && conts.length > 0 && !selectedContainerID && selectedInThisNodelet) {
+    if (!isLoading && conts.length > 0 && shouldAutoSelect) {
       if (visibleContainers.length > 0) {
         onSelectRef.current(visibleContainers[0].id);
       }
     }
-  }, [isLoading, conts.length, selectedContainerID, selectedInThisNodelet, visibleContainers]);
+  }, [isLoading, conts.length, shouldAutoSelect, visibleContainers]);
 
   React.useEffect(() => {
     if (selectedHidden) setExpandedHidden(true);
@@ -85,7 +86,7 @@ function ServerContainers({
         const portsText = c.ports && c.ports.length > 0
           ? c.ports.map((p) => p.hostPort ? `${p.hostPort}->${p.containerPort}/${p.protocol || "tcp"}` : `${p.containerPort}/${p.protocol || "tcp"}`).join(", ")
           : "";
-        const selected = selectedInThisNodelet && selectedContainerID === c.id;
+        const selected = selectedContainerID === c.id;
         return (
           <div
             key={c.id}
@@ -100,6 +101,7 @@ function ServerContainers({
               }
             }}
           >
+            <span className="tree-row-toggle-spacer" aria-hidden="true" />
             <Icon size={14} />
             <div className="tree-container-info">
               <span className="tree-container-name">{c.name}</span>
@@ -135,7 +137,7 @@ function ServerContainers({
             hiddenContainers.map((c) => {
               const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
               const label = serviceLabel(c.serviceType);
-              const selected = selectedInThisNodelet && selectedContainerID === c.id;
+              const selected = selectedContainerID === c.id;
               return (
                 <div
                   key={c.id}
@@ -150,6 +152,7 @@ function ServerContainers({
                     }
                   }}
                 >
+                  <span className="tree-row-toggle-spacer" aria-hidden="true" />
                   <Icon size={14} />
                   <span className="tree-hidden-name">{c.name}</span>
                   <div className="tree-container-side">
@@ -180,9 +183,7 @@ export function ServerTree({
   servers,
   serversLoading,
   serverError,
-  selectedNodeletID,
-  selectedContainerID,
-  selectedMCPConnectionID,
+  selection,
   expandedServers,
   excludedContainerRefs,
   onToggleServer,
@@ -194,9 +195,7 @@ export function ServerTree({
   servers: ServerWithNodelet[];
   serversLoading: boolean;
   serverError: string;
-  selectedNodeletID: string;
-  selectedContainerID: string;
-  selectedMCPConnectionID?: string;
+  selection: ProjectSelection;
   expandedServers: Set<string>;
   excludedContainerRefs?: string[];
   onToggleServer: (nodeletID: string) => void;
@@ -209,6 +208,7 @@ export function ServerTree({
   const [title, setTitle] = React.useState("资源");
   const [titleDraft, setTitleDraft] = React.useState("资源");
   const titleInputRef = React.useRef<HTMLInputElement>(null);
+  const treeListRef = React.useRef<HTMLDivElement>(null);
 
   const [serversExpanded, { toggle: toggleServers }] = useToggle(true);
   const [mcpExpanded, { toggle: toggleMCP, on: openMCPSection }] = useToggle(false);
@@ -247,9 +247,14 @@ export function ServerTree({
 
   function createMCPConnection(e: React.MouseEvent<HTMLButtonElement>) {
     e.stopPropagation();
+    const selectedNodeletID =
+      selection.kind === "nodelet" || selection.kind === "container" || selection.kind === "mcp"
+        ? selection.nodeletId
+        : undefined;
     const nodelet =
       servers.find((s) => s.nodelet.id === selectedNodeletID)?.nodelet ?? servers[0]?.nodelet;
     if (!nodelet || !onCreateMCPConnection) return;
+    scheduleMCPSectionScroll(e.currentTarget.closest(".tree-section-header"));
     openMCPSection();
     onCreateMCPConnection({
       name: "",
@@ -257,6 +262,61 @@ export function ServerTree({
       env: [],
       nodeletId: nodelet.id,
     });
+  }
+
+  function scrollTreeRegionIntoView(startEl: HTMLElement, endEl = startEl) {
+    const scroller = treeListRef.current;
+    if (!scroller) {
+      startEl.scrollIntoView({ block: "nearest" });
+      return;
+    }
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const startRect = startEl.getBoundingClientRect();
+    const endRect = endEl.getBoundingClientRect();
+    const topLimit = scrollerRect.top + 8;
+    const bottomLimit = scrollerRect.bottom - 14;
+    const regionHeight = endRect.bottom - startRect.top;
+    const availableHeight = bottomLimit - topLimit;
+
+    let delta = 0;
+    if (regionHeight > availableHeight) {
+      delta = startRect.top - topLimit;
+    } else if (endRect.bottom > bottomLimit) {
+      delta = endRect.bottom - bottomLimit;
+    } else if (startRect.top < topLimit) {
+      delta = startRect.top - topLimit;
+    }
+
+    if (Math.abs(delta) > 1) {
+      scroller.scrollBy({ top: delta, behavior: "smooth" });
+    }
+  }
+
+  function scheduleScrollIntoView(startEl: Element | null, endEl?: Element | null) {
+    if (!(startEl instanceof HTMLElement)) return;
+    requestAnimationFrame(() => {
+      const resolvedEndEl = endEl instanceof HTMLElement ? endEl : startEl;
+      scrollTreeRegionIntoView(startEl, resolvedEndEl);
+    });
+  }
+
+  function scheduleMCPSectionScroll(headerEl: Element | null) {
+    if (!(headerEl instanceof HTMLElement)) return;
+    requestAnimationFrame(() => {
+      const bodyEl = headerEl.nextElementSibling instanceof HTMLElement ? headerEl.nextElementSibling : headerEl;
+      scrollTreeRegionIntoView(headerEl, bodyEl);
+    });
+  }
+
+  function handleToggleServer(e: React.MouseEvent<HTMLButtonElement>, nodeletID: string, isExpanded: boolean) {
+    if (!isExpanded) scheduleScrollIntoView(e.currentTarget.closest(".tree-node"));
+    onToggleServer(nodeletID);
+  }
+
+  function handleToggleMCP(e: React.MouseEvent<HTMLButtonElement>) {
+    if (!mcpExpanded) scheduleMCPSectionScroll(e.currentTarget.closest(".tree-section-header"));
+    toggleMCP();
   }
 
   function commitTitle() {
@@ -314,7 +374,7 @@ export function ServerTree({
       {addError && <div className="error-banner">{addError}</div>}
 
       {/* ---- 统一滚动区：服务器区 + MCP 区 ---- */}
-      <div className="tree-list">
+      <div className="tree-list" ref={treeListRef}>
         {/* ---- 服务器区（可折叠）---- */}
         <button className="tree-section-toggle" onClick={toggleServers}>
           {serversExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -343,7 +403,7 @@ export function ServerTree({
                     <div className="tree-node-main">
                       <button
                         className={`tree-server ${sw.host?.available ? "alive" : "dead"}`}
-                        onClick={() => onToggleServer(sw.nodelet.id)}
+                        onClick={(e) => handleToggleServer(e, sw.nodelet.id, isExpanded)}
                       >
                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         <Server size={15} />
@@ -363,8 +423,7 @@ export function ServerTree({
                         projectId={projectId}
                         nodeletId={sw.nodelet.id}
                         serverError={sw.error}
-                        selectedNodeletID={selectedNodeletID}
-                        selectedContainerID={selectedContainerID}
+                        selection={selection}
                         excludedContainerRefs={excludedContainerRefs}
                         onSelectContainer={(cid) => onSelectContainer(sw.nodelet.id, cid)}
                         excludeContainer={excludeContainer}
@@ -379,7 +438,7 @@ export function ServerTree({
 
         {/* ---- MCP 连接区（可折叠，与服务器同级）---- */}
         <div className="tree-section-header">
-          <button className="tree-section-toggle" onClick={toggleMCP}>
+          <button className="tree-section-toggle" onClick={handleToggleMCP}>
             {mcpExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             <Wrench size={13} />
             <span>MCP 连接</span>
@@ -410,7 +469,7 @@ export function ServerTree({
             )}
             {mcpConns.map((conn) => {
               const Icon = serviceTypeIcons[conn.type] || serviceTypeIcons.unknown;
-              const isSelected = selectedMCPConnectionID === conn.id;
+              const isSelected = selection.kind === "mcp" && selection.connectionId === conn.id;
               return (
                 <div
                   key={conn.id}

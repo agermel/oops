@@ -6,6 +6,7 @@ import type {
   MCPConnectionStatus,
   ProjectMCPConnection,
   MCPPrefill,
+  ProjectSelection,
 } from "./types";
 import { SESSION_STORAGE_KEY } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -93,8 +94,7 @@ export function App() {
     route.view === "project-skills" ? "skills" :
     route.view === "project-overview" ? "overview" :
     "overview";
-  const [selectedNodeletID, setSelectedNodeletID] = React.useState("");
-  const [selectedContainerID, setSelectedContainerID] = React.useState("");
+  const [projectSelection, setProjectSelection] = React.useState<ProjectSelection>({ kind: "none" });
 
   const lastLoadedProjectRef = React.useRef("");
   const autoExpandFirstServerRef = React.useRef(false);
@@ -105,9 +105,6 @@ export function App() {
   // MCP 新建/编辑连接模态框（App 级，供 workspace head 按钮和快捷卡片共用）
   const mcpForm = useModal<MCPConnectionStatus>();
   const [mcpPrefill, setMCPPrefill] = React.useState<MCPPrefill | null>(null);
-
-  // MCP 连接选择状态 —— 当用户在左侧栏点击 MCP 连接时设置
-  const [selectedMCPConnectionID, setSelectedMCPConnectionID] = React.useState("");
 
   // ---- 数据域 hooks（TanStack Query 管理） ----
   const {
@@ -167,9 +164,12 @@ export function App() {
   // ---- 服务器展开/折叠 ----
   const expandedServers = useSet();
 
+  const selectedContainer =
+    projectSelection.kind === "container" ? projectSelection : undefined;
+
   // ---- 日志流（useLogStream hook 管理 EventSource 生命周期） ----
   const { logs, loading: logsLoading, error: logsError, autoScroll, setAutoScroll, panelRef: logsPanel, clear: clearLogs } = useLogStream(
-    selectedProjectID, selectedNodeletID, selectedContainerID
+    selectedProjectID, selectedContainer?.nodeletId || "", selectedContainer?.containerId || ""
   );
 
   // ---- 聊天状态 ----
@@ -426,10 +426,7 @@ export function App() {
 
   function selectServerFromUI(nodeletID: string) {
     if (!selectedProjectID) return;
-    if (selectedNodeletID !== nodeletID) {
-      setSelectedContainerID("");
-    }
-    setSelectedNodeletID(nodeletID);
+    setProjectSelection({ kind: "nodelet", nodeletId: nodeletID });
   }
 
   function selectContainerFromUI(nodeletID: string, containerID: string) {
@@ -437,17 +434,17 @@ export function App() {
     if (!expandedServers.set.has(nodeletID)) {
       expandedServers.add(nodeletID);
     }
-    setSelectedNodeletID(nodeletID);
-    setSelectedContainerID(containerID);
-    setSelectedMCPConnectionID("");
+    setProjectSelection({ kind: "container", nodeletId: nodeletID, containerId: containerID });
   }
 
   function selectMCPConnection(conn: ProjectMCPConnection) {
     if (!selectedProjectID) return;
-    setSelectedMCPConnectionID(conn.id);
-    // 如果 MCP 连接绑定了容器，同步选中对应的 nodelet 和容器
-    if (conn.nodeletId) setSelectedNodeletID(conn.nodeletId);
-    setSelectedContainerID(conn.containerId || "");
+    setProjectSelection({
+      kind: "mcp",
+      connectionId: conn.id,
+      nodeletId: conn.nodeletId || undefined,
+      containerId: conn.containerId || undefined,
+    });
   }
 
   function createMCPConnection(prefill: MCPPrefill) {
@@ -477,8 +474,7 @@ export function App() {
     if (selectedProjectID && selectedProjectID !== lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = selectedProjectID;
       autoExpandFirstServerRef.current = false;
-      setSelectedNodeletID("");
-      setSelectedContainerID("");
+      setProjectSelection({ kind: "none" });
       expandedServers.clear();
       // 日志流由 useLogStream hook 管理，containerId 变为空时会自动关闭
       // servers 由 useProjectServers 的 query key 变化自动重新 fetch
@@ -486,13 +482,12 @@ export function App() {
     if (!selectedProjectID && lastLoadedProjectRef.current) {
       lastLoadedProjectRef.current = "";
       autoExpandFirstServerRef.current = false;
-      setSelectedNodeletID("");
-      setSelectedContainerID("");
+      setProjectSelection({ kind: "none" });
       expandedServers.clear();
     }
   }, [authenticated, selectedProjectID]);
 
-  // Effect C 已移除：日志流生命周期由 useLogStream hook 管理，自动跟随 selectedNodeletID/selectedContainerID 变化
+  // Effect C 已移除：日志流生命周期由 useLogStream hook 管理，自动跟随容器选择变化
   // Effect D 已移除：自动选第一个容器的逻辑移入 ServerTree 的 ServerContainers 组件，
   // 通过 useContainers 的 isSuccess 触发。
 
@@ -510,8 +505,7 @@ export function App() {
     const first = servers[0];
     autoExpandFirstServerRef.current = true;
     expandedServers.setState(new Set([first.nodelet.id]));
-    setSelectedNodeletID(first.nodelet.id);
-    setSelectedContainerID("");
+    setProjectSelection({ kind: "nodelet", nodeletId: first.nodelet.id });
   }, [authenticated, route.view, servers, serversLoading, expandedServers.set.size, selectedProjectID]);
 
   // ---------------- 基础 Effects ----------------
@@ -620,9 +614,7 @@ export function App() {
             servers={servers}
             serversLoading={serversLoading}
             serverError={serverError}
-            selectedNodeletID={selectedNodeletID}
-            selectedContainerID={selectedContainerID}
-            selectedMCPConnectionID={selectedMCPConnectionID}
+            selection={projectSelection}
             expandedServers={expandedServers.set}
             logs={logs}
             logsLoading={logsLoading}
@@ -640,9 +632,13 @@ export function App() {
             onMCPChanged={() => {
               queryClient.invalidateQueries({ queryKey: queryKeys.projects.all });
               queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(selectedProjectID) });
-              if (selectedProjectID && selectedNodeletID && selectedContainerID) {
+              if (selectedProjectID && projectSelection.kind === "container") {
                 queryClient.invalidateQueries({
-                  queryKey: queryKeys.containerDetail.byId(selectedProjectID, selectedNodeletID, selectedContainerID),
+                  queryKey: queryKeys.containerDetail.byId(
+                    selectedProjectID,
+                    projectSelection.nodeletId,
+                    projectSelection.containerId,
+                  ),
                 });
               }
             }}
@@ -716,9 +712,12 @@ export function App() {
           onSaved={(config) => {
             mcpForm.onClose();
             setMCPPrefill(null);
-            setSelectedMCPConnectionID(config.id);
-            if (config.nodeletId) setSelectedNodeletID(config.nodeletId);
-            setSelectedContainerID(config.containerId || "");
+            setProjectSelection({
+              kind: "mcp",
+              connectionId: config.id,
+              nodeletId: config.nodeletId || undefined,
+              containerId: config.containerId || undefined,
+            });
             // Refresh project-scoped MCP list so overview picks up new/edited connections.
             queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(selectedProjectID) });
             queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });

@@ -6,9 +6,10 @@ import type {
   LogEntry,
   ProjectMCPConnection,
   MCPPrefill,
+  ProjectSelection,
 } from "../types";
 import { ServerTree } from "./ServerTree";
-import { ContainerDetailView } from "./ContainerDetail";
+import { ContainerDetailView, MCPDetailView } from "./ContainerDetail";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
 import { getErrorMessage } from "../lib/api";
@@ -20,9 +21,7 @@ export function ProjectDetailView({
   servers,
   serversLoading,
   serverError,
-  selectedNodeletID,
-  selectedContainerID,
-  selectedMCPConnectionID,
+  selection,
   expandedServers,
   logs,
   logsLoading,
@@ -43,9 +42,7 @@ export function ProjectDetailView({
   servers: ServerWithNodelet[];
   serversLoading: boolean;
   serverError: string;
-  selectedNodeletID: string;
-  selectedContainerID: string;
-  selectedMCPConnectionID?: string;
+  selection: ProjectSelection;
   expandedServers: Set<string>;
   logs: LogEntry[];
   logsLoading: boolean;
@@ -62,12 +59,14 @@ export function ProjectDetailView({
   logsPanelRef: React.RefObject<HTMLDivElement | null>;
   onMCPChanged: () => void;
 }) {
-  const nodeletAddress = servers.find((s) => s.nodelet.id === selectedNodeletID)?.nodelet.address;
+  const selectedContainer = selection.kind === "container" ? selection : undefined;
+  const nodeletAddress = selectedContainer
+    ? servers.find((s) => s.nodelet.id === selectedContainer.nodeletId)?.nodelet.address
+    : undefined;
 
-  // Look up the selected MCP connection from cached data
-  const { data: mcpConns = [] } = useProjectMCPConnections(project.id);
-  const selectedMCPConnection = selectedMCPConnectionID
-    ? mcpConns.find((c) => c.id === selectedMCPConnectionID)
+  const { data: mcpConns = [], isLoading: mcpConnsLoading } = useProjectMCPConnections(project.id);
+  const selectedMCPConnection = selection.kind === "mcp"
+    ? mcpConns.find((c) => c.id === selection.connectionId)
     : undefined;
 
   // GitHub 仓库 inline 编辑状态。
@@ -156,9 +155,7 @@ export function ProjectDetailView({
           servers={servers}
           serversLoading={serversLoading}
           serverError={serverError}
-          selectedNodeletID={selectedNodeletID}
-          selectedContainerID={selectedContainerID}
-          selectedMCPConnectionID={selectedMCPConnectionID}
+          selection={selection}
           expandedServers={expandedServers}
           excludedContainerRefs={project.excludedContainerRefs || []}
           onToggleServer={onToggleServer}
@@ -167,26 +164,36 @@ export function ProjectDetailView({
           onCreateMCPConnection={onCreateMCPConnection}
         />
 
-        <ContainerDetailView
-          logs={logs}
-          logsLoading={logsLoading}
-          logsError={logsError}
-          autoScroll={autoScroll}
-          onAutoScrollChange={onAutoScrollChange}
-          onClearLogs={onClearLogs}
-          logsPanelRef={logsPanelRef}
-          nodeletId={selectedNodeletID}
-          containerId={selectedContainerID}
-          projectId={project.id}
-          nodeletAddress={nodeletAddress}
-          mcpConnection={selectedMCPConnection}
-          onEditMCP={onEditMCPConnection}
-          onMCPDeleted={() => {
-            onMCPChanged();
-          }}
-          onNavigateToContainer={onSelectContainer}
-          onMCPChanged={onMCPChanged}
-        />
+        {selectedMCPConnection ? (
+          <MCPDetailView
+            projectId={project.id}
+            conn={selectedMCPConnection}
+            onEdit={onEditMCPConnection}
+            onDeleted={onMCPChanged}
+            onNavigateToContainer={onSelectContainer}
+          />
+        ) : selection.kind === "mcp" ? (
+          <div className="container-detail">
+            <div className="detail-body">
+              <div className="empty-state">{mcpConnsLoading ? "读取 MCP 连接..." : "MCP 连接已删除或不可用"}</div>
+            </div>
+          </div>
+        ) : (
+          <ContainerDetailView
+            logs={logs}
+            logsLoading={logsLoading}
+            logsError={logsError}
+            autoScroll={autoScroll}
+            onAutoScrollChange={onAutoScrollChange}
+            onClearLogs={onClearLogs}
+            logsPanelRef={logsPanelRef}
+            nodeletId={selectedContainer?.nodeletId || ""}
+            containerId={selectedContainer?.containerId || ""}
+            projectId={project.id}
+            nodeletAddress={nodeletAddress}
+            onMCPChanged={onMCPChanged}
+          />
+        )}
       </div>
     </div>
   );

@@ -40,6 +40,11 @@ const typeDefaults: Record<string, { command: string; args: string[]; env: strin
     args: [],
     env: ["ELASTICSEARCH_URL=http://127.0.0.1:9200"],
   },
+  kafka: {
+    command: "./mcp-servers/kafka/kafka-mcp",
+    args: [],
+    env: ["KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092"],
+  },
   other: {
     command: "",
     args: [],
@@ -48,7 +53,7 @@ const typeDefaults: Record<string, { command: string; args: string[]; env: strin
 };
 
 // 哪些类型显示连接参数字段
-const typesWithCredentials = new Set(["mysql", "redis", "postgres", "etcd", "elasticsearch"]);
+const typesWithCredentials = new Set(["mysql", "redis", "postgres", "etcd", "elasticsearch", "kafka"]);
 
 // ---- 连接参数 ----
 type Credentials = {
@@ -61,6 +66,14 @@ type Credentials = {
 
 function emptyCreds(): Credentials {
   return { host: "", port: "", user: "", password: "", database: "" };
+}
+
+function parseArgLines(value: string): string[] {
+  return value.split("\n").map((arg) => arg.trim()).filter(Boolean);
+}
+
+function envKey(line: string): string {
+  return line.split("=")[0]?.trim() || "";
 }
 
 // 每种类型展示的连接参数字段（按序）。
@@ -104,7 +117,24 @@ const typeCredentialFields: Record<string, CredentialField[]> = {
     { key: "user", label: "用户", placeholder: "elastic" },
     { key: "password", label: "密码", placeholder: "输入密码", isPassword: true },
   ],
+  kafka: [
+    { key: "host", label: "Bootstrap Servers", placeholder: "127.0.0.1:9092" },
+    { key: "port", label: "端口", placeholder: "9092" },
+  ],
 };
+
+function splitHostPort(value: string): { host: string; port: string } {
+  const first = value.split(",")[0]?.trim() || "";
+  const match = first.match(/^(?:[a-zA-Z]+:\/\/)?([^:]+):(\d+)$/);
+  if (!match || first !== value.trim()) return { host: value, port: "" };
+  return { host: match[1] || "", port: match[2] || "" };
+}
+
+function joinHostPort(host: string, port: string): string {
+  if (!host) return "";
+  if (!port || host.includes(":") || host.includes(",") || host.includes("://")) return host;
+  return `${host}:${port}`;
+}
 
 // 从环境变量列表反解连接参数
 function parseCredentials(type: string, env: string[]): Credentials {
@@ -150,6 +180,11 @@ function parseCredentials(type: string, env: string[]): Credentials {
       creds.host = esUrl || "";
       creds.port = "9200";
     }
+  } else if (type === "kafka") {
+    const bootstrap = env.find((e) => e.startsWith("KAFKA_BOOTSTRAP_SERVERS="))?.slice("KAFKA_BOOTSTRAP_SERVERS=".length) || "";
+    const parsed = splitHostPort(bootstrap);
+    creds.host = parsed.host;
+    creds.port = parsed.port;
   }
   return creds;
 }
@@ -192,6 +227,12 @@ function credentialsToEnv(type: string, creds: Credentials): string[] {
     }
     if (creds.user) env.push(`ELASTICSEARCH_USERNAME=${creds.user}`);
     if (creds.password) env.push(`ELASTICSEARCH_PASSWORD=${creds.password}`);
+    return env;
+  }
+  if (type === "kafka") {
+    const env: string[] = [];
+    const bootstrap = joinHostPort(creds.host, creds.port);
+    if (bootstrap) env.push(`KAFKA_BOOTSTRAP_SERVERS=${bootstrap}`);
     return env;
   }
   return [];
@@ -318,6 +359,11 @@ function envFromDSN(type: string, dsn: Record<string, string>): string[] {
     if (raw) return [`ELASTICSEARCH_URL=${raw}`];
     if (!host) return [];
     return [`ELASTICSEARCH_URL=http://${host}:${port || "9200"}`];
+  }
+  if (type === "kafka") {
+    const bootstrap = host ? joinHostPort(host, port || "9092") : raw;
+    if (!bootstrap) return [];
+    return [`KAFKA_BOOTSTRAP_SERVERS=${bootstrap}`];
   }
   return [];
 }
@@ -563,6 +609,11 @@ export function MCPFormModal({
 
   const showCredentials = typesWithCredentials.has(editing?.type || "");
   const credFields = typeCredentialFields[editing?.type || ""] || [];
+  const args = editing?.args || [];
+
+  function updateArgs(value: string) {
+    setEditing((prev) => prev ? { ...prev, args: parseArgLines(value) } : prev);
+  }
 
   return (
     <Modal
@@ -601,7 +652,8 @@ export function MCPFormModal({
             const prevTypeDefaults = typeDefaults[prev.type] || typeDefaults.other;
             const prevDefaultKeys = new Set(prevTypeDefaults.env.map((ev) => ev.split("=")[0]));
             // 用户手动添加的 env（不在旧类型默认键中）
-            const userEnv = prev.env.filter((ev) => !prevDefaultKeys.has(ev.split("=")[0]));
+            const userEnv = prev.env
+              .filter((ev) => !prevDefaultKeys.has(ev.split("=")[0]));
             const newCreds = parseCredentials(newType, defaults.env);
             setCreds(newCreds);
             return {
@@ -619,6 +671,7 @@ export function MCPFormModal({
         <option value="postgres">PostgreSQL</option>
         <option value="etcd">Etcd</option>
         <option value="elasticsearch">Elasticsearch</option>
+        <option value="kafka">Kafka</option>
         <option value="other">其他</option>
       </select>
 
@@ -743,9 +796,8 @@ export function MCPFormModal({
             id="mcp-args"
             multiline
             monospace
-            value={editing?.args.join("\n") || ""}
-            onChange={(e) => setEditing((prev) => prev ? { ...prev, args: e.target.value.split("\n").filter(Boolean) } : prev)}
-            placeholder="--read-only"
+            value={args.join("\n")}
+            onChange={(e) => updateArgs(e.target.value)}
           />
         </>
       )}
@@ -789,7 +841,7 @@ export function MCPFormModal({
         monospace
         value={editing?.env.join("\n") || ""}
         onChange={(e) => setEditing((prev) => prev ? { ...prev, env: e.target.value.split("\n").filter(Boolean) } : prev)}
-        placeholder="MYSQL_DSN=user:pass@tcp(host:3306)/db?charset=utf8mb4"
+        placeholder="KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092"
         spellCheck={false}
       />
 

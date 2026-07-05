@@ -3,4 +3,4 @@
 # Uses the community kafka-mcp (Python, Apache 2.0).
 # uvx downloads and caches on first run; subsequent runs are fast.
 # https://github.com/wklee610/kafka-mcp
-exec uvx kafka-mcp "$@"
+exec uvx --python 3.12 --with httpx --with fastmcp kafka-mcp "$@"

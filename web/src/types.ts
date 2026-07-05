@@ -168,6 +168,12 @@ export type ProjectMCPConnection = MCPConnectionStatus & {
   scope: "container" | "nodelet";
 };
 
+export type ProjectSelection =
+  | { kind: "none" }
+  | { kind: "nodelet"; nodeletId: string }
+  | { kind: "container"; nodeletId: string; containerId: string }
+  | { kind: "mcp"; connectionId: string; nodeletId?: string; containerId?: string };
+
 // MCPPrefill 用于从容器 DSN 信息预填 MCP 连接表单。
 export type MCPPrefill = {
   name: string;

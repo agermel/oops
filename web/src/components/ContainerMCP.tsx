@@ -115,6 +115,12 @@ export function ContainerMCP({
       } else if (host) {
         env.push(`ELASTICSEARCH_URL=http://${host}:${port || "9200"}`);
       }
+    } else if (type === "kafka") {
+      if (dsn?.raw) {
+        env.push(`KAFKA_BOOTSTRAP_SERVERS=${dsn.raw}`);
+      } else if (host) {
+        env.push(`KAFKA_BOOTSTRAP_SERVERS=${host}:${port || "9092"}`);
+      }
     } else if (type === "mongo" && dsn?.raw) {
       env.push(`MONGO_URI=${dsn.raw}`);
     }
