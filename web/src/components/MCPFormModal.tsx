@@ -4,10 +4,11 @@ import type {
   MCPConnectionStatus,
   MCPPrefill,
   MCPContainerBindingOption,
+  DSNConfig,
 } from "../types";
 import { serviceLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
-import { mcpConnectionPaths } from "../lib/paths";
+import { mcpConnectionPaths, serverPaths } from "../lib/paths";
 import { Modal } from "./Modal";
 import { Button } from "./ui/Button";
 import { FormInput } from "./ui/FormInput";
@@ -232,8 +233,8 @@ function formToConfig(form: MCPConnectionStatus): MCPConnectionConfig {
 
 function bindingOptionLabel(option: MCPContainerBindingOption): string {
   return [
-    option.containerName,
     option.nodeletName,
+    option.containerName,
     bindingServiceText(option),
     option.containerId.slice(0, 12),
   ].filter(Boolean).join(" · ");
@@ -252,10 +253,80 @@ function bindingServiceText(option: MCPContainerBindingOption): string {
   return serviceLabel(option.serviceType);
 }
 
+function supportedMCPType(serviceType: string, currentType: string): string {
+  if (typeDefaults[serviceType]) return serviceType;
+  if (typeDefaults[currentType]) return currentType;
+  return "other";
+}
+
+function dsnRecord(config?: DSNConfig): Record<string, string> {
+  if (!config) return {};
+  return { ...config.detected, ...config.merged };
+}
+
+function envFromDSN(type: string, dsn: Record<string, string>): string[] {
+  const host = dsn.host || "";
+  const port = dsn.port || "";
+  const user = dsn.user || "";
+  const password = dsn.password || "";
+  const database = dsn.database || "";
+  const raw = dsn.raw || "";
+
+  if (type === "mysql") {
+    if (raw) return [`MYSQL_DSN=${raw}`];
+    if (!host) return [];
+    return [`MYSQL_DSN=${user}:@tcp(${host}:${port || "3306"})/${database}?charset=utf8mb4`];
+  }
+  if (type === "redis") {
+    let redisHost = host;
+    let redisPort = port;
+    let redisDatabase = database;
+    let redisPassword = password;
+    if (raw) {
+      try {
+        const url = new URL(raw);
+        redisHost ||= url.hostname;
+        redisPort ||= url.port || "6379";
+        redisPassword ||= decodeURIComponent(url.password || "");
+        redisDatabase ||= url.pathname.replace(/^\//, "");
+      } catch {
+        const match = raw.match(/^([^:]+):(\d+)$/);
+        if (match) {
+          redisHost ||= match[1];
+          redisPort ||= match[2];
+        }
+      }
+    }
+    if (!redisHost && !redisPort && !redisDatabase && !redisPassword) return [];
+    return [
+      redisHost ? `REDIS_HOST=${redisHost}` : "",
+      redisPort ? `REDIS_PORT=${redisPort}` : "",
+      `REDIS_DB=${redisDatabase || "0"}`,
+      redisPassword ? `REDIS_PWD=${redisPassword}` : "REDIS_PWD=",
+    ].filter(Boolean);
+  }
+  if (type === "postgres") {
+    if (raw) return [`DATABASE_URL=${raw}`];
+    if (!host) return [];
+    return [`DATABASE_URL=postgres://${user}:@${host}:${port || "5432"}/${database}`];
+  }
+  if (type === "etcd") {
+    const endpoint = raw || (host ? `${host}${port ? `:${port}` : ""}` : "");
+    return endpoint ? [`ETCD_ENDPOINTS=${endpoint}`] : [];
+  }
+  if (type === "elasticsearch") {
+    if (raw) return [`ELASTICSEARCH_URL=${raw}`];
+    if (!host) return [];
+    return [`ELASTICSEARCH_URL=http://${host}:${port || "9200"}`];
+  }
+  return [];
+}
+
 // ---- MCPFormModal ----
 export function MCPFormModal({
   editItem,
   prefill,
+  projectId = "",
   containerOptions = [],
   containerOptionsLoading = false,
   onClose,
@@ -263,6 +334,7 @@ export function MCPFormModal({
 }: {
   editItem?: MCPConnectionStatus | null;
   prefill?: MCPPrefill | null;
+  projectId?: string;
   containerOptions?: MCPContainerBindingOption[];
   containerOptionsLoading?: boolean;
   onClose: () => void;
@@ -275,10 +347,11 @@ export function MCPFormModal({
   const [testResult, setTestResult] = React.useState("");
   const [testing, setTesting] = React.useState(false);
   const [creds, setCreds] = React.useState<Credentials>(emptyCreds());
-  const [bindingInput, setBindingInput] = React.useState("");
+  const [bindingQuery, setBindingQuery] = React.useState("");
   const [bindingOpen, setBindingOpen] = React.useState(false);
-  const lastBindingKeyRef = React.useRef("");
-  const lastBindingLabelRef = React.useRef("");
+  const [bindingDSNLoading, setBindingDSNLoading] = React.useState(false);
+  const bindingInputRef = React.useRef<HTMLInputElement>(null);
+  const bindingDSNRequestRef = React.useRef(0);
 
   // Track meaningful prefill identity to avoid re-init on every render.
   const prefillKey = prefill ? `${prefill.containerId || ""}:${prefill.nodeletId || ""}:${prefill.name || ""}` : "";
@@ -295,20 +368,18 @@ export function MCPFormModal({
       : `${editing.containerId.slice(0, 12)} · ${editing.nodeletId}`;
   }, [editing?.nodeletId, editing?.containerId, containerOptions]);
   const filteredBindingOptions = React.useMemo(() => {
-    const q = bindingInput.trim().toLowerCase();
-    if (!q || bindingInput === selectedBindingLabel) return containerOptions;
+    const q = bindingQuery.trim().toLowerCase();
+    if (!q) return containerOptions;
     return containerOptions.filter((option) => bindingOptionSearchText(option).includes(q));
-  }, [bindingInput, containerOptions, selectedBindingLabel]);
+  }, [bindingQuery, containerOptions]);
 
   // 初始化：editItem 优先（编辑模式），否则 prefill 或空白（新建模式）
   React.useEffect(() => {
-    lastBindingKeyRef.current = "";
-    lastBindingLabelRef.current = "";
     if (editItem) {
       setIsNew(false);
       setEditing({ ...editItem });
       setCreds(parseCredentials(editItem.type, editItem.env));
-      setBindingInput("");
+      setBindingQuery("");
     } else {
       setIsNew(true);
       const form = emptyForm(prefill?.type || "mysql");
@@ -328,28 +399,11 @@ export function MCPFormModal({
         setCreds(parseCredentials(form.type, form.env));
       }
       setEditing(form);
-      setBindingInput("");
+      setBindingQuery("");
     }
     setTestResult("");
     setSaveError("");
   }, [editItem, prefillKey]);
-
-  React.useEffect(() => {
-    const previousKey = lastBindingKeyRef.current;
-    const previousLabel = lastBindingLabelRef.current;
-
-    lastBindingKeyRef.current = selectedBindingKey;
-    lastBindingLabelRef.current = selectedBindingLabel;
-
-    if (selectedBindingKey !== previousKey) {
-      setBindingInput(selectedBindingLabel);
-      return;
-    }
-
-    if (bindingInput === previousLabel && selectedBindingLabel !== previousLabel) {
-      setBindingInput(selectedBindingLabel);
-    }
-  }, [bindingInput, selectedBindingKey, selectedBindingLabel]);
 
   function closeForm() {
     if (saving) return;
@@ -372,37 +426,88 @@ export function MCPFormModal({
     });
   }
 
-  function updateBindingInput(value: string) {
-    setBindingInput(value);
+  function openBindingSearch() {
     setBindingOpen(true);
-    const option = containerOptions.find((item) => bindingOptionLabel(item) === value);
-    if (option) {
-      setEditing((prev) => prev ? { ...prev, nodeletId: option.nodeletId, containerId: option.containerId } : prev);
-    } else if (value.trim() === "") {
+  }
+
+  function activateBindingSearch() {
+    if (containerOptionsLoading || bindingDSNLoading) return;
+    setBindingOpen(true);
+    bindingInputRef.current?.focus();
+  }
+
+  function updateBindingQuery(value: string) {
+    setBindingQuery(value);
+    setBindingOpen(true);
+    if (selectedBindingKey && value.trim()) {
+      bindingDSNRequestRef.current += 1;
+      setBindingDSNLoading(false);
       setEditing((prev) => prev ? { ...prev, nodeletId: "", containerId: "" } : prev);
     }
   }
 
   function clearBinding() {
-    setBindingInput("");
+    bindingDSNRequestRef.current += 1;
+    setBindingDSNLoading(false);
+    setBindingQuery("");
     setBindingOpen(false);
     setEditing((prev) => prev ? { ...prev, nodeletId: "", containerId: "" } : prev);
   }
 
-  function selectBinding(option: MCPContainerBindingOption) {
-    setBindingInput(bindingOptionLabel(option));
+  function applyBindingPrefill(option: MCPContainerBindingOption, config?: DSNConfig) {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      const nextType = supportedMCPType(option.serviceType, prev.type);
+      const defaults = typeDefaults[nextType] || typeDefaults.other;
+      const env = envFromDSN(nextType, dsnRecord(config));
+      const nextEnv = env.length > 0 ? env : [...defaults.env];
+      setCreds(parseCredentials(nextType, nextEnv));
+      return {
+        ...prev,
+        name: prev.name || option.containerName,
+        type: nextType,
+        command: defaults.command,
+        args: [...defaults.args],
+        env: nextEnv,
+        nodeletId: option.nodeletId,
+        containerId: option.containerId,
+      };
+    });
+  }
+
+  async function selectBinding(option: MCPContainerBindingOption) {
+    setBindingQuery("");
     setBindingOpen(false);
     setSaveError("");
     setEditing((prev) => prev ? { ...prev, nodeletId: option.nodeletId, containerId: option.containerId } : prev);
+
+    const requestId = ++bindingDSNRequestRef.current;
+    if (!projectId) {
+      applyBindingPrefill(option);
+      return;
+    }
+
+    setBindingDSNLoading(true);
+    try {
+      const config = await apiRequest<DSNConfig>(
+        serverPaths(projectId, option.nodeletId).containerDSN(option.containerId),
+      );
+      if (bindingDSNRequestRef.current !== requestId) return;
+      applyBindingPrefill(option, config);
+    } catch (err) {
+      if (bindingDSNRequestRef.current !== requestId) return;
+      applyBindingPrefill(option);
+      setSaveError(getErrorMessage(err, "读取容器 DSN 失败"));
+    } finally {
+      if (bindingDSNRequestRef.current === requestId) setBindingDSNLoading(false);
+    }
   }
 
   async function handleSave() {
     if (!editing || saving) return;
-    if (bindingInput.trim()) {
-      if (bindingInput !== selectedBindingLabel) {
-        setSaveError("请从列表中选择绑定容器，或清空绑定");
-        return;
-      }
+    if (bindingQuery.trim() && !selectedBindingKey) {
+      setSaveError("请从列表中选择绑定容器，或清空绑定");
+      return;
     }
     setSaving(true);
     setSaveError("");
@@ -466,10 +571,10 @@ export function MCPFormModal({
       maxWidth="560px"
       footer={
         <>
-          <Button variant="ghost" onClick={handleTest} disabled={testing}>
+          <Button variant="ghost" onClick={handleTest} disabled={testing || bindingDSNLoading}>
             {testing ? "测试中..." : "测试连接"}
           </Button>
-          <Button onClick={handleSave} disabled={!editing?.name.trim() || saving}>
+          <Button onClick={handleSave} disabled={!editing?.name.trim() || saving || bindingDSNLoading}>
             {saving ? "保存中..." : "保存"}
           </Button>
         </>
@@ -520,25 +625,49 @@ export function MCPFormModal({
       <label htmlFor="mcp-container-binding">绑定容器</label>
       <div className="mcp-binding-control">
         <div className="mcp-binding-row">
-          <FormInput
-            id="mcp-container-binding"
-            value={bindingInput}
-            onChange={(e) => updateBindingInput(e.target.value)}
-            onFocus={() => setBindingOpen(true)}
-            onBlur={() => window.setTimeout(() => setBindingOpen(false), 120)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setBindingOpen(false);
+          <div
+            className={`mcp-binding-input-shell ${bindingOpen ? "focused" : ""}`}
+            onMouseDown={(e) => {
+              if (e.target !== bindingInputRef.current) e.preventDefault();
+              activateBindingSearch();
             }}
-            placeholder={containerOptionsLoading ? "读取容器中..." : "搜索容器名、服务器或类型"}
-            disabled={containerOptionsLoading}
-            autoComplete="off"
-          />
+          >
+            {selectedBindingKey && !bindingQuery && (
+              <span className="mcp-binding-chip">
+                <span className="mcp-binding-chip-text">{selectedBindingLabel}</span>
+              </span>
+            )}
+            <input
+              ref={bindingInputRef}
+              id="mcp-container-binding"
+              className="mcp-binding-input"
+              value={bindingQuery}
+              onChange={(e) => updateBindingQuery(e.target.value)}
+              onFocus={openBindingSearch}
+              onBlur={() => window.setTimeout(() => setBindingOpen(false), 120)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setBindingOpen(false);
+                if ((e.key === "Backspace" || e.key === "Delete") && selectedBindingKey && !bindingQuery) {
+                  clearBinding();
+                }
+              }}
+              placeholder={
+                selectedBindingKey
+                  ? ""
+                  : containerOptionsLoading
+                    ? "读取容器中..."
+                    : "搜索容器名、服务器或类型"
+              }
+              disabled={containerOptionsLoading || bindingDSNLoading}
+              autoComplete="off"
+            />
+          </div>
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={clearBinding}
-            disabled={!editing?.containerId && !bindingInput}
+            disabled={bindingDSNLoading || (!selectedBindingKey && !bindingQuery)}
           >
             清除
           </Button>
@@ -554,7 +683,7 @@ export function MCPFormModal({
                 const selected = editing?.nodeletId === option.nodeletId &&
                   editing?.containerId === option.containerId;
                 const metaParts = [
-                  option.nodeletName,
+                  option.containerName,
                   bindingServiceText(option),
                   option.containerId.slice(0, 12),
                 ].filter(Boolean);
@@ -566,7 +695,7 @@ export function MCPFormModal({
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => selectBinding(option)}
                   >
-                    <span className="mcp-binding-name">{option.containerName}</span>
+                    <span className="mcp-binding-name">{option.nodeletName}</span>
                     <span className="mcp-binding-meta">{metaParts.join(" · ")}</span>
                   </button>
                 );
@@ -575,7 +704,9 @@ export function MCPFormModal({
           </div>
         )}
       </div>
-      <div className="field-hint">选择容器后，此 MCP 连接会显示在对应项目和容器下。</div>
+      <div className="field-hint">
+        {bindingDSNLoading ? "正在读取容器 DSN..." : "选择容器后会自动填充 MCP 连接参数。"}
+      </div>
 
       <label htmlFor="mcp-transport">传输方式</label>
       <select

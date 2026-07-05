@@ -709,6 +709,7 @@ export function App() {
         <MCPFormModal
           editItem={mcpForm.data}
           prefill={!mcpForm.data ? mcpPrefill : null}
+          projectId={selectedProjectID_clean}
           containerOptions={mcpContainerOptions}
           containerOptionsLoading={mcpContainerOptionsLoading}
           onClose={() => { mcpForm.onClose(); setMCPPrefill(null); }}

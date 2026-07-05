@@ -295,6 +295,7 @@ export function ContainerMCP({
         <MCPFormModal
           editItem={formModal.data}
           prefill={formPrefill}
+          projectId={projectId}
           containerOptions={[{
             nodeletId,
             nodeletName: nodeletId,
