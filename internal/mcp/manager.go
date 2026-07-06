@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,6 +128,7 @@ type Manager struct {
 	starting  map[string]int64           // id → active start token
 	nextStart int64
 	errors    map[string]string // id → last error
+	logs      map[string]*ConnectionLogHub
 	onChange  func([]tool.BaseTool)
 	closed    bool
 }
@@ -141,6 +143,7 @@ func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]tool.Bas
 		processes: make(map[string]*managedProcess),
 		starting:  make(map[string]int64),
 		errors:    make(map[string]string),
+		logs:      make(map[string]*ConnectionLogHub),
 		onChange:  onChange,
 	}
 
@@ -204,6 +207,67 @@ func (m *Manager) connectionStatusLocked(cfg ConnectionConfig) ConnectionWithSta
 		item.Status = "stopped"
 	}
 	return item
+}
+
+// ConnectionLogs returns recent logs for a saved MCP connection.
+func (m *Manager) ConnectionLogs(id string, tail int) ([]LogEntry, bool) {
+	hub, ok := m.connectionLogHub(id)
+	if !ok {
+		return nil, false
+	}
+	return hub.Snapshot(tail), true
+}
+
+// SubscribeConnectionLogs replays recent logs, then streams live logs for a saved MCP connection.
+func (m *Manager) SubscribeConnectionLogs(id string, tail int) (<-chan LogEntry, func(), bool) {
+	hub, ok := m.connectionLogHub(id)
+	if !ok {
+		return nil, nil, false
+	}
+	ch, cancel := hub.Subscribe(tail)
+	return ch, cancel, true
+}
+
+func (m *Manager) connectionLogHub(id string) (*ConnectionLogHub, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.connectionLocked(id); !ok {
+		return nil, false
+	}
+	return m.ensureLogHubLocked(id), true
+}
+
+func (m *Manager) ensureLogHub(id string) *ConnectionLogHub {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ensureLogHubLocked(id)
+}
+
+func (m *Manager) ensureLogHubLocked(id string) *ConnectionLogHub {
+	if m.logs == nil {
+		m.logs = make(map[string]*ConnectionLogHub)
+	}
+	hub := m.logs[id]
+	if hub == nil {
+		hub = NewConnectionLogHub(id)
+		m.logs[id] = hub
+	}
+	return hub
+}
+
+func (m *Manager) appendConnectionLog(id, stream, level, format string, args ...any) {
+	if id == "" {
+		return
+	}
+	m.ensureLogHub(id).Append(stream, level, fmt.Sprintf(format, args...))
+}
+
+func (m *Manager) appendConnectionLogLocked(id, stream, level, format string, args ...any) {
+	if id == "" {
+		return
+	}
+	m.ensureLogHubLocked(id).Append(stream, level, fmt.Sprintf(format, args...))
 }
 
 // FindByContainer returns the connection bound to a specific container, or nil if none exists.
@@ -287,10 +351,12 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("save: %w", err)
 	}
+	m.appendConnectionLogLocked(cfg.ID, "system", "info", "connection %q saved", cfg.Name)
 
 	var startToken int64
 	if cfg.Enabled {
 		startToken = m.scheduleStartLocked(cfg.ID)
+		m.appendConnectionLogLocked(cfg.ID, "system", "info", "start scheduled")
 	}
 
 	m.notifyChangeLocked()
@@ -353,10 +419,12 @@ func (m *Manager) Update(cfg ConnectionConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("save: %w", err)
 	}
+	m.appendConnectionLogLocked(cfg.ID, "system", "info", "connection %q updated", cfg.Name)
 
 	var startToken int64
 	if cfg.Enabled {
 		startToken = m.scheduleStartLocked(cfg.ID)
+		m.appendConnectionLogLocked(cfg.ID, "system", "info", "start scheduled")
 	}
 
 	m.notifyChangeLocked()
@@ -386,6 +454,8 @@ func (m *Manager) Remove(id string) error {
 	m.stopLocked(id)
 	delete(m.errors, id)
 	delete(m.starting, id)
+	m.appendConnectionLogLocked(id, "system", "info", "connection removed")
+	delete(m.logs, id)
 
 	m.config.Connections = append(m.config.Connections[:idx], m.config.Connections[idx+1:]...)
 	if err := m.saveLocked(); err != nil {
@@ -425,6 +495,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 	m.mu.Unlock()
 
 	args := buildDefaultArgs(toolInfo)
+	m.appendConnectionLog(connID, "system", "info", "testing tool %q", toolName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -441,6 +512,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			zap.Error(err),
 		)
 		console.Feed("mcp error: test tool %q on %q: %v", toolName, cfgName, err)
+		m.appendConnectionLog(connID, "system", "error", "tool %q call error: %v", toolName, err)
 		return "", fmt.Errorf("%w: call %q: %w", ErrToolCallFailed, toolName, err)
 	}
 	if result.IsError {
@@ -460,6 +532,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			zap.String("error", errMsg),
 		)
 		console.Feed("mcp error: test tool %q on %q failed: %s", toolName, cfgName, errMsg)
+		m.appendConnectionLog(connID, "system", "error", "tool %q returned error: %s", toolName, errMsg)
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
@@ -473,6 +546,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			parts = append(parts, fmt.Sprintf("[%T]", block))
 		}
 	}
+	m.appendConnectionLog(connID, "system", "info", "tool %q test passed", toolName)
 	return strings.Join(parts, "\n"), nil
 }
 
@@ -560,12 +634,26 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 	// 不是应该随着用户填写参数然后实时将参数处理好在参数页面实时渲染？
 	cfg = normalizeConnectionConfig(cfg)
 	// 执行测试，返回结果
-	err := m.testConnection(cfg)
+	var hub *ConnectionLogHub
+	if cfg.ID != "" {
+		if existingHub, ok := m.connectionLogHub(cfg.ID); ok {
+			hub = existingHub
+			hub.Append("system", "info", fmt.Sprintf("testing connection %q", cfg.Name))
+		}
+	}
+	err := m.testConnection(cfg, hub)
+	if hub != nil {
+		if err != nil {
+			hub.Append("system", "error", fmt.Sprintf("connection test error: %v", err))
+		} else {
+			hub.Append("system", "info", "connection test passed")
+		}
+	}
 	m.applyTestResult(cfg, err)
 	return err
 }
 
-func (m *Manager) testConnection(cfg ConnectionConfig) error {
+func (m *Manager) testConnection(cfg ConnectionConfig, hub *ConnectionLogHub) error {
 	if cfg.Transport == "sse" {
 		if cfg.URL == "" {
 			return fmt.Errorf("url is required for sse transport")
@@ -595,7 +683,11 @@ func (m *Manager) testConnection(cfg ConnectionConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	session, tools, closer, err := Connect(ctx, mcpCfg)
+	var logWriter io.Writer
+	if hub != nil {
+		logWriter = hub.LineWriter("stderr")
+	}
+	session, tools, closer, err := ConnectWithLog(ctx, mcpCfg, logWriter)
 	if err != nil {
 		// stderr 已由 Connect/connectStdio 附在 error 中，此处不再重复拼接。
 		return fmt.Errorf("%w: test connect: %w", ErrTestConnectFailed, err)
@@ -688,6 +780,7 @@ func normalizedTransport(transport string) string {
 func (m *Manager) markProcessErrorLocked(id string, err error) {
 	delete(m.starting, id)
 	m.errors[id] = err.Error()
+	m.appendConnectionLogLocked(id, "system", "error", "connection error: %v", err)
 	if proc, ok := m.processes[id]; ok {
 		if proc.healthCancel != nil {
 			proc.healthCancel()
@@ -1180,7 +1273,9 @@ func (m *Manager) scheduleStartLocked(id string) int64 {
 }
 
 func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
-	proc, err := startProcess(cfg)
+	hub := m.ensureLogHub(cfg.ID)
+	hub.Append("system", "info", fmt.Sprintf("starting connection %q", cfg.Name))
+	proc, err := startProcess(cfg, hub)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1190,6 +1285,7 @@ func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
 		if proc != nil {
 			proc.closer()
 		}
+		hub.Append("system", "warn", "start cancelled by newer change")
 		return
 	}
 
@@ -1199,6 +1295,7 @@ func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
 		if proc != nil {
 			proc.closer()
 		}
+		hub.Append("system", "warn", "start cancelled because connection config changed")
 		m.notifyChangeLocked()
 		return
 	}
@@ -1207,12 +1304,14 @@ func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
 	if err != nil {
 		logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
 		m.errors[cfg.ID] = err.Error()
+		hub.Append("system", "error", fmt.Sprintf("connection start error: %v", err))
 		m.notifyChangeLocked()
 		return
 	}
 	if proc == nil {
 		logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(errors.New("start returned nil process")))
 		m.errors[cfg.ID] = "start returned nil process"
+		hub.Append("system", "error", "connection start error: start returned nil process")
 		m.notifyChangeLocked()
 		return
 	}
@@ -1233,11 +1332,12 @@ func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
 		zap.String("id", cfg.ID),
 		zap.Int("tools", len(proc.tools)),
 	)
+	hub.Append("system", "info", fmt.Sprintf("connection started with %d tools", len(proc.tools)))
 	go m.runHealthCheck(healthCtx, cfg.ID)
 	m.notifyChangeLocked()
 }
 
-func startProcess(cfg ConnectionConfig) (*managedProcess, error) {
+func startProcess(cfg ConnectionConfig, hub *ConnectionLogHub) (*managedProcess, error) {
 	transport := cfg.Transport
 	if transport == "" {
 		transport = "stdio"
@@ -1256,8 +1356,15 @@ func startProcess(cfg ConnectionConfig) (*managedProcess, error) {
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if hub != nil {
+			hub.Append("system", "info", fmt.Sprintf("connect attempt %d/%d via %s", attempt, maxRetries, transport))
+		}
 
-		session, tools, closer, err := Connect(ctx, mcpCfg)
+		var logWriter io.Writer
+		if hub != nil {
+			logWriter = hub.LineWriter("stderr")
+		}
+		session, tools, closer, err := ConnectWithLog(ctx, mcpCfg, logWriter)
 		if err == nil {
 			if verifyErr := verifyBackend(ctx, cfg, session, tools); verifyErr != nil {
 				closer()
@@ -1267,6 +1374,9 @@ func startProcess(cfg ConnectionConfig) (*managedProcess, error) {
 		cancel()
 
 		if err == nil {
+			if hub != nil {
+				hub.Append("system", "info", fmt.Sprintf("connect attempt %d/%d passed", attempt, maxRetries))
+			}
 			return &managedProcess{
 				cfg:     cfg,
 				session: session,
@@ -1276,6 +1386,13 @@ func startProcess(cfg ConnectionConfig) (*managedProcess, error) {
 		}
 
 		lastErr = err
+		if hub != nil {
+			level := "warn"
+			if attempt == maxRetries {
+				level = "error"
+			}
+			hub.Append("system", level, fmt.Sprintf("connect attempt %d/%d error: %v", attempt, maxRetries, err))
+		}
 		if attempt < maxRetries {
 			logutil.Warn("mcp: connect retry",
 				zap.String("id", cfg.ID),
@@ -1338,6 +1455,7 @@ func (m *Manager) runHealthCheck(ctx context.Context, id string) {
 				delete(m.errors, id)
 				logutil.Info("mcp: health check recovered", zap.String("id", id), zap.String("name", cfg.Name))
 				console.Feed("mcp info: connection %q recovered", cfg.Name)
+				m.appendConnectionLogLocked(id, "system", "info", "health check recovered")
 				m.notifyChangeLocked()
 			}
 		}
@@ -1357,6 +1475,7 @@ func (m *Manager) stopLocked(id string) {
 	proc.closer()
 	delete(m.processes, id)
 	logutil.Info("mcp: stopped", zap.String("id", id))
+	m.appendConnectionLogLocked(id, "system", "info", "connection stopped")
 }
 
 func (m *Manager) collectToolsLocked() []tool.BaseTool {

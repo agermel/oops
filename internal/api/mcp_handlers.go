@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"oops/internal/llm"
@@ -212,6 +214,75 @@ func (s *Server) handleMCPRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSONOK(w)
+}
+
+// handleMCPLogs handles GET /api/mcp/connections/{id}/logs.
+func (s *Server) handleMCPLogs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	logs, ok := s.mcpManager.ConnectionLogs(id, mcpLogTail(r))
+	if !ok {
+		writeJSONError(w, "connection not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, logs)
+}
+
+// handleMCPLogsStream handles GET /api/mcp/connections/{id}/logs/stream.
+func (s *Server) handleMCPLogsStream(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	ch, cancel, ok := s.mcpManager.SubscribeConnectionLogs(id, mcpLogTail(r))
+	if !ok {
+		writeJSONError(w, "connection not found", http.StatusNotFound)
+		return
+	}
+	defer cancel()
+
+	flusher, err := requireFlusher(w)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	setSSEHeaders(w)
+	fmt.Fprintf(w, ":ok\n\n")
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case entry, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+func mcpLogTail(r *http.Request) int {
+	tail, err := strconv.Atoi(r.URL.Query().Get("tail"))
+	if err != nil || tail <= 0 {
+		return 200
+	}
+	if tail > 1000 {
+		return 1000
+	}
+	return tail
 }
 
 // handleMCPTest handles POST /api/mcp/connections/test.

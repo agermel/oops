@@ -3,6 +3,7 @@ import { Info, Wrench, FileText, Settings, Edit3, Trash2, ArrowRight } from "luc
 import type { LogEntry, ProjectMCPConnection, MCPConnectionConfig } from "../types";
 import { serviceTypeIcons, mcpStatusLabel } from "../types";
 import { useContainerDetail } from "../hooks/useContainerDetail";
+import { useMCPLogStream } from "../hooks/useMCPLogStream";
 import { getErrorMessage, apiRequest } from "../lib/api";
 import { mcpConnectionPaths } from "../lib/paths";
 import { queryKeys } from "../hooks/queries";
@@ -27,6 +28,7 @@ const CONTAINER_TABS = [
 const MCP_TABS = [
   { id: "overview", label: "概览", icon: Info },
   { id: "tools", label: "工具列表", icon: Wrench },
+  { id: "logs", label: "日志", icon: FileText },
 ] as const;
 
 type ContainerTabID = (typeof CONTAINER_TABS)[number]["id"];
@@ -166,6 +168,15 @@ export function MCPDetailView({
   const Icon = serviceTypeIcons[conn.type] || serviceTypeIcons.unknown;
   const queryClient = useQueryClient();
   const toggling = useSet();
+  const {
+    logs,
+    loading: logsLoading,
+    error: logsError,
+    autoScroll,
+    setAutoScroll,
+    panelRef: logsPanel,
+    clear: clearLogs,
+  } = useMCPLogStream(conn.id);
 
   React.useEffect(() => { setActiveTab("overview"); }, [conn.id]);
 
@@ -343,6 +354,21 @@ export function MCPDetailView({
             ) : (
               <div className="empty-state">无运行中的工具</div>
             )}
+          </div>
+        )}
+
+        {activeTab === "logs" && (
+          <div role="tabpanel">
+            <ContainerLogs
+              key={conn.id}
+              logs={logs}
+              loading={logsLoading}
+              error={logsError}
+              autoScroll={autoScroll}
+              onAutoScrollChange={setAutoScroll}
+              onClear={clearLogs}
+              panelRef={logsPanel}
+            />
           </div>
         )}
       </div>

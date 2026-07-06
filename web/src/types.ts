@@ -208,7 +208,8 @@ export type ContainerDetail = {
 
 export type LogEntry = {
   timestamp: string;
-  containerId: string;
+  containerId?: string;
+  connectionId?: string;
   stream: string;
   message: string;
   rawMessage?: string;

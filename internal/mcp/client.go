@@ -54,9 +54,14 @@ func (b *StderrBuffer) String() string {
 //	transport: "stdio"  → launches a child process (command + args)
 //	transport: "sse"    → connects to a remote SSE endpoint (url)
 func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
+	return ConnectWithLog(ctx, cfg, nil)
+}
+
+// ConnectWithLog connects to an MCP server and mirrors transport logs to logWriter.
+func ConnectWithLog(ctx context.Context, cfg config.MCPConfig, logWriter io.Writer) (MCPSession, []tool.BaseTool, func(), error) {
 	switch cfg.Transport {
 	case "stdio":
-		return connectStdio(ctx, cfg)
+		return connectStdio(ctx, cfg, logWriter)
 	case "sse":
 		return connectSSE(ctx, cfg)
 	default:
@@ -64,7 +69,7 @@ func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.Base
 	}
 }
 
-func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
+func connectStdio(ctx context.Context, cfg config.MCPConfig, logWriter io.Writer) (MCPSession, []tool.BaseTool, func(), error) {
 	// 新连接 Client
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
@@ -77,9 +82,16 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 	stderrReader, hasStderr := mcpclient.GetStderr(c)
 	if hasStderr {
 		pipeWriter := console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command))
+		writers := []io.Writer{pipeWriter, stderrBuf}
+		if logWriter != nil {
+			writers = append(writers, logWriter)
+		}
 		go func() {
-			_, _ = io.Copy(io.MultiWriter(pipeWriter, stderrBuf), stderrReader)
+			_, _ = io.Copy(io.MultiWriter(writers...), stderrReader)
 			if closer, ok := pipeWriter.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			if closer, ok := logWriter.(io.Closer); ok {
 				_ = closer.Close()
 			}
 		}()

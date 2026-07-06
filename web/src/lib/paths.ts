@@ -77,6 +77,8 @@ export const mcpConnectionPaths = {
   list: "/api/mcp/connections",
   test: "/api/mcp/connections/test",
   detail: (id: string) => `/api/mcp/connections/${enc(id)}`,
+  logs: (id: string) => `/api/mcp/connections/${enc(id)}/logs?tail=200`,
+  logsStream: (id: string) => `/api/mcp/connections/${enc(id)}/logs/stream?tail=200`,
   toolTest: (connectionId: string, toolName: string) =>
     `/api/mcp/connections/${enc(connectionId)}/tools/${enc(toolName)}/test`,
 } as const;
