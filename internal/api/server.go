@@ -9,13 +9,17 @@ import (
 	"oops/internal/auth"
 	"oops/internal/config"
 	"oops/internal/console"
-	"oops/internal/llm"
+	"oops/internal/llm/agent"
+	"oops/internal/llm/ctxbuilder"
+	"oops/internal/llm/events"
+	"oops/internal/llm/session"
+	"oops/internal/llm/skills"
+	llmtools "oops/internal/llm/tools"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
 	runtimestore "oops/internal/store/runtime"
 
-	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
 )
 
@@ -56,15 +60,15 @@ type Server struct {
 	nodeletManager *nodelet.NodeletManager
 	nodeletProber  *nodelet.NodeletProber
 	nodeletClient  NodeletClient
-	llmClient      *llm.Client
-	skillStore     *llm.SkillStore
-	contextBuilder *llm.ContextBuilder
-	eventStore     *llm.EventStore
+	llmClient      *agent.Client
+	skillStore     *skills.SkillStore
+	contextBuilder *ctxbuilder.ContextBuilder
+	eventStore     *events.EventStore
 	mcpManager     *mcp.Manager
 	projectStore   *config.ProjectStore
 	dsnStore       *config.ContainerDSNStore
 	runtimeStore   *runtimestore.Store
-	sessionStore   *llm.SessionStore
+	sessionStore   *session.SessionStore
 	UserStore      *auth.Store
 	TokenService   *auth.TokenService
 	tokenTTL       time.Duration
@@ -96,8 +100,8 @@ func NewFromConfig(cfg config.Config) *Server {
 	s.runtimeStore = runtimeStore
 
 	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
-	mgr, err := mcp.NewManagerWithRuntime(runtimeStore, func(mcpBaseTools []tool.BaseTool) {
-		s.onMCPToolsChanged(mcpBaseTools)
+	mgr, err := mcp.NewManagerWithRuntime(runtimeStore, func(mcpTools []mcp.ConnectionTool) {
+		s.onMCPToolsChanged(mcpTools)
 	})
 	if err != nil {
 		logutil.Fatal("mcp: manager", zap.Error(err))
@@ -148,10 +152,10 @@ func New(options Options) *Server {
 	}
 
 	// JSONL-backed session store（重启后会话可恢复）。
-	sessionStore, err := llm.OpenSessionStore("data/sessions")
+	sessionStore, err := session.OpenSessionStore("data/sessions")
 	if err != nil {
 		logutil.Warn("session: open store, falling back to memory-only", zap.Error(err))
-		sessionStore = llm.NewSessionStore()
+		sessionStore = session.NewSessionStore()
 	}
 
 	s := &Server{
@@ -167,13 +171,13 @@ func New(options Options) *Server {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		nativeTools, err := llm.NewTools(s, nil) // SkillStore 在后续初始化，此处传 nil，skill 工具后续由 onMCPToolsChanged 补上
+		nativeTools, err := llmtools.NewTools(s, nil) // SkillStore 在后续初始化，此处传 nil，skill 工具后续由 onMCPToolsChanged 补上
 		if err != nil {
 			logutil.Error("llm: create tools", zap.Error(err))
 			return s
 		}
 
-		client, err := llm.NewClient(ctx, options.LLMConfig, nativeTools)
+		client, err := agent.NewClient(ctx, options.LLMConfig, nativeTools)
 		if err != nil {
 			// LLM 不可用时不影响其他功能，仅日志输出。
 			logutil.Error("llm: create client", zap.Error(err))
@@ -184,7 +188,7 @@ func New(options Options) *Server {
 
 	// SkillStore 管理 Agent 技能（替换旧 PromptStore + Router）。
 	// 即使 LLM 未启用也初始化，供后续启用时使用。
-	ss, err := llm.NewSkillStore("config/skills")
+	ss, err := skills.NewSkillStore("config/skills")
 	if err != nil {
 		logutil.Warn("llm: skill store", zap.Error(err))
 	} else {
@@ -193,12 +197,12 @@ func New(options Options) *Server {
 
 	// ContextBuilder：上下文工程引擎（compaction + system prompt + skills 注入）。
 	if s.llmClient != nil && s.skillStore != nil {
-		s.contextBuilder = llm.NewContextBuilder(s.sessionStore, s.skillStore, s.llmClient)
+		s.contextBuilder = ctxbuilder.NewContextBuilder(s.sessionStore, s.skillStore, s.llmClient)
 		logutil.Info("context: builder ready")
 	}
 
 	// SQLite 事件持久化。
-	es, err := llm.OpenEventStore("data/events.db")
+	es, err := events.OpenEventStore("data/events.db")
 	if err != nil {
 		logutil.Warn("llm: event store", zap.Error(err))
 	} else {

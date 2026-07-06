@@ -1,4 +1,4 @@
-package llm
+package session
 
 import (
 	"sync"
@@ -62,10 +62,10 @@ func TestSessionStore_AppendMessage_NoPanicOnMissingSession(t *testing.T) {
 
 func TestSessionStore_List(t *testing.T) {
 	store := NewSessionStore()
-	store.Create("")          // global
-	store.Create("proj-a")    // project A
-	store.Create("proj-a")    // project A (second)
-	store.Create("proj-b")    // project B
+	store.Create("")       // global
+	store.Create("proj-a") // project A
+	store.Create("proj-a") // project A (second)
+	store.Create("proj-b") // project B
 
 	if n := len(store.List("")); n != 1 {
 		t.Fatalf("global = %d, want 1", n)

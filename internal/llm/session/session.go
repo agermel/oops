@@ -1,4 +1,4 @@
-package llm
+package session
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"oops/internal/llm/budget"
 	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino/schema"
@@ -41,7 +42,7 @@ type SessionEntry struct {
 // 由后端持有，不同客户端通过 session_id 引用同一会话。
 type Session struct {
 	ID        string
-	ProjectID string // 空 = 全局会话
+	ProjectID string            // 空 = 全局会话
 	Messages  []*schema.Message // 有序历史（system/user/assistant/tool），不含 system prompt
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -104,10 +105,10 @@ func (s *Session) ToDetail() SessionDetail {
 // v2: 支持 DAG 结构（id/parentId tree）和 JSONL 持久化。
 type SessionStore struct {
 	mu       sync.RWMutex
-	dir      string                    // JSONL 文件目录（空 = 仅内存，不持久化）
-	sessions map[string]*Session       // session ID → Session 热缓存
-	entries  map[string]*SessionEntry  // 全局 entry ID → SessionEntry（跨 session DAG 引用）
-	leafIDs  map[string]string         // session ID → 当前 leaf entry ID
+	dir      string                   // JSONL 文件目录（空 = 仅内存，不持久化）
+	sessions map[string]*Session      // session ID → Session 热缓存
+	entries  map[string]*SessionEntry // 全局 entry ID → SessionEntry（跨 session DAG 引用）
+	leafIDs  map[string]string        // session ID → 当前 leaf entry ID
 
 	// 持久化层回调（由 session_persist.go 设置）。
 	onAppend func(sessionID string, entry *SessionEntry) error
@@ -406,6 +407,32 @@ func (s *SessionStore) buildContextLocked(sessionID string) []*schema.Message {
 	return msgs
 }
 
+// MessagesBefore 返回 firstKeptEntryID 之前的消息摘要行，用于 LLM compaction 摘要。
+func (s *SessionStore) MessagesBefore(sessionID, firstKeptEntryID string, maxRunes int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	path := s.pathToLeaf(sessionID)
+	var lines []string
+	for _, e := range path {
+		if e.ID == firstKeptEntryID {
+			break
+		}
+		if e.Type != EntryMessage || e.Message == nil {
+			continue
+		}
+		content := e.Message.Content
+		if maxRunes > 0 {
+			runes := []rune(content)
+			if len(runes) > maxRunes {
+				content = string(runes[:maxRunes]) + "..."
+			}
+		}
+		lines = append(lines, fmt.Sprintf("[%s]: %s", e.Message.Role, content))
+	}
+	return lines
+}
+
 // CompactIfNeeded 检查是否需要压缩，若需要则创建压缩条目（仅构造对象，不修改 store）。
 // maxApproxTokens: 触发压缩的 token 阈值。
 // keepRecentMessages: 始终保留的最近消息数。
@@ -427,7 +454,7 @@ func (s *SessionStore) CompactIfNeeded(sessionID string, maxApproxTokens int, ke
 
 	// 构建当前上下文并估算 token。
 	currentMsgs := s.buildContextLocked(sessionID)
-	tokensBefore := EstimateTokens(currentMsgs)
+	tokensBefore := budget.EstimateTokens(currentMsgs)
 
 	if tokensBefore <= maxApproxTokens || len(msgEntries) <= keepRecentMessages {
 		return nil
@@ -458,6 +485,12 @@ func (s *SessionStore) LoadEntry(sessionID string, entry *SessionEntry) {
 	sess, ok := s.sessions[sessionID]
 	if !ok {
 		return
+	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+	if len(sess.entries) == 0 {
+		sess.CreatedAt = entry.Timestamp
 	}
 	sess.entries[entry.ID] = entry
 	s.entries[entry.ID] = entry
@@ -493,20 +526,7 @@ func summarizeEntries(entries []*SessionEntry) string {
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s", role, content))
 	}
-	return joinLines(lines, "\n")
-}
-
-func joinLines(lines []string, sep string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(lines[0])
-	for _, line := range lines[1:] {
-		b.WriteString(sep)
-		b.WriteString(line)
-	}
-	return b.String()
+	return strings.Join(lines, "\n")
 }
 
 var (

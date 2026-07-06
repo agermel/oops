@@ -1,4 +1,4 @@
-package llm
+package agent
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"oops/internal/config"
+	agentevents "oops/internal/llm/events"
 	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -32,18 +33,6 @@ func sanitizeError(raw string) string {
 	return s
 }
 
-// BasePrompt 是 Agent 的默认系统提示词。调用方应在构建消息列表时优先使用 SkillStore。
-const BasePrompt = `你是一个基础设施运维助手，负责回答当前监控环境中的问题。
-
-你可以使用工具查询实时运维数据。回答时：
-- 先调用工具获取最新数据，不要猜测
-- 如果工具返回错误，解释原因而不是忽略
-- 容器列表按状态分类展示，先列出异常容器
-- 日志输出标明时间戳和输出流（stdout/stderr）
-- 如果用户提到的机器或容器不存在，明确告知
-- 回答简洁，聚焦运维数据
-- 不要建议执行 shell 命令或修改系统配置`
-
 // MessageCallback 是 Ask 在产生每条新消息时调用的回调。
 // ctx 是 agent 的内部 context；若回调返回非 nil 错误，Ask 会终止执行。
 type MessageCallback func(ctx context.Context, msg *schema.Message) error
@@ -57,19 +46,6 @@ type ToolResultHook func(ctx context.Context, msg *schema.Message) *schema.Messa
 // key 为工具名（如 "get_logs"、"list_containers"），MCP 工具也使用其工具名。
 // 仅在 msg.Role == Tool 时触发。
 var AfterToolCall = map[string]ToolResultHook{}
-
-// StepEvent 表示 Agent 执行过程中的一个步骤，通过 SSE 推送给前端。
-type StepEvent struct {
-	Type       string `json:"type"`                 // thinking | tool_call | tool_result | answer | error | session | stats
-	Content    string `json:"content"`              // 文本内容
-	ToolName   string `json:"toolName,omitempty"`   // 工具名称（tool_call / tool_result）
-	ToolArgs   string `json:"toolArgs,omitempty"`   // 工具参数 JSON（tool_call）
-	ToolCallID string `json:"toolCallId,omitempty"` // 工具调用 ID（tool_result）
-	AgentType  string `json:"agentType,omitempty"`  // Agent 类型（session 事件中携带）
-	MaxStep    int    `json:"maxStep,omitempty"`    // 最大步数（session 事件中携带）
-	Tokens     int    `json:"tokens,omitempty"`     // 估算 token 用量（stats 事件中携带）
-	Trimmed    int    `json:"trimmed,omitempty"`    // 被裁剪的消息数（stats 事件中携带）
-}
 
 // newModel 创建 OpenAI 兼容的 ChatModel。
 func newModel(ctx context.Context, cfg config.LLMConfig) (model.ToolCallingChatModel, error) {
@@ -114,7 +90,7 @@ func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools [
 // maxStep 控制 Agent 最大步数；<=0 时使用默认值 15。
 // 调用方需要从 channel 读取 StepEvent 直到 channel 关闭。
 // 若 agent 创建失败，返回 error（此时 channel 为 nil）。
-func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan StepEvent, error) {
+func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan agentevents.StepEvent, error) {
 	opt, future := react.WithMessageFuture()
 
 	agent, err := newAgent(ctx, chatModel, tools, maxStep)
@@ -123,7 +99,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 		return nil, err
 	}
 
-	events := make(chan StepEvent, 100)
+	events := make(chan agentevents.StepEvent, 100)
 
 	go func() {
 		defer close(events)
@@ -151,7 +127,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			msg, ok, err := iter.Next()
 			if err != nil {
 				logutil.Error("llm: iter", zap.Error(err))
-				sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(err.Error())})
+				sendEvent(ctx, events, agentevents.StepEvent{Type: "error", Content: sanitizeError(err.Error())})
 				return
 			}
 			if !ok {
@@ -171,7 +147,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			if onMessage != nil {
 				if err := onMessage(agentCtx, msg); err != nil {
 					logutil.Error("llm: onMessage", zap.Error(err))
-					sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(err.Error())})
+					sendEvent(ctx, events, agentevents.StepEvent{Type: "error", Content: sanitizeError(err.Error())})
 					return
 				}
 			}
@@ -193,7 +169,7 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 		result := <-genDone
 		if result.err != nil {
 			logutil.Error("llm: generate", zap.Error(result.err))
-			sendEvent(ctx, events, StepEvent{Type: "error", Content: sanitizeError(result.err.Error())})
+			sendEvent(ctx, events, agentevents.StepEvent{Type: "error", Content: sanitizeError(result.err.Error())})
 			return
 		}
 
@@ -203,14 +179,14 @@ func Ask(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool
 			}
 		}
 
-		sendEvent(ctx, events, StepEvent{Type: "answer", Content: result.msg.Content})
+		sendEvent(ctx, events, agentevents.StepEvent{Type: "answer", Content: result.msg.Content})
 	}()
 
 	return events, nil
 }
 
 // sendEvent 发送一个步骤事件到 channel，若 ctx 已取消则返回 false。
-func sendEvent(ctx context.Context, ch chan<- StepEvent, evt StepEvent) bool {
+func sendEvent(ctx context.Context, ch chan<- agentevents.StepEvent, evt agentevents.StepEvent) bool {
 	select {
 	case ch <- evt:
 		return true
@@ -220,10 +196,10 @@ func sendEvent(ctx context.Context, ch chan<- StepEvent, evt StepEvent) bool {
 }
 
 // messageToStepEvents 将一条 schema.Message 转换为一个或多个 StepEvent。
-func messageToStepEvents(msg *schema.Message) []StepEvent {
+func messageToStepEvents(msg *schema.Message) []agentevents.StepEvent {
 	// 工具返回消息。
 	if msg.ToolCallID != "" {
-		return []StepEvent{{
+		return []agentevents.StepEvent{{
 			Type:       "tool_result",
 			Content:    msg.Content,
 			ToolName:   msg.ToolName,
@@ -232,16 +208,16 @@ func messageToStepEvents(msg *schema.Message) []StepEvent {
 	}
 
 	// AI 消息。
-	var events []StepEvent
+	var events []agentevents.StepEvent
 
 	// 带工具调用的 AI 内容作为中间思考展示；纯文本 AI 消息由最终 answer 事件展示。
 	if msg.Content != "" && len(msg.ToolCalls) > 0 {
-		events = append(events, StepEvent{Type: "thinking", Content: msg.Content})
+		events = append(events, agentevents.StepEvent{Type: "thinking", Content: msg.Content})
 	}
 
 	// 如果有工具调用，逐个发 tool_call。
 	for _, tc := range msg.ToolCalls {
-		events = append(events, StepEvent{
+		events = append(events, agentevents.StepEvent{
 			Type:       "tool_call",
 			Content:    tc.Function.Name,
 			ToolName:   tc.Function.Name,

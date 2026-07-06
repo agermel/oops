@@ -1,12 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 	"github.com/mark3labs/mcp-go/mcp"
 	runtimestore "oops/internal/store/runtime"
 )
@@ -66,6 +69,64 @@ func TestCallToolArgumentsKeepsEmptyObject(t *testing.T) {
 	}
 }
 
+func TestCollectToolsLockedIncludesConnectionMetadata(t *testing.T) {
+	manager := &Manager{
+		processes: map[string]*managedProcess{
+			"cache-a": {
+				cfg: ConnectionConfig{
+					ID:        "cache-a",
+					Name:      "Redis",
+					Type:      "redis",
+					NodeletID: "node-a",
+				},
+				tools: []tool.BaseTool{
+					toolBaseForTest{name: "info", desc: "redis info"},
+					toolBaseForTest{name: "get", desc: "redis get"},
+				},
+			},
+			"cache-b": {
+				cfg: ConnectionConfig{
+					ID:        "cache-b",
+					Name:      "Cache",
+					Type:      "redis",
+					NodeletID: "node-b",
+				},
+				tools: []tool.BaseTool{
+					toolBaseForTest{name: "info", desc: "redis info duplicate"},
+				},
+			},
+			"etcd-main": {
+				cfg: ConnectionConfig{
+					ID:   "etcd-main",
+					Name: "Etcd",
+					Type: "etcd",
+				},
+				tools: []tool.BaseTool{
+					toolBaseForTest{name: "etcd_get", desc: "etcd get"},
+				},
+			},
+		},
+	}
+
+	entries := manager.collectToolsLocked()
+	got := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		got[entry.ConnectionID+":"+entry.OriginalName] = entry.ConnectionType + ":" + entry.NodeletID + ":" + entry.Description
+	}
+
+	want := map[string]string{
+		"cache-a:info":       "redis:node-a:redis info",
+		"cache-a:get":        "redis:node-a:redis get",
+		"cache-b:info":       "redis:node-b:redis info duplicate",
+		"etcd-main:etcd_get": "etcd::etcd get",
+	}
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			t.Fatalf("metadata for %s = %q, want %q (all: %#v)", key, got[key], wantValue, got)
+		}
+	}
+}
+
 func TestNormalizeConnectionConfigBackfillsKafkaAuthDefaults(t *testing.T) {
 	cfg := normalizeConnectionConfig(ConnectionConfig{
 		Type: "kafka",
@@ -82,6 +143,15 @@ func TestNormalizeConnectionConfigBackfillsKafkaAuthDefaults(t *testing.T) {
 	if envValue(cfg.Env, "KAFKA_SASL_MECHANISM") != "PLAIN" {
 		t.Fatalf("KAFKA_SASL_MECHANISM = %q", envValue(cfg.Env, "KAFKA_SASL_MECHANISM"))
 	}
+}
+
+type toolBaseForTest struct {
+	name string
+	desc string
+}
+
+func (t toolBaseForTest) Info(context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: t.name, Desc: t.desc}, nil
 }
 
 func TestNormalizeConnectionConfigKeepsExplicitKafkaProtocol(t *testing.T) {

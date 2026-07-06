@@ -7,6 +7,9 @@ export type ToolItem = {
   name: string;
   description: string;
   enabled: boolean;
+  originalName?: string;
+  modelName?: string;
+  connectionType?: string;
 };
 
 export type ToolsData = {

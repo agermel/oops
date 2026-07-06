@@ -1,4 +1,4 @@
-package llm
+package session
 
 import (
 	"bufio"
@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"oops/internal/logutil"
 
@@ -98,11 +99,11 @@ func loadSessionFile(store *SessionStore, sessionID, path string) error {
 	// 为了支持冷启动，直接通过内部 map 创建。
 	// 使用 store.Create 会生成新 ID，这里需要手动注入。
 
-	// 首行必须是 session header。
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1 MB buffer
 
 	var projectID string
+	sessionCreated := false
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -129,22 +130,28 @@ func loadSessionFile(store *SessionStore, sessionID, path string) error {
 			continue
 		}
 
-		// 第一行：session header。
-		if lineNum == 1 {
-			if raw.Type != "session" {
-				return nil // 不是合法 session 文件，跳过
+		if raw.Type == "session" {
+			if !sessionCreated {
+				projectID = raw.ProjectID
+				store.GetOrCreate(sessionID, projectID)
+				sessionCreated = true
 			}
-			projectID = raw.ProjectID
-			// 确保 session 存在。
-			store.GetOrCreate(sessionID, projectID)
 			continue
 		}
 
-		// 后续行：message 或 compaction entry。
+		if raw.Type != string(EntryMessage) && raw.Type != string(EntryCompaction) {
+			continue
+		}
+		if !sessionCreated {
+			store.GetOrCreate(sessionID, projectID)
+			sessionCreated = true
+		}
+
 		entry := &SessionEntry{
 			Type:             EntryType(raw.Type),
 			ID:               raw.ID,
 			ParentID:         raw.ParentID,
+			Timestamp:        parseEntryTimestamp(raw.Timestamp),
 			Summary:          raw.Summary,
 			FirstKeptEntryID: raw.FirstKeptEntryID,
 			TokensBefore:     raw.TokensBefore,
@@ -164,19 +171,40 @@ func loadSessionFile(store *SessionStore, sessionID, path string) error {
 	return scanner.Err()
 }
 
+func parseEntryTimestamp(raw json.RawMessage) time.Time {
+	if len(raw) == 0 || string(raw) == "null" {
+		return time.Now()
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if ts, err := time.Parse(time.RFC3339Nano, text); err == nil {
+			return ts
+		}
+		return time.Now()
+	}
+	var epoch int64
+	if err := json.Unmarshal(raw, &epoch); err == nil {
+		if epoch > 1_000_000_000_000 {
+			return time.UnixMilli(epoch)
+		}
+		return time.Unix(epoch, 0)
+	}
+	return time.Now()
+}
+
 // schemaMsg 是 JSONL 中 message 的中间表示。
 // 避免直接依赖 schema.Message 的 JSON 格式细节。
 type schemaMsg struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	ToolCallID string          `json:"toolCallId,omitempty"`
-	ToolName   string          `json:"toolName,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCallID string           `json:"toolCallId,omitempty"`
+	ToolName   string           `json:"toolName,omitempty"`
 	ToolCalls  []schemaToolCall `json:"toolCalls,omitempty"`
 }
 
 type schemaToolCall struct {
-	ID       string              `json:"id"`
-	Function schemaToolCallFunc  `json:"function"`
+	ID       string             `json:"id"`
+	Function schemaToolCallFunc `json:"function"`
 }
 
 type schemaToolCallFunc struct {

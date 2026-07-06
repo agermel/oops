@@ -1099,6 +1099,13 @@
   border-radius: 3px;
 }
 
+.mcp-tool-original {
+  display: block;
+  margin-top: 2px;
+  color: var(--gray-400);
+  font-size: var(--text-xs);
+}
+
 .mcp-tool-row.tool-disabled {
   background: var(--surface-subtle);
 }

@@ -349,7 +349,7 @@ func (s *Server) handleProjectMCPList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := make([]projectMCPConnection, 0)
-	for _, conn := range s.mcpManager.List() {
+	for _, conn := range s.decorateMCPConnections(r.Context(), s.mcpManager.List()) {
 		if conn.NodeletID == "" {
 			continue
 		}

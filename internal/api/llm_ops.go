@@ -7,22 +7,22 @@ import (
 	"sync"
 	"time"
 
-	"oops/internal/llm"
+	llmtools "oops/internal/llm/tools"
 	"oops/internal/nodelet"
 )
 
-// ListNodelets 实现 llm.OpsData，返回所有 Nodelet 概要。
+// ListNodelets 实现 tools.OpsData，返回所有 Nodelet 概要。
 // 先读 Prober 缓存判断可用性，仅对健康节点实时获取 Docker 详情。
-func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error) {
+func (s *Server) ListNodelets(ctx context.Context) ([]llmtools.NodeletSummary, error) {
 	nodelets := s.nodeletManager.List()
-	results := make([]llm.NodeletSummary, len(nodelets))
+	results := make([]llmtools.NodeletSummary, len(nodelets))
 	var wg sync.WaitGroup
 	for index, item := range nodelets {
 		wg.Add(1)
 		go func(index int, item nodelet.NodeletConfig) {
 			defer wg.Done()
 
-			summary := llm.NodeletSummary{
+			summary := llmtools.NodeletSummary{
 				ID:      item.ID,
 				Name:    item.Name,
 				Address: item.Address,
@@ -62,7 +62,7 @@ func (s *Server) ListNodelets(ctx context.Context) ([]llm.NodeletSummary, error)
 	return results, nil
 }
 
-// ListContainers 实现 llm.OpsData，返回指定 Nodelet 的容器列表。
+// ListContainers 实现 tools.OpsData，返回指定 Nodelet 的容器列表。
 // status 不为空时仅返回匹配状态的容器。
 // projectID 不为空时会过滤掉项目已隐藏的容器（excludedContainerRefs）。
 func (s *Server) ListContainers(ctx context.Context, projectID, nodeletID, status string) ([]nodelet.Container, error) {
@@ -107,7 +107,7 @@ func (s *Server) ListContainers(ctx context.Context, projectID, nodeletID, statu
 	return filtered, nil
 }
 
-// GetLogs 实现 llm.OpsData，返回指定容器的历史日志。
+// GetLogs 实现 tools.OpsData，返回指定容器的历史日志。
 func (s *Server) GetLogs(ctx context.Context, nodeletID, containerID string, tail int) ([]nodelet.LogEntry, error) {
 	item, ok := s.findNodelet(nodeletID)
 	if !ok {
@@ -116,7 +116,7 @@ func (s *Server) GetLogs(ctx context.Context, nodeletID, containerID string, tai
 	return s.nodeletClient.ContainerLogs(ctx, item.Address, item.Token, containerID, strconv.Itoa(tail))
 }
 
-// GetProjectRepo 实现 llm.OpsData，返回项目的 GitHub 仓库 URL。
+// GetProjectRepo 实现 tools.OpsData，返回项目的 GitHub 仓库 URL。
 func (s *Server) GetProjectRepo(ctx context.Context, projectID string) (string, error) {
 	if s.projectStore == nil {
 		return "", fmt.Errorf("project store not initialized")
@@ -131,7 +131,7 @@ func (s *Server) GetProjectRepo(ctx context.Context, projectID string) (string, 
 	return p.GitHubRepo, nil
 }
 
-// ContainerExec 实现 llm.OpsData，在指定容器内执行命令。
+// ContainerExec 实现 tools.OpsData，在指定容器内执行命令。
 func (s *Server) ContainerExec(ctx context.Context, nodeletID, containerID string, cmd []string) (nodelet.ExecResult, error) {
 	item, ok := s.findNodelet(nodeletID)
 	if !ok {

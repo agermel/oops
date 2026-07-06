@@ -1,4 +1,4 @@
-package llm
+package ctxbuilder
 
 import (
 	"context"
@@ -6,6 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"oops/internal/llm/budget"
+	"oops/internal/llm/prompt"
+	"oops/internal/llm/session"
+	"oops/internal/llm/skills"
 	"oops/internal/logutil"
 
 	"github.com/cloudwego/eino/schema"
@@ -15,9 +19,9 @@ import (
 // ContextBuilder 封装上下文构建逻辑。
 // BuildContext() → compactIfNeeded() → 注入 compaction 摘要 → 组装最终消息列表。
 type ContextBuilder struct {
-	store      *SessionStore
-	skillStore *SkillStore
-	llmClient  *Client // 可选：用于 compaction LLM 摘要（nil 则使用确定性拼接）
+	store      *session.SessionStore
+	skillStore *skills.SkillStore
+	completer  Completer // 可选：用于 compaction LLM 摘要（nil 则使用确定性拼接）
 
 	// Compaction 配置。
 	MaxTokens    int  // 触发压缩的 token 阈值（默认 48000 = 64000 * 0.75）
@@ -25,42 +29,38 @@ type ContextBuilder struct {
 	LLMSummarize bool // 是否使用 LLM 生成摘要（默认 true，但需要 llmClient 可用）
 }
 
-// DefaultCompactionConfig 返回默认压缩配置。
-func DefaultCompactionConfig() (maxTokens int, keepRecent int) {
-	return int(float64(DefaultBudget.MaxTokens) * 0.75), 8
+// Completer 是 compaction 摘要需要的最小 LLM 接口。
+type Completer interface {
+	Complete(ctx context.Context, messages []*schema.Message) (string, error)
 }
 
-// ProjectContext 包含注入 system prompt 的项目元数据。
-type ProjectContext struct {
-	ID          string
-	Name        string
-	Description string
-	GitHubRepo  string
-	NodeletIDs  []string
+// DefaultCompactionConfig 返回默认压缩配置。
+func DefaultCompactionConfig() (maxTokens int, keepRecent int) {
+	return int(float64(budget.DefaultBudget.MaxTokens) * 0.75), 8
 }
 
 // BuildOptions 是 Build() 的输入参数。
 type BuildOptions struct {
-	Session  *Session
+	Session  *session.Session
 	Question string
-	Project  *ProjectContext
+	Project  *prompt.ProjectContext
 }
 
 // BuildResult 是 Build() 的返回值。
 type BuildResult struct {
-	Messages   []*schema.Message // 最终消息列表（system + history + summary + question）
-	Compaction *SessionEntry     // 本次触发的压缩（nil 表示无需压缩）
-	Tokens     int               // 估算 token 数
-	Trimmed    int               // 被裁剪的消息数（trim 回退时使用）
+	Messages   []*schema.Message     // 最终消息列表（system + history + summary + question）
+	Compaction *session.SessionEntry // 本次触发的压缩（nil 表示无需压缩）
+	Tokens     int                   // 估算 token 数
+	Trimmed    int                   // 被裁剪的消息数（trim 回退时使用）
 }
 
 // NewContextBuilder 创建上下文构建器。
-func NewContextBuilder(store *SessionStore, skillStore *SkillStore, llmClient *Client) *ContextBuilder {
+func NewContextBuilder(store *session.SessionStore, skillStore *skills.SkillStore, completer Completer) *ContextBuilder {
 	maxTokens, keepRecent := DefaultCompactionConfig()
 	return &ContextBuilder{
 		store:        store,
 		skillStore:   skillStore,
-		llmClient:    llmClient,
+		completer:    completer,
 		MaxTokens:    maxTokens,
 		KeepRecent:   keepRecent,
 		LLMSummarize: true,
@@ -86,8 +86,8 @@ func (cb *ContextBuilder) Build(ctx context.Context, opts BuildOptions) BuildRes
 	currentMsgs := append(append([]*schema.Message{}, historyMsgs...), userMsg)
 
 	// 3. 估算 token，必要时触发压缩。
-	tokens := EstimateTokens(currentMsgs)
-	var compaction *SessionEntry
+	tokens := budget.EstimateTokens(currentMsgs)
+	var compaction *session.SessionEntry
 
 	if tokens > cb.MaxTokens {
 		logutil.Infof("context: tokens %d > threshold %d, checking compaction",
@@ -97,7 +97,7 @@ func (cb *ContextBuilder) Build(ctx context.Context, opts BuildOptions) BuildRes
 
 		if compaction != nil {
 			// 若 llmClient 可用且启用 LLM 摘要，用 LLM 改进摘要内容。
-			if cb.LLMSummarize && cb.llmClient != nil {
+			if cb.LLMSummarize && cb.completer != nil {
 				if improved, err := cb.llmSummarize(ctx, opts.Session.ID, compaction); err == nil {
 					compaction.Summary = improved
 				} else {
@@ -112,11 +112,11 @@ func (cb *ContextBuilder) Build(ctx context.Context, opts BuildOptions) BuildRes
 			// 压缩后重建上下文（BuildContext 会看到新的 compaction 并注入摘要）。
 			historyMsgs = cb.store.BuildContext(opts.Session.ID)
 			currentMsgs = append(append([]*schema.Message{}, historyMsgs...), userMsg)
-			tokens = EstimateTokens(currentMsgs)
+			tokens = budget.EstimateTokens(currentMsgs)
 		} else {
 			// 压缩未触发（消息数不足），回退到 TrimToBudget。
 			logutil.Info("context: compaction not triggered, falling back to TrimToBudget")
-			trimResult := TrimToBudget(currentMsgs, DefaultBudget)
+			trimResult := budget.TrimToBudget(currentMsgs, budget.DefaultBudget)
 			return BuildResult{
 				Messages: cb.prependSystemPrompt(trimResult.Messages, opts.Project),
 				Tokens:   trimResult.TotalTokens,
@@ -134,72 +134,32 @@ func (cb *ContextBuilder) Build(ctx context.Context, opts BuildOptions) BuildRes
 }
 
 // prependSystemPrompt 在消息列表前插入 system prompt。
-func (cb *ContextBuilder) prependSystemPrompt(msgs []*schema.Message, project *ProjectContext) []*schema.Message {
-	prompt := BasePrompt
+func (cb *ContextBuilder) prependSystemPrompt(msgs []*schema.Message, project *prompt.ProjectContext) []*schema.Message {
+	promptText := prompt.BasePrompt
 
 	if project != nil {
-		prompt = prompt + "\n\n" + FormatProjectContext(project)
+		promptText = promptText + "\n\n" + prompt.FormatProjectContext(project)
 	}
 
 	if cb.skillStore != nil {
 		available := cb.skillStore.RenderAvailable()
 		if available != "" {
-			prompt = prompt + "\n\n" + available
+			promptText = promptText + "\n\n" + available
 		}
 	}
 
-	systemMsg := schema.SystemMessage(prompt)
+	systemMsg := schema.SystemMessage(promptText)
 	return append([]*schema.Message{systemMsg}, msgs...)
-}
-
-// FormatProjectContext 将项目元数据格式化为 system prompt 中的中文段落。
-func FormatProjectContext(p *ProjectContext) string {
-	var b strings.Builder
-	b.WriteString("## 当前项目\n")
-	fmt.Fprintf(&b, "- ID: %s\n", p.ID)
-	fmt.Fprintf(&b, "- 名称: %s\n", p.Name)
-	if p.Description != "" {
-		fmt.Fprintf(&b, "- 描述: %s\n", p.Description)
-	}
-	if p.GitHubRepo != "" {
-		fmt.Fprintf(&b, "- GitHub 仓库: %s\n", p.GitHubRepo)
-		b.WriteString("- 提示: 可使用 repo_sync、repo_list_dir、repo_read_file 工具检查仓库源码，使用 repo_fetch 抓取网页或 API\n")
-	}
-	if len(p.NodeletIDs) > 0 {
-		fmt.Fprintf(&b, "- 关联服务器: %s\n", strings.Join(p.NodeletIDs, ", "))
-	}
-	return b.String()
 }
 
 // llmSummarize 使用 LLM 生成对话摘要。
 // sessionID 用于从 store 获取当前叶节点路径以收集被摘要的消息内容。
-func (cb *ContextBuilder) llmSummarize(ctx context.Context, sessionID string, entry *SessionEntry) (string, error) {
-	if cb.llmClient == nil {
+func (cb *ContextBuilder) llmSummarize(ctx context.Context, sessionID string, entry *session.SessionEntry) (string, error) {
+	if cb.completer == nil {
 		return "", fmt.Errorf("llm client not available")
 	}
 
-	// 获取当前叶节点路径（压缩前的完整消息历史）。
-	path := cb.store.pathToLeaf(sessionID)
-
-	// 收集将被摘要的消息内容（firstKeptEntryID 之前的消息）。
-	var summarized []string
-	foundFirstKept := false
-	for _, e := range path {
-		if e.ID == entry.FirstKeptEntryID {
-			foundFirstKept = true
-			break
-		}
-		if e.Type == EntryMessage && e.Message != nil {
-			content := e.Message.Content
-			if len([]rune(content)) > 500 {
-				content = string([]rune(content)[:500]) + "..."
-			}
-			summarized = append(summarized,
-				fmt.Sprintf("[%s]: %s", e.Message.Role, content))
-		}
-	}
-	_ = foundFirstKept // 即使没找到也继续用已有内容
-
+	summarized := cb.store.MessagesBefore(sessionID, entry.FirstKeptEntryID, 500)
 	if len(summarized) == 0 {
 		return entry.Summary, nil // 无内容可摘要，保留确定性版本
 	}
@@ -214,7 +174,7 @@ func (cb *ContextBuilder) llmSummarize(ctx context.Context, sessionID string, en
 - 聚焦关键发现和已执行操作的结果
 - 保留用户明确表达的偏好和约束
 - 使用中文`,
-		joinLines(summarized, "\n"),
+		strings.Join(summarized, "\n"),
 	)
 
 	summaryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -225,7 +185,7 @@ func (cb *ContextBuilder) llmSummarize(ctx context.Context, sessionID string, en
 		schema.UserMessage(summarizePrompt),
 	}
 
-	result, err := cb.llmClient.Complete(summaryCtx, summaryMsgs)
+	result, err := cb.completer.Complete(summaryCtx, summaryMsgs)
 	if err != nil {
 		return "", fmt.Errorf("llm complete: %w", err)
 	}

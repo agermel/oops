@@ -74,8 +74,24 @@ func validateCommand(cmd string) error {
 
 // ToolInfo 是一个工具的基本信息，供前端工具管理面板使用。
 type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	OriginalName   string `json:"originalName,omitempty"`
+	ModelName      string `json:"modelName,omitempty"`
+	ConnectionType string `json:"connectionType,omitempty"`
+}
+
+// ConnectionTool is a running MCP tool with the owning connection metadata.
+type ConnectionTool struct {
+	ConnectionID   string
+	ConnectionName string
+	ConnectionType string
+	NodeletID      string
+	ServerName     string
+	OriginalName   string
+	ModelName      string
+	Description    string
+	Tool           tool.BaseTool
 }
 
 // ConnectionConfig defines a single MCP server connection managed by the panel.
@@ -129,12 +145,12 @@ type Manager struct {
 	nextStart int64
 	errors    map[string]string // id → last error
 	logs      map[string]*ConnectionLogHub
-	onChange  func([]tool.BaseTool)
+	onChange  func([]ConnectionTool)
 	closed    bool
 }
 
 // NewManagerWithRuntime loads MCP connections from SQLite.
-func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]tool.BaseTool)) (*Manager, error) {
+func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]ConnectionTool)) (*Manager, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime store is required")
 	}
@@ -187,15 +203,7 @@ func (m *Manager) connectionStatusLocked(cfg ConnectionConfig) ConnectionWithSta
 	if proc, ok := m.processes[cfg.ID]; ok {
 		item.Status = "running"
 		item.ToolCount = len(proc.tools)
-		item.Tools = make([]ToolInfo, len(proc.tools))
-		for j, bt := range proc.tools {
-			info, err := bt.Info(context.Background())
-			if err != nil {
-				item.Tools[j] = ToolInfo{Name: "?", Description: err.Error()}
-			} else {
-				item.Tools[j] = ToolInfo{Name: info.Name, Description: info.Desc}
-			}
-		}
+		item.Tools = m.toolInfosForConnectionLocked(cfg.ID)
 	} else if cfg.Enabled {
 		if _, ok := m.starting[cfg.ID]; ok {
 			item.Status = "starting"
@@ -292,21 +300,17 @@ func (m *Manager) GetConnectionTools() map[string][]ToolInfo {
 	defer m.mu.Unlock()
 
 	result := make(map[string][]ToolInfo, len(m.processes))
-	for id, proc := range m.processes {
-		tools := make([]ToolInfo, 0, len(proc.tools))
-		for _, bt := range proc.tools {
-			info, err := bt.Info(context.Background())
-			if err != nil {
-				continue
-			}
-			tools = append(tools, ToolInfo{
-				Name:        info.Name,
-				Description: info.Desc,
-			})
-		}
-		result[id] = tools
+	for connID, tools := range m.connectionToolInfosLocked() {
+		result[connID] = tools
 	}
 	return result
+}
+
+// GetConnectionToolEntries returns running MCP tools with connection metadata.
+func (m *Manager) GetConnectionToolEntries() []ConnectionTool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.collectToolsLocked()
 }
 
 // Add persists a new connection and starts it asynchronously if enabled.
@@ -1478,10 +1482,50 @@ func (m *Manager) stopLocked(id string) {
 	m.appendConnectionLogLocked(id, "system", "info", "connection stopped")
 }
 
-func (m *Manager) collectToolsLocked() []tool.BaseTool {
-	var all []tool.BaseTool
-	for _, proc := range m.processes {
-		all = append(all, proc.tools...)
+func (m *Manager) toolInfosForConnectionLocked(connID string) []ToolInfo {
+	infos := m.connectionToolInfosLocked()
+	return infos[connID]
+}
+
+func (m *Manager) connectionToolInfosLocked() map[string][]ToolInfo {
+	result := make(map[string][]ToolInfo, len(m.processes))
+	for _, entry := range m.collectToolsLocked() {
+		result[entry.ConnectionID] = append(result[entry.ConnectionID], ToolInfo{
+			Name:           entry.OriginalName,
+			Description:    entry.Description,
+			OriginalName:   entry.OriginalName,
+			ModelName:      entry.ModelName,
+			ConnectionType: entry.ConnectionType,
+		})
+	}
+	return result
+}
+
+func (m *Manager) collectToolsLocked() []ConnectionTool {
+	ids := make([]string, 0, len(m.processes))
+	for id := range m.processes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	var all []ConnectionTool
+	for _, id := range ids {
+		proc := m.processes[id]
+		for _, bt := range proc.tools {
+			info, err := bt.Info(context.Background())
+			if err != nil {
+				continue
+			}
+			all = append(all, ConnectionTool{
+				ConnectionID:   proc.cfg.ID,
+				ConnectionName: proc.cfg.Name,
+				ConnectionType: proc.cfg.Type,
+				NodeletID:      proc.cfg.NodeletID,
+				OriginalName:   info.Name,
+				Description:    info.Desc,
+				Tool:           bt,
+			})
+		}
 	}
 	return all
 }

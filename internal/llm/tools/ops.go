@@ -1,4 +1,4 @@
-package llm
+package tools
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"oops/internal/llm/skills"
 	"oops/internal/nodelet"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -205,7 +206,7 @@ type skillInput struct {
 
 // NewSkillTool 创建 skill 工具——加载指定技能的详细指导内容。
 // LLM 在判断用户意图后自主调用，无需预路由。
-func NewSkillTool(store *SkillStore) (tool.InvokableTool, error) {
+func NewSkillTool(store *skills.SkillStore) (tool.InvokableTool, error) {
 	return utils.InferTool("skill",
 		"Load a specialized skill when the task at hand matches one of the available skills listed in the system prompt. "+
 			"Use this tool to inject the skill's instructions into the current conversation. "+
@@ -227,7 +228,7 @@ func NewSkillTool(store *SkillStore) (tool.InvokableTool, error) {
 }
 
 // formatSkillContent 按 OpenCode 风格将 Skill 内容格式化为 XML。
-func formatSkillContent(skill *Skill) string {
+func formatSkillContent(skill *skills.Skill) string {
 	return strings.Join([]string{
 		"<skill_content name=\"" + skill.Name + "\">",
 		"# Skill: " + skill.Name,
@@ -240,7 +241,7 @@ func formatSkillContent(skill *Skill) string {
 // ---------- 组合入口 ----------
 
 // NewTools 创建所有 LLM 可调用的运维工具（含 skill 工具）。
-func NewTools(ops OpsData, store *SkillStore) ([]tool.InvokableTool, error) {
+func NewTools(ops OpsData, store *skills.SkillStore) ([]tool.InvokableTool, error) {
 	factories := []func(OpsData) (tool.InvokableTool, error){
 		NewListNodeletsTool,
 		NewListContainersTool,

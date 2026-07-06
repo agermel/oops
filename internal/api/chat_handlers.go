@@ -7,7 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	"oops/internal/llm"
+	"oops/internal/llm/budget"
+	"oops/internal/llm/ctxbuilder"
+	agentevents "oops/internal/llm/events"
+	"oops/internal/llm/prompt"
+	"oops/internal/llm/session"
 
 	"github.com/cloudwego/eino/schema"
 )
@@ -29,7 +33,7 @@ func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("include_messages") == "true" {
 		writeJSON(w, sess.ToDetail())
 	} else {
-		writeJSON(w, llm.SessionInfo{
+		writeJSON(w, session.SessionInfo{
 			ID:           sess.ID,
 			ProjectID:    sess.ProjectID,
 			MessageCount: len(sess.Messages),
@@ -67,7 +71,7 @@ func (s *Server) handleProjectSessionGet(w http.ResponseWriter, r *http.Request)
 	if r.URL.Query().Get("include_messages") == "true" {
 		writeJSON(w, sess.ToDetail())
 	} else {
-		writeJSON(w, llm.SessionInfo{
+		writeJSON(w, session.SessionInfo{
 			ID:           sess.ID,
 			ProjectID:    sess.ProjectID,
 			MessageCount: len(sess.Messages),
@@ -127,7 +131,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	defer cancel()
 
 	// 获取或创建会话。
-	var sess *llm.Session
+	var sess *session.Session
 	if req.SessionID != "" {
 		sess = s.sessionStore.GetOrCreate(req.SessionID, projectID)
 	} else {
@@ -135,10 +139,10 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	}
 
 	// 查项目元数据，注入 system prompt。
-	var projectCtx *llm.ProjectContext
+	var projectCtx *prompt.ProjectContext
 	if projectID != "" && s.projectStore != nil {
 		if p := s.projectStore.Get(projectID); p != nil {
-			projectCtx = &llm.ProjectContext{
+			projectCtx = &prompt.ProjectContext{
 				ID:          p.ID,
 				Name:        p.Name,
 				Description: p.Description,
@@ -157,7 +161,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	userMsg := schema.UserMessage(req.Question)
 
 	if s.contextBuilder != nil {
-		buildResult := s.contextBuilder.Build(ctx, llm.BuildOptions{
+		buildResult := s.contextBuilder.Build(ctx, ctxbuilder.BuildOptions{
 			Session:  sess,
 			Question: req.Question,
 			Project:  projectCtx,
@@ -167,9 +171,9 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		totalTokens = buildResult.Tokens
 	} else {
 		// 回退：手动组装（contextBuilder 未初始化时，如 skillStore 加载失败）。
-		systemPrompt := llm.BasePrompt
+		systemPrompt := prompt.BasePrompt
 		if projectCtx != nil {
-			systemPrompt = systemPrompt + "\n\n" + llm.FormatProjectContext(projectCtx)
+			systemPrompt = systemPrompt + "\n\n" + prompt.FormatProjectContext(projectCtx)
 		}
 		if s.skillStore != nil {
 			if available := s.skillStore.RenderAvailable(); available != "" {
@@ -180,7 +184,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		msgs := []*schema.Message{systemMsg}
 		msgs = append(msgs, sess.Messages...)
 		msgs = append(msgs, userMsg)
-		trimResult := llm.TrimToBudget(msgs, llm.DefaultBudget)
+		trimResult := budget.TrimToBudget(msgs, budget.DefaultBudget)
 		messages = trimResult.Messages
 		trimmed = trimResult.Trimmed
 		totalTokens = trimResult.TotalTokens
@@ -198,7 +202,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	onMessage := func(_ context.Context, msg *schema.Message) error {
 		s.sessionStore.AppendMessage(sess.ID, msg)
 		if s.eventStore != nil {
-			evt := llm.StepEvent{
+			evt := agentevents.StepEvent{
 				Type:       string(msg.Role),
 				Content:    msg.Content,
 				ToolName:   msg.ToolName,
@@ -207,7 +211,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 			// 对 tool_call 类型也记录参数。
 			if msg.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
 				for _, tc := range msg.ToolCalls {
-					s.eventStore.AppendEvent(runID, sess.ID, projectID, seq, llm.StepEvent{
+					s.eventStore.AppendEvent(runID, sess.ID, projectID, seq, agentevents.StepEvent{
 						Type:       "tool_call",
 						Content:    tc.Function.Name,
 						ToolName:   tc.Function.Name,
@@ -243,7 +247,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	flusher.Flush()
 
 	// 首条事件：告知客户端 session ID + Agent 类型 + 最大步数。
-	sessionEvt := llm.StepEvent{
+	sessionEvt := agentevents.StepEvent{
 		Type:      "session",
 		Content:   sess.ID,
 		AgentType: "default",
@@ -265,7 +269,7 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	}
 
 	// 末尾事件：token 用量统计。
-	statsEvt := llm.StepEvent{
+	statsEvt := agentevents.StepEvent{
 		Type:    "stats",
 		Tokens:  totalTokens,
 		Trimmed: trimmed,
@@ -277,4 +281,3 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
-

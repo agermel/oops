@@ -62,13 +62,15 @@ export function MCPToolList({
     toolTestsRef.current = toolTests;
   }, [toolTests]);
 
-  async function testTool(toolName: string) {
+  async function testTool(toolInfo: ToolInfo) {
+    const toolName = toolInfo.name;
+    const originalName = toolInfo.originalName || toolInfo.name;
     const key = `${connectionId}:${toolName}`;
     setTestingTools((prev) => new Set(prev).add(key));
     setToolTests((prev) => ({ ...prev, [key]: { status: "testing" } }));
     try {
       const data = await apiRequest<{ status: string; output?: string; error?: string }>(
-        mcpConnectionPaths.toolTest(connectionId, toolName),
+        mcpConnectionPaths.toolTest(connectionId, originalName),
         { method: "POST" },
       );
       const result: ToolTestResult = data.status === "ok"
@@ -134,7 +136,12 @@ export function MCPToolList({
               <React.Fragment key={t.name}>
                 <tr className={`mcp-tool-row ${!enabled ? "tool-disabled" : ""}`}>
                   <td>{icon}</td>
-                  <td><code>{t.name}</code></td>
+                  <td>
+                    <code>{t.name}</code>
+                    {t.originalName && t.originalName !== t.name && (
+                      <span className="mcp-tool-original">原名 {t.originalName}</span>
+                    )}
+                  </td>
                   <td className="mcp-tool-desc">{t.description}</td>
                   <td className="mcp-tool-toggle-cell">
                     <ToggleSwitch
@@ -148,7 +155,7 @@ export function MCPToolList({
                       variant="ghost"
                       size="sm"
                       disabled={testing}
-                      onClick={() => testTool(t.name)}
+                      onClick={() => testTool(t)}
                     >
                       <Play size={12} />
                       <span>{testing ? "测试中" : "测试"}</span>

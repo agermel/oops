@@ -1,0 +1,2 @@
+{"type":"message","id":"entry_legacy_1","parentId":"","timestamp":"2026-07-05T02:59:18.82189+08:00","message":{"role":"user","content":"legacy hello"}}
+{"type":"message","id":"entry_legacy_2","parentId":"entry_legacy_1","timestamp":"2026-07-05T02:59:19.00000+08:00","message":{"role":"assistant","content":"legacy world"}}

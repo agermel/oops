@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"oops/internal/llm"
+	"oops/internal/llm/skills"
 	"oops/internal/logutil"
 
 	"go.uber.org/zap"
@@ -17,7 +17,7 @@ import (
 // handleSkillsList handles GET /api/skills.
 func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
 	if s.skillStore == nil {
-		writeJSON(w, []llm.Skill{})
+		writeJSON(w, []skills.Skill{})
 		return
 	}
 	writeJSON(w, s.skillStore.List())
@@ -37,7 +37,7 @@ func (s *Server) handleSkillsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var updated llm.Skill
+	var updated skills.Skill
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
@@ -100,7 +100,7 @@ func (s *Server) handleSkillsDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeSkillFile 将 Skill 序列化为 Markdown + YAML frontmatter 写入文件。
-func writeSkillFile(path string, skill *llm.Skill) error {
+func writeSkillFile(path string, skill *skills.Skill) error {
 	fm, err := yaml.Marshal(skill)
 	if err != nil {
 		return err

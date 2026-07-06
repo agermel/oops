@@ -1,4 +1,4 @@
-package llm
+package tools
 
 import (
 	"context"
@@ -41,8 +41,8 @@ func TestIsRetryableError(t *testing.T) {
 
 func TestIsToolError(t *testing.T) {
 	tests := []struct {
-		result   string
-		isError  bool
+		result  string
+		isError bool
 	}{
 		{"查询失败：timeout", true},
 		{"日志查询失败：connection refused", true},

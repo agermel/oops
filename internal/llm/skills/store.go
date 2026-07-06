@@ -1,4 +1,4 @@
-package llm
+package skills
 
 import (
 	"bufio"
@@ -19,7 +19,7 @@ import (
 type Skill struct {
 	Name        string `json:"name" yaml:"name"`
 	Description string `json:"description" yaml:"description"`
-	Content     string `json:"content"`  // Markdown 正文（不含 frontmatter）
+	Content     string `json:"content"` // Markdown 正文（不含 frontmatter）
 	Icon        string `json:"icon" yaml:"icon"`
 	Label       string `json:"label" yaml:"label"`
 	Color       string `json:"color" yaml:"color"`

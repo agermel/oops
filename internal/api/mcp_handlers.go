@@ -1,14 +1,16 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
-	"oops/internal/llm"
+	llmtools "oops/internal/llm/tools"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 
@@ -18,22 +20,27 @@ import (
 
 // onMCPToolsChanged 是 MCP Manager 的工具变更回调。
 // 合并原生工具和 MCP 工具后热更新 LLM Client。
-func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
+func (s *Server) onMCPToolsChanged(mcpTools []mcp.ConnectionTool) {
 	if s.llmClient == nil {
 		return
 	}
 
-	nativeTools, err := llm.NewTools(s, s.skillStore)
+	nativeTools, err := llmtools.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return
 	}
 
-	allTools := make([]tool.InvokableTool, 0, len(nativeTools)+len(mcpBaseTools))
+	mcpTools = s.withMCPToolServerNames(mcpTools)
+	mcpTools = namespaceMCPTools(mcpTools, nativeToolNames(context.Background(), nativeTools))
+	allTools := make([]tool.InvokableTool, 0, len(nativeTools)+len(mcpTools))
 	allTools = append(allTools, nativeTools...)
-	for _, bt := range mcpBaseTools {
-		if it, ok := bt.(tool.InvokableTool); ok {
-			allTools = append(allTools, it)
+	for _, mt := range mcpTools {
+		if it, ok := mt.Tool.(tool.InvokableTool); ok {
+			allTools = append(allTools, namespacedMCPTool{
+				modelName: mt.ModelName,
+				inner:     it,
+			})
 		}
 	}
 
@@ -41,15 +48,77 @@ func (s *Server) onMCPToolsChanged(mcpBaseTools []tool.BaseTool) {
 	logutil.Info("mcp: tools updated",
 		zap.Int("total", len(allTools)),
 		zap.Int("native", len(nativeTools)),
-		zap.Int("mcp", len(mcpBaseTools)),
+		zap.Int("mcp", len(mcpTools)),
 	)
+}
+
+func (s *Server) namespacedMCPToolEntries(ctx context.Context) []mcp.ConnectionTool {
+	if s.mcpManager == nil {
+		return nil
+	}
+	entries := s.withMCPToolServerNames(s.mcpManager.GetConnectionToolEntries())
+	nativeTools, err := llmtools.NewTools(s, s.skillStore)
+	if err != nil {
+		logutil.Error("mcp: create native tools", zap.Error(err))
+		return namespaceMCPTools(entries, nil)
+	}
+	return namespaceMCPTools(entries, nativeToolNames(ctx, nativeTools))
+}
+
+func (s *Server) withMCPToolServerNames(entries []mcp.ConnectionTool) []mcp.ConnectionTool {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := slices.Clone(entries)
+	if s.nodeletManager == nil {
+		return out
+	}
+
+	nodeletNames := make(map[string]string)
+	for _, n := range s.nodeletManager.List() {
+		nodeletNames[n.ID] = n.Name
+	}
+	for i := range out {
+		if name := nodeletNames[out[i].NodeletID]; name != "" {
+			out[i].ServerName = name
+		}
+	}
+	return out
+}
+
+func namespacedMCPToolsByConnection(entries []mcp.ConnectionTool) map[string][]mcp.ToolInfo {
+	byConn := make(map[string][]mcp.ToolInfo)
+	for _, entry := range entries {
+		byConn[entry.ConnectionID] = append(byConn[entry.ConnectionID], mcp.ToolInfo{
+			Name:           entry.ModelName,
+			Description:    entry.Description,
+			OriginalName:   entry.OriginalName,
+			ModelName:      entry.ModelName,
+			ConnectionType: entry.ConnectionType,
+		})
+	}
+	return byConn
+}
+
+func (s *Server) decorateMCPConnections(ctx context.Context, conns []mcp.ConnectionWithStatus) []mcp.ConnectionWithStatus {
+	byConn := namespacedMCPToolsByConnection(s.namespacedMCPToolEntries(ctx))
+	out := slices.Clone(conns)
+	for i := range out {
+		if tools, ok := byConn[out[i].ID]; ok {
+			out[i].Tools = tools
+		}
+	}
+	return out
 }
 
 // toolItem 是 GET /api/tools 返回的单个工具条目。
 type toolItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Enabled     bool   `json:"enabled"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Enabled        bool   `json:"enabled"`
+	OriginalName   string `json:"originalName,omitempty"`
+	ModelName      string `json:"modelName,omitempty"`
+	ConnectionType string `json:"connectionType,omitempty"`
 }
 
 // toolsResponse 是 GET /api/tools 的响应体。
@@ -72,8 +141,10 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 原生工具。
-	nativeTools, err := llm.NewTools(s, s.skillStore)
+	nativeTools, err := llmtools.NewTools(s, s.skillStore)
+	nativeNames := map[string]struct{}{}
 	if err == nil {
+		nativeNames = nativeToolNames(r.Context(), nativeTools)
 		for _, t := range nativeTools {
 			info, err := t.Info(r.Context())
 			if err != nil {
@@ -89,27 +160,34 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 
 	// MCP 工具（按连接分组）。
 	if s.mcpManager != nil {
-		// 构建连接 ID → 名称的映射。
-		connNames := make(map[string]string)
+		entries := s.withMCPToolServerNames(s.mcpManager.GetConnectionToolEntries())
+		connectionTools := namespacedMCPToolsByConnection(namespaceMCPTools(entries, nativeNames))
 		for _, conn := range s.mcpManager.List() {
-			connNames[conn.ID] = conn.Name
-		}
-
-		for connID, mcpTools := range s.mcpManager.GetConnectionTools() {
-			name := connNames[connID]
+			mcpTools := connectionTools[conn.ID]
+			if len(mcpTools) == 0 {
+				continue
+			}
+			name := conn.Name
 			if name == "" {
-				name = connID
+				name = conn.ID
+			}
+			groupName := name
+			if _, exists := resp.MCP[groupName]; exists {
+				groupName = fmt.Sprintf("%s (%s)", name, conn.ID)
 			}
 			items := make([]toolItem, 0, len(mcpTools))
 			for _, mt := range mcpTools {
 				items = append(items, toolItem{
-					Name:        mt.Name,
-					Description: mt.Description,
-					Enabled:     !disabled[mt.Name],
+					Name:           mt.Name,
+					Description:    mt.Description,
+					Enabled:        !disabled[mt.Name],
+					OriginalName:   mt.OriginalName,
+					ModelName:      mt.ModelName,
+					ConnectionType: mt.ConnectionType,
 				})
 			}
 			if len(items) > 0 {
-				resp.MCP[name] = items
+				resp.MCP[groupName] = items
 			}
 		}
 	}
@@ -157,7 +235,7 @@ func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []mcp.ConnectionWithStatus{})
 		return
 	}
-	writeJSON(w, s.mcpManager.List())
+	writeJSON(w, s.decorateMCPConnections(r.Context(), s.mcpManager.List()))
 }
 
 // handleMCPAdd handles POST /api/mcp/connections.

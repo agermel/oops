@@ -1,4 +1,4 @@
-package llm
+package tools
 
 import (
 	"context"
@@ -12,12 +12,12 @@ import (
 
 // fakeOpsData 是 OpsData 的测试用假实现。
 type fakeOpsData struct {
-	nodelets    []NodeletSummary
-	containers  []nodelet.Container
-	logs        []nodelet.LogEntry
-	repoURL     string
-	execResult  nodelet.ExecResult
-	err         error
+	nodelets   []NodeletSummary
+	containers []nodelet.Container
+	logs       []nodelet.LogEntry
+	repoURL    string
+	execResult nodelet.ExecResult
+	err        error
 }
 
 func (f *fakeOpsData) ListNodelets(_ context.Context) ([]NodeletSummary, error) {
@@ -148,4 +148,3 @@ func TestGetLogsTool(t *testing.T) {
 		t.Fatalf("result = %s, want empty message", result)
 	}
 }
-

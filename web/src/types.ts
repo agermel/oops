@@ -145,6 +145,9 @@ export type MCPConnectionConfig = {
 export type ToolInfo = {
   name: string;
   description: string;
+  originalName?: string;
+  modelName?: string;
+  connectionType?: string;
 };
 
 // ToolTestResult 表示前端单个工具的测试状态。
