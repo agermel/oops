@@ -214,7 +214,7 @@ func (s *Server) handleMCPRemove(w http.ResponseWriter, r *http.Request) {
 	writeJSONOK(w)
 }
 
-// handleMCPTest handles POST /api/mcp/connections/{id}/test and POST /api/mcp/connections/test.
+// handleMCPTest handles POST /api/mcp/connections/test.
 func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 	var cfg mcp.ConnectionConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -265,4 +265,3 @@ func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, map[string]string{"status": "ok", "output": output})
 }
-

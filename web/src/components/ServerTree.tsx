@@ -1,8 +1,9 @@
-import { Server, ChevronDown, ChevronRight, Plus, Trash2, EyeOff, Eye, Wrench } from "lucide-react";
+import { Server, ChevronDown, ChevronRight, Plus, Trash2, EyeOff, Eye, Wrench, RefreshCw } from "lucide-react";
 import React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ServerWithNodelet, ProjectMCPConnection, MCPPrefill, ProjectSelection } from "../types";
 import { serviceTypeIcons, serviceLabel, mcpStatusLabel } from "../types";
-import { getErrorMessage } from "../lib/api";
+import { apiRequest, getErrorMessage } from "../lib/api";
 import {
   useDeleteServer,
   useAddServer,
@@ -13,6 +14,11 @@ import {
 } from "../hooks/useServers";
 import { useNodelets } from "../hooks/useNodelets";
 import { useToggle } from "../hooks/useToggle";
+import { useSet } from "../hooks/useSet";
+import { queryKeys } from "../hooks/queries";
+import { normalizeMCPConnectionConfig } from "../lib/mcpConfig";
+import { containerStatusPresentation } from "../lib/serverTreeState";
+import { mcpConnectionPaths, nodeletPaths } from "../lib/paths";
 import { Modal } from "./Modal";
 import { StatusDot } from "./StatusPill";
 import { Button } from "./ui/Button";
@@ -42,6 +48,7 @@ function ServerContainers({
   const [expandedHidden, setExpandedHidden] = React.useState(false);
   const onSelectRef = React.useRef(onSelect);
   onSelectRef.current = onSelect;
+  const containerListStale = Boolean(srvError || containerError);
 
   const excludedRefs = React.useMemo(() => new Set(excludedContainerRefs || []), [excludedContainerRefs]);
   const visibleContainers = React.useMemo(
@@ -59,12 +66,12 @@ function ServerContainers({
     selection.kind === "nodelet" && selection.nodeletId === nodeletId && selectedContainerID === "";
 
   React.useEffect(() => {
-    if (!isLoading && conts.length > 0 && shouldAutoSelect) {
+    if (!containerListStale && !isLoading && conts.length > 0 && shouldAutoSelect) {
       if (visibleContainers.length > 0) {
         onSelectRef.current(visibleContainers[0].id);
       }
     }
-  }, [isLoading, conts.length, shouldAutoSelect, visibleContainers]);
+  }, [containerListStale, isLoading, conts.length, shouldAutoSelect, visibleContainers]);
 
   React.useEffect(() => {
     if (selectedHidden) setExpandedHidden(true);
@@ -87,14 +94,20 @@ function ServerContainers({
           ? c.ports.map((p) => p.hostPort ? `${p.hostPort}->${p.containerPort}/${p.protocol || "tcp"}` : `${p.containerPort}/${p.protocol || "tcp"}`).join(", ")
           : "";
         const selected = selectedContainerID === c.id;
+        const status = containerStatusPresentation({
+          containerState: c.state,
+          stale: containerListStale,
+        });
         return (
           <div
             key={c.id}
-            className={`tree-container ${selected ? "selected" : ""}`}
+            className={`tree-container ${selected ? "selected" : ""} ${status.disabled ? "stale" : ""}`}
             role="button"
-            tabIndex={0}
-            onClick={() => onSelect(c.id)}
+            tabIndex={status.disabled ? -1 : 0}
+            aria-disabled={status.disabled || undefined}
+            onClick={() => { if (!status.disabled) onSelect(c.id); }}
             onKeyDown={(e) => {
+              if (status.disabled) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onSelect(c.id);
@@ -119,7 +132,7 @@ function ServerContainers({
                 <EyeOff size={12} />
               </Button>
               {label && <span className="tree-container-type">{label}</span>}
-              <StatusDot alive={c.state === "running"} />
+              <StatusDot alive={status.alive} unknown={status.unknown} title={status.title} />
             </div>
           </div>
         );
@@ -138,14 +151,20 @@ function ServerContainers({
               const Icon = serviceTypeIcons[c.serviceType] || serviceTypeIcons.unknown;
               const label = serviceLabel(c.serviceType);
               const selected = selectedContainerID === c.id;
+              const status = containerStatusPresentation({
+                containerState: c.state,
+                stale: containerListStale,
+              });
               return (
                 <div
                   key={c.id}
-                  className={`tree-hidden-item ${selected ? "selected" : ""}`}
+                  className={`tree-hidden-item ${selected ? "selected" : ""} ${status.disabled ? "stale" : ""}`}
                   role="button"
-                  tabIndex={0}
-                  onClick={() => onSelect(c.id)}
+                  tabIndex={status.disabled ? -1 : 0}
+                  aria-disabled={status.disabled || undefined}
+                  onClick={() => { if (!status.disabled) onSelect(c.id); }}
                   onKeyDown={(e) => {
+                    if (status.disabled) return;
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
                       onSelect(c.id);
@@ -211,7 +230,12 @@ export function ServerTree({
   const treeListRef = React.useRef<HTMLDivElement>(null);
 
   const [serversExpanded, { toggle: toggleServers }] = useToggle(true);
-  const [mcpExpanded, { toggle: toggleMCP, on: openMCPSection }] = useToggle(false);
+  const [mcpExpanded, { toggle: toggleMCP, on: openMCPSection }] = useToggle(true);
+  const queryClient = useQueryClient();
+  const [refreshingNodeletId, setRefreshingNodeletId] = React.useState("");
+  const refreshingMCPIds = useSet();
+  const [serverRefreshError, setServerRefreshError] = React.useState("");
+  const [mcpRefreshErrors, setMCPRefreshErrors] = React.useState<Record<string, string>>({});
 
   const { data: nodelets = [], isLoading: nodeletsLoading } = useNodelets();
   const deleteServer = useDeleteServer(projectId);
@@ -237,6 +261,53 @@ export function ServerTree({
   function removeServer(nodeletID: string) {
     if (!window.confirm(`确定要从项目中移除服务器吗？`)) return;
     deleteServer.mutate(nodeletID);
+  }
+
+  async function refreshServer(nodeletID: string) {
+    if (refreshingNodeletId) return;
+    setServerRefreshError("");
+    setRefreshingNodeletId(nodeletID);
+    try {
+      await apiRequest(nodeletPaths(nodeletID).probe, { method: "POST" });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.nodelets.status }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.servers.byProject(projectId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.containers.byServer(projectId, nodeletID) }),
+      ]);
+    } catch (err) {
+      setServerRefreshError(getErrorMessage(err, "刷新服务器失败"));
+    } finally {
+      setRefreshingNodeletId("");
+    }
+  }
+
+  async function refreshMCPConnection(conn: ProjectMCPConnection) {
+    if (refreshingMCPIds.has(conn.id)) return;
+    setMCPRefreshErrors((prev) => {
+      const next = { ...prev };
+      delete next[conn.id];
+      return next;
+    });
+    refreshingMCPIds.add(conn.id);
+    try {
+      const data = await apiRequest<{ status: string; error?: string }>(mcpConnectionPaths.test, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(normalizeMCPConnectionConfig(conn)),
+      });
+      if (data.status !== "ok") {
+        setMCPRefreshErrors((prev) => ({ ...prev, [conn.id]: data.error || "MCP 连接不可用" }));
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.mcp.byProject(projectId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tools.all }),
+      ]);
+    } catch (err) {
+      setMCPRefreshErrors((prev) => ({ ...prev, [conn.id]: getErrorMessage(err, "刷新 MCP 连接失败") }));
+    } finally {
+      refreshingMCPIds.remove(conn.id);
+    }
   }
 
   function handleAddServer(nodeletID: string) {
@@ -334,6 +405,7 @@ export function ServerTree({
   const addError = deleteServer.error || addServer.error
     ? getErrorMessage(deleteServer.error || addServer.error, "操作失败")
     : "";
+  const actionError = serverRefreshError || addError;
   const addingID = addServer.isPending ? addServer.variables : "";
 
   const existingIDs = new Set(servers.map((s) => s.nodelet.id));
@@ -368,7 +440,7 @@ export function ServerTree({
       </div>
 
       {serverError && <div className="error-banner">{serverError}</div>}
-      {addError && <div className="error-banner">{addError}</div>}
+      {actionError && <div className="error-banner">{actionError}</div>}
 
       {/* ---- 统一滚动区：服务器区 + MCP 区 ---- */}
       <div className="tree-list" ref={treeListRef}>
@@ -422,6 +494,20 @@ export function ServerTree({
                         </div>
                         <StatusDot alive={sw.host?.available ?? false} unknown={isStatusUnknown} />
                       </button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className="tree-remove-btn"
+                        title="刷新此服务器"
+                        aria-label={`刷新 ${sw.nodelet.name}`}
+                        disabled={Boolean(refreshingNodeletId)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void refreshServer(sw.nodelet.id);
+                        }}
+                      >
+                        <RefreshCw size={12} className={refreshingNodeletId === sw.nodelet.id ? "spin" : ""} />
+                      </Button>
                       <Button size="xs" variant="ghost" className="tree-remove-btn" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
                         <Trash2 size={12} />
                       </Button>
@@ -479,6 +565,7 @@ export function ServerTree({
             {mcpConns.map((conn) => {
               const Icon = serviceTypeIcons[conn.type] || serviceTypeIcons.unknown;
               const isSelected = selection.kind === "mcp" && selection.connectionId === conn.id;
+              const refreshError = mcpRefreshErrors[conn.id] || "";
               return (
                 <div
                   key={conn.id}
@@ -498,15 +585,30 @@ export function ServerTree({
                   <div className="tree-container-info">
                     <span className="tree-container-name">{conn.name}</span>
                     <span className="tree-container-sub">
-                      {mcpStatusLabel[conn.status || "stopped"]}
+                      {refreshError ? "刷新失败" : mcpStatusLabel[conn.status || "stopped"]}
                       {conn.toolCount > 0 ? ` · ${conn.toolCount} tools` : ""}
                     </span>
                   </div>
                   <div className="tree-container-side">
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="tree-remove-btn"
+                      title="刷新此 MCP 连接"
+                      aria-label={`刷新 ${conn.name}`}
+                      disabled={refreshingMCPIds.has(conn.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void refreshMCPConnection(conn);
+                      }}
+                    >
+                      <RefreshCw size={12} className={refreshingMCPIds.has(conn.id) ? "spin" : ""} />
+                    </Button>
                     <StatusDot
                       alive={conn.status === "running"}
                       loading={conn.status === "starting"}
-                      unknown={conn.status !== "running" && conn.status !== "stopped" && conn.status !== "starting"}
+                      unknown={Boolean(refreshError) || (conn.status !== "running" && conn.status !== "stopped" && conn.status !== "starting")}
+                      title={refreshError || conn.error}
                     />
                   </div>
                 </div>

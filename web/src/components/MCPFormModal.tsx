@@ -9,6 +9,16 @@ import type {
 } from "../types";
 import { serviceLabel } from "../types";
 import { apiRequest, getErrorMessage } from "../lib/api";
+import type { MCPCredentials as Credentials } from "../lib/mcpConfig";
+import {
+  buildMCPConnectionConfig as formToConfig,
+  emptyMCPCredentials as emptyCreds,
+  joinHostPort,
+  parseMCPConnectionCredentials as parseCredentials,
+  stripGeneratedMCPArgs as stripGeneratedArgs,
+  stripGeneratedMCPEnv as stripGeneratedEnv,
+  validateMCPCredentials as validateCredentials,
+} from "../lib/mcpConfig";
 import { mcpConnectionPaths, serverPaths } from "../lib/paths";
 import { queryKeys } from "../hooks/queries";
 import { Modal } from "./Modal";
@@ -62,31 +72,8 @@ const typeDefaults: Record<string, { command: string; args: string[]; env: strin
 // 哪些类型显示连接参数字段
 const typesWithCredentials = new Set(["mysql", "redis", "postgres", "etcd", "elasticsearch", "kafka", "nacos"]);
 
-// ---- 连接参数 ----
-type Credentials = {
-  host: string;
-  port: string;
-  user: string;
-  password: string;
-  database: string;
-};
-
-function emptyCreds(): Credentials {
-  return { host: "", port: "", user: "", password: "", database: "" };
-}
-
 function parseArgLines(value: string): string[] {
   return value.split("\n").map((arg) => arg.trim()).filter(Boolean);
-}
-
-function envKey(line: string): string {
-  return line.split("=")[0]?.trim() || "";
-}
-
-function argValue(args: string[], flag: string): string {
-  const idx = args.indexOf(flag);
-  if (idx < 0) return "";
-  return args[idx + 1] || "";
 }
 
 // 每种类型展示的连接参数字段（按序）。
@@ -95,7 +82,21 @@ interface CredentialField {
   label: string;
   /** 设为 true 时使用 password 输入框 */
   isPassword?: boolean;
+  options?: Array<{ value: string; label: string }>;
 }
+
+const kafkaSecurityProtocolOptions = [
+  { value: "sasl_plaintext", label: "SASL_PLAINTEXT" },
+  { value: "sasl_ssl", label: "SASL_SSL" },
+  { value: "plaintext", label: "PLAINTEXT" },
+  { value: "ssl", label: "SSL" },
+];
+
+const kafkaSaslMechanismOptions = [
+  { value: "PLAIN", label: "PLAIN" },
+  { value: "SCRAM-SHA-256", label: "SCRAM-SHA-256" },
+  { value: "SCRAM-SHA-512", label: "SCRAM-SHA-512" },
+];
 
 const typeCredentialFields: Record<string, CredentialField[]> = {
   mysql: [
@@ -133,6 +134,10 @@ const typeCredentialFields: Record<string, CredentialField[]> = {
   kafka: [
     { key: "host", label: "Bootstrap Servers" },
     { key: "port", label: "端口" },
+    { key: "user", label: "用户名 / API Key" },
+    { key: "password", label: "密码 / API Secret", isPassword: true },
+    { key: "securityProtocol", label: "Security Protocol", options: kafkaSecurityProtocolOptions },
+    { key: "saslMechanism", label: "SASL Mechanism", options: kafkaSaslMechanismOptions },
   ],
   nacos: [
     { key: "host", label: "Nacos 地址" },
@@ -142,173 +147,6 @@ const typeCredentialFields: Record<string, CredentialField[]> = {
     { key: "database", label: "命名空间（可选）" },
   ],
 };
-
-function splitHostPort(value: string): { host: string; port: string } {
-  const first = value.split(",")[0]?.trim() || "";
-  const match = first.match(/^(?:[a-zA-Z]+:\/\/)?([^:]+):(\d+)$/);
-  if (!match || first !== value.trim()) return { host: value, port: "" };
-  return { host: match[1] || "", port: match[2] || "" };
-}
-
-function joinHostPort(host: string, port: string): string {
-  if (!host) return "";
-  if (!port || host.includes(":") || host.includes(",") || host.includes("://")) return host;
-  return `${host}:${port}`;
-}
-
-// 从环境变量列表反解连接参数
-function parseCredentials(type: string, env: string[], args: string[] = []): Credentials {
-  const creds = emptyCreds();
-  if (type === "mysql") {
-    const dsn = env.find((e) => e.startsWith("MYSQL_DSN="))?.slice("MYSQL_DSN=".length) || "";
-    const m = dsn.match(/^([^:]*):([^@]*)@tcp\(([^:]*):(\d*)\)\/(.*?)(\?.*)?$/);
-    if (m) {
-      creds.user = m[1] || "";
-      creds.password = m[2] || "";
-      creds.host = m[3] || "";
-      creds.port = m[4] || "";
-      creds.database = m[5] || "";
-    }
-  } else if (type === "redis") {
-    creds.host = env.find((e) => e.startsWith("REDIS_HOST="))?.slice("REDIS_HOST=".length) || "";
-    creds.port = env.find((e) => e.startsWith("REDIS_PORT="))?.slice("REDIS_PORT=".length) || "";
-    creds.user = env.find((e) => e.startsWith("REDIS_USERNAME="))?.slice("REDIS_USERNAME=".length) || "";
-    creds.password = env.find((e) => e.startsWith("REDIS_PWD="))?.slice("REDIS_PWD=".length) || "";
-    creds.database = env.find((e) => e.startsWith("REDIS_DB="))?.slice("REDIS_DB=".length) || "";
-  } else if (type === "postgres") {
-    const dsn = env.find((e) => e.startsWith("DATABASE_URL="))?.slice("DATABASE_URL=".length) || "";
-    const m = dsn.match(/^postgres:\/\/([^:]*):([^@]*)@([^:]*):(\d*)\/(.*)$/);
-    if (m) {
-      creds.user = m[1] || "";
-      creds.password = m[2] || "";
-      creds.host = m[3] || "";
-      creds.port = m[4] || "";
-      creds.database = m[5] || "";
-    }
-  } else if (type === "etcd") {
-    creds.host = env.find((e) => e.startsWith("ETCD_ENDPOINTS="))?.slice("ETCD_ENDPOINTS=".length) || "";
-    creds.user = env.find((e) => e.startsWith("ETCD_USERNAME="))?.slice("ETCD_USERNAME=".length) || "";
-    creds.password = env.find((e) => e.startsWith("ETCD_PASSWORD="))?.slice("ETCD_PASSWORD=".length) || "";
-  } else if (type === "elasticsearch") {
-    const esUrl =
-      env.find((e) => e.startsWith("ELASTICSEARCH_HOSTS="))?.slice("ELASTICSEARCH_HOSTS=".length) ||
-      env.find((e) => e.startsWith("ELASTICSEARCH_URL="))?.slice("ELASTICSEARCH_URL=".length) ||
-      "";
-    const m = esUrl.match(/^(?:https?:\/\/)(?:([^:]+):([^@]+)@)?([^:/]+)(?::(\d+))?/);
-    if (m) {
-      creds.user = m[1] || env.find((e) => e.startsWith("ELASTICSEARCH_USERNAME="))?.slice("ELASTICSEARCH_USERNAME=".length) || "";
-      creds.password = m[2] || env.find((e) => e.startsWith("ELASTICSEARCH_PASSWORD="))?.slice("ELASTICSEARCH_PASSWORD=".length) || "";
-      creds.host = m[3] || "";
-      creds.port = m[4] || "9200";
-    } else {
-      creds.host = esUrl || "";
-      creds.port = "9200";
-    }
-  } else if (type === "kafka") {
-    const bootstrap =
-      env.find((e) => e.startsWith("BOOTSTRAP_SERVERS="))?.slice("BOOTSTRAP_SERVERS=".length) ||
-      env.find((e) => e.startsWith("KAFKA_BOOTSTRAP_SERVERS="))?.slice("KAFKA_BOOTSTRAP_SERVERS=".length) ||
-      "";
-    const parsed = splitHostPort(bootstrap);
-    creds.host = parsed.host;
-    creds.port = parsed.port;
-  } else if (type === "nacos") {
-    const addr = env.find((e) => e.startsWith("NACOS_ADDR="))?.slice("NACOS_ADDR=".length) || "";
-    const parsed = splitHostPort(addr);
-    creds.host = parsed.host || argValue(args, "--host");
-    creds.port = parsed.port || argValue(args, "--port");
-    creds.user = env.find((e) => e.startsWith("NACOS_USERNAME="))?.slice("NACOS_USERNAME=".length) || "";
-    creds.password = env.find((e) => e.startsWith("NACOS_PASSWORD="))?.slice("NACOS_PASSWORD=".length) || "";
-    creds.database = env.find((e) => e.startsWith("NACOS_NAMESPACE="))?.slice("NACOS_NAMESPACE=".length) || "";
-  }
-  return creds;
-}
-
-function credentialsToArgs(type: string, creds: Credentials): string[] | null {
-  void creds;
-  if (type !== "nacos") return null;
-  return [];
-}
-
-function stripGeneratedEnv(type: string, env: string[], creds: Credentials): string[] {
-  const generated = credentialsToEnv(type, creds);
-  if (generated.length === 0) return env;
-  const generatedKeys = generatedEnvKeys(type, generated);
-  return env.filter((item) => !generatedKeys.has(envKey(item)));
-}
-
-function stripGeneratedArgs(type: string, args: string[]): string[] {
-  if (type !== "nacos") return args;
-  const generatedFlags = new Set(["--host", "--port", "--access_token"]);
-  const kept: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (generatedFlags.has(arg)) {
-      i += 1;
-      continue;
-    }
-    kept.push(arg);
-  }
-  return kept;
-}
-
-// 从连接参数生成环境变量
-function credentialsToEnv(type: string, creds: Credentials): string[] {
-  if (type === "mysql") {
-    const pass = creds.password ? `:${creds.password}` : "";
-    const dsn = `${creds.user}${pass}@tcp(${creds.host}:${creds.port})/${creds.database}?charset=utf8mb4`;
-    if (!creds.user && !creds.host) return [];
-    return [`MYSQL_DSN=${dsn}`];
-  }
-  if (type === "redis") {
-    const env: string[] = [];
-    if (creds.host) env.push(`REDIS_HOST=${creds.host}`);
-    if (creds.port) env.push(`REDIS_PORT=${creds.port}`);
-    env.push(`REDIS_USERNAME=${creds.user}`);
-    if (creds.database) env.push(`REDIS_DB=${creds.database}`);
-    if (creds.password) env.push(`REDIS_PWD=${creds.password}`);
-    return env;
-  }
-  if (type === "postgres") {
-    const pass = creds.password ? `:${creds.password}` : "";
-    const dsn = `postgres://${creds.user}${pass}@${creds.host}:${creds.port}/${creds.database}`;
-    if (!creds.user && !creds.host) return [];
-    return [`DATABASE_URL=${dsn}`];
-  }
-  if (type === "etcd") {
-    const env: string[] = [];
-    if (creds.host) env.push(`ETCD_ENDPOINTS=${creds.host}`);
-    if (creds.user) env.push(`ETCD_USERNAME=${creds.user}`);
-    if (creds.password) env.push(`ETCD_PASSWORD=${creds.password}`);
-    return env;
-  }
-  if (type === "elasticsearch") {
-    const env: string[] = [];
-    if (creds.host) {
-      const port = creds.port !== "9200" ? `:${creds.port}` : ":9200";
-      env.push(`ELASTICSEARCH_HOSTS=http://${creds.host}${port}`);
-    }
-    if (creds.user) env.push(`ELASTICSEARCH_USERNAME=${creds.user}`);
-    if (creds.password) env.push(`ELASTICSEARCH_PASSWORD=${creds.password}`);
-    return env;
-  }
-  if (type === "kafka") {
-    const env: string[] = [];
-    const bootstrap = joinHostPort(creds.host, creds.port);
-    if (bootstrap) env.push(`BOOTSTRAP_SERVERS=${bootstrap}`);
-    return env;
-  }
-  if (type === "nacos") {
-    const env: string[] = [];
-    const addr = joinHostPort(creds.host, creds.port);
-    if (addr) env.push(`NACOS_ADDR=${addr}`);
-    if (creds.user) env.push(`NACOS_USERNAME=${creds.user}`);
-    if (creds.password) env.push(`NACOS_PASSWORD=${creds.password}`);
-    if (creds.database) env.push(`NACOS_NAMESPACE=${creds.database}`);
-    return env;
-  }
-  return [];
-}
 
 function emptyForm(type?: string): MCPConnectionStatus {
   const t = type || "mysql";
@@ -326,33 +164,6 @@ function emptyForm(type?: string): MCPConnectionStatus {
     status: "stopped",
     toolCount: 0,
   };
-}
-
-function formToConfig(form: MCPConnectionStatus, creds: Credentials): MCPConnectionConfig {
-  const generatedEnv = credentialsToEnv(form.type, creds);
-  const generatedKeys = generatedEnvKeys(form.type, generatedEnv);
-  const extraEnv = form.env.filter((item) => !generatedKeys.has(envKey(item)));
-  const generatedArgs = credentialsToArgs(form.type, creds) || [];
-  return {
-    id: form.id,
-    name: form.name,
-    type: form.type,
-    transport: form.transport,
-    command: form.command,
-    args: [...generatedArgs, ...form.args],
-    env: [...generatedEnv, ...extraEnv],
-    url: form.url,
-    enabled: form.enabled,
-    containerId: form.containerId,
-    nodeletId: form.nodeletId,
-  };
-}
-
-function generatedEnvKeys(type: string, generated: string[]): Set<string> {
-  const keys = new Set(generated.map(envKey));
-  if (type === "elasticsearch") keys.add("ELASTICSEARCH_URL");
-  if (type === "kafka") keys.add("KAFKA_BOOTSTRAP_SERVERS");
-  return keys;
 }
 
 function bindingOptionLabel(option: MCPContainerBindingOption): string {
@@ -449,7 +260,13 @@ function envFromDSN(type: string, dsn: Record<string, string>): string[] {
   if (type === "kafka") {
     const bootstrap = host ? joinHostPort(host, port || "9092") : raw;
     if (!bootstrap) return [];
-    return [`BOOTSTRAP_SERVERS=${bootstrap}`];
+    return [
+      `BOOTSTRAP_SERVERS=${bootstrap}`,
+      user && password ? `KAFKA_API_KEY=${user}` : "",
+      user && password ? `KAFKA_API_SECRET=${password}` : "",
+      user && password ? "KAFKA_SECURITY_PROTOCOL=sasl_plaintext" : "",
+      user && password ? "KAFKA_SASL_MECHANISM=PLAIN" : "",
+    ].filter(Boolean);
   }
   if (type === "nacos") {
     const addr = host ? joinHostPort(host, port || "8848") : raw;
@@ -671,6 +488,11 @@ export function MCPFormModal({
       setSaveError("请从列表中选择绑定容器，或清空绑定");
       return;
     }
+    const credentialError = validateCredentials(editing.type, creds);
+    if (credentialError) {
+      setSaveError(credentialError);
+      return;
+    }
     setSaving(true);
     setSaveError("");
     const body = formToConfig(editing, creds);
@@ -703,6 +525,11 @@ export function MCPFormModal({
 
   async function handleTest() {
     if (!editing) return;
+    const credentialError = validateCredentials(editing.type, creds);
+    if (credentialError) {
+      setTestResult(credentialError);
+      return;
+    }
     setTesting(true);
     setTestResult("");
     try {
@@ -915,7 +742,19 @@ export function MCPFormModal({
             {credFields.map((f) => (
               <React.Fragment key={f.key}>
                 <label htmlFor={`mcp-creds-${f.key}`}>{f.label}</label>
-                {f.isPassword ? (
+                {f.options ? (
+                  <select
+                    id={`mcp-creds-${f.key}`}
+                    value={creds[f.key]}
+                    onChange={(e) => updateCreds({ [f.key]: e.target.value })}
+                  >
+                    {f.options.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.isPassword ? (
                   <input
                     id={`mcp-creds-${f.key}`}
                     className="form-input"

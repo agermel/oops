@@ -321,7 +321,7 @@ All authenticated routes pass through: `securityHeaders → rateLimit → authMi
 | `POST` | `/api/mcp/connections` | Add MCP connection |
 | `PUT` | `/api/mcp/connections/{id}` | Update MCP connection |
 | `DELETE` | `/api/mcp/connections/{id}` | Remove MCP connection |
-| `POST` | `/api/mcp/connections/{id}/test` | Test MCP connection |
+| `POST` | `/api/mcp/connections/test` | Test MCP connection |
 | `POST` | `/api/mcp/connections/{id}/tools/{toolName}/test` | Test a specific MCP tool |
 
 ### Tools & Skills

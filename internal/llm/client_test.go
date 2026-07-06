@@ -3,11 +3,14 @@ package llm
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	"oops/internal/config"
 
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -38,6 +41,33 @@ func TestClientNew(t *testing.T) {
 	}
 	if len(client.tools) != 8 {
 		t.Fatalf("len(client.tools) = %d, want 8", len(client.tools))
+	}
+}
+
+func TestClientDeduplicatesToolNames(t *testing.T) {
+	cfg := config.LLMConfig{
+		Enabled: true,
+		Model:   "gpt-4o-mini",
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "test-key",
+	}
+
+	first := newNamedTestTool(t, "duplicate")
+	second := newNamedTestTool(t, "duplicate")
+	other := newNamedTestTool(t, "other")
+
+	client, err := NewClient(context.Background(), cfg, []tool.InvokableTool{first, second, other})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	if got, want := toolNames(t, client.tools), []string{"duplicate", "other"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("client.tools names = %v, want %v", got, want)
+	}
+
+	client.UpdateTools([]tool.InvokableTool{other, first, second})
+	if got, want := toolNames(t, client.tools), []string{"other", "duplicate"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("client.tools names after UpdateTools = %v, want %v", got, want)
 	}
 }
 
@@ -91,4 +121,28 @@ func TestClientAskSkipped(t *testing.T) {
 		t.Fatal("Ask() returned empty answer")
 	}
 	t.Logf("Answer: %s", answer)
+}
+
+func newNamedTestTool(t *testing.T, name string) tool.InvokableTool {
+	t.Helper()
+	it, err := utils.InferTool(name, "test tool", func(_ context.Context, _ *struct{}) (string, error) {
+		return name, nil
+	})
+	if err != nil {
+		t.Fatalf("InferTool(%q) error = %v", name, err)
+	}
+	return it
+}
+
+func toolNames(t *testing.T, tools []tool.InvokableTool) []string {
+	t.Helper()
+	names := make([]string, 0, len(tools))
+	for _, it := range tools {
+		info, err := it.Info(context.Background())
+		if err != nil {
+			t.Fatalf("Info() error = %v", err)
+		}
+		names = append(names, info.Name)
+	}
+	return names
 }

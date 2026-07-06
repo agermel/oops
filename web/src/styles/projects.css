@@ -521,6 +521,15 @@
   background: var(--surface-hover);
 }
 
+.tree-container.stale {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.tree-container.stale:hover {
+  background: none;
+}
+
 .tree-container.selected {
   background: var(--blue-50);
   color: var(--primary);
@@ -592,7 +601,20 @@
 }
 
 .tree-mcp-row .tree-container-side {
-  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px 18px;
+  align-items: center;
+  justify-items: center;
+  gap: 6px;
+  min-width: 48px;
+}
+
+.tree-mcp-row .tree-remove-btn {
+  grid-column: 1;
+}
+
+.tree-mcp-row .status-dot {
+  grid-column: 2;
 }
 
 /* ---- MCP detail header actions (in tab bar) ---- */
@@ -2117,6 +2139,16 @@
   background: var(--surface-hover);
   color: var(--gray-600);
   opacity: 0.9;
+}
+
+.tree-hidden-item.stale {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.tree-hidden-item.stale:hover {
+  background: none;
+  color: var(--gray-400);
 }
 
 .tree-hidden-item.selected {

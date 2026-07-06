@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -173,32 +174,36 @@ func (m *Manager) List() []ConnectionWithStatus {
 
 	result := make([]ConnectionWithStatus, len(m.config.Connections))
 	for i, cfg := range m.config.Connections {
-		item := ConnectionWithStatus{ConnectionConfig: cfg}
-		if proc, ok := m.processes[cfg.ID]; ok {
-			item.Status = "running"
-			item.ToolCount = len(proc.tools)
-			item.Tools = make([]ToolInfo, len(proc.tools))
-			for j, bt := range proc.tools {
-				info, err := bt.Info(context.Background())
-				if err != nil {
-					item.Tools[j] = ToolInfo{Name: "?", Description: err.Error()}
-				} else {
-					item.Tools[j] = ToolInfo{Name: info.Name, Description: info.Desc}
-				}
-			}
-		} else if cfg.Enabled {
-			if _, ok := m.starting[cfg.ID]; ok {
-				item.Status = "starting"
-			} else {
-				item.Status = "error"
-				item.Error = m.errors[cfg.ID]
-			}
-		} else {
-			item.Status = "stopped"
-		}
-		result[i] = item
+		result[i] = m.connectionStatusLocked(cfg)
 	}
 	return result
+}
+
+func (m *Manager) connectionStatusLocked(cfg ConnectionConfig) ConnectionWithStatus {
+	item := ConnectionWithStatus{ConnectionConfig: cfg}
+	if proc, ok := m.processes[cfg.ID]; ok {
+		item.Status = "running"
+		item.ToolCount = len(proc.tools)
+		item.Tools = make([]ToolInfo, len(proc.tools))
+		for j, bt := range proc.tools {
+			info, err := bt.Info(context.Background())
+			if err != nil {
+				item.Tools[j] = ToolInfo{Name: "?", Description: err.Error()}
+			} else {
+				item.Tools[j] = ToolInfo{Name: info.Name, Description: info.Desc}
+			}
+		}
+	} else if cfg.Enabled {
+		if _, ok := m.starting[cfg.ID]; ok {
+			item.Status = "starting"
+		} else {
+			item.Status = "error"
+			item.Error = m.errors[cfg.ID]
+		}
+	} else {
+		item.Status = "stopped"
+	}
+	return item
 }
 
 // FindByContainer returns the connection bound to a specific container, or nil if none exists.
@@ -209,20 +214,7 @@ func (m *Manager) FindByContainer(nodeletID, containerID string) *ConnectionWith
 	for i := range m.config.Connections {
 		cfg := &m.config.Connections[i]
 		if cfg.ContainerID == containerID && cfg.NodeletID == nodeletID {
-			item := ConnectionWithStatus{ConnectionConfig: *cfg}
-			if proc, ok := m.processes[cfg.ID]; ok {
-				item.Status = "running"
-				item.ToolCount = len(proc.tools)
-			} else if cfg.Enabled {
-				if _, ok := m.starting[cfg.ID]; ok {
-					item.Status = "starting"
-				} else {
-					item.Status = "error"
-					item.Error = m.errors[cfg.ID]
-				}
-			} else {
-				item.Status = "stopped"
-			}
+			item := m.connectionStatusLocked(*cfg)
 			return &item
 		}
 	}
@@ -256,6 +248,7 @@ func (m *Manager) GetConnectionTools() map[string][]ToolInfo {
 // Add persists a new connection and starts it asynchronously if enabled.
 func (m *Manager) Add(cfg ConnectionConfig) error {
 	m.mu.Lock()
+	cfg = normalizeConnectionConfig(cfg)
 
 	if cfg.ID == "" {
 		m.mu.Unlock()
@@ -312,6 +305,7 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 // and starts a new one asynchronously if enabled.
 func (m *Manager) Update(cfg ConnectionConfig) error {
 	m.mu.Lock()
+	cfg = normalizeConnectionConfig(cfg)
 
 	if cfg.Transport == "sse" {
 		if cfg.URL == "" {
@@ -437,7 +431,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = toolName
-	req.Params.Arguments = args
+	req.Params.Arguments = callToolArguments(args)
 
 	result, err := session.CallTool(ctx, req)
 	if err != nil {
@@ -506,6 +500,13 @@ func buildDefaultArgs(toolInfo *schema.ToolInfo) map[string]any {
 	return args
 }
 
+func callToolArguments(args map[string]any) any {
+	if len(args) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return args
+}
+
 // defaultValue maps a JSON Schema type + parameter name to a sensible test value.
 func defaultValue(name, typ string) any {
 	switch typ {
@@ -555,6 +556,10 @@ func inferStringDefault(name string) string {
 // When the tested config matches a saved connection, the runtime status is
 // updated so the UI reflects current MCP availability.
 func (m *Manager) Test(cfg ConnectionConfig) error {
+	// 为什么要在后端清洗
+	// 不是应该随着用户填写参数然后实时将参数处理好在参数页面实时渲染？
+	cfg = normalizeConnectionConfig(cfg)
+	// 执行测试，返回结果
 	err := m.testConnection(cfg)
 	m.applyTestResult(cfg, err)
 	return err
@@ -712,10 +717,7 @@ func verifyBackend(ctx context.Context, cfg ConnectionConfig, session MCPSession
 func callBackendProbe(ctx context.Context, session MCPSession, probe backendProbe) error {
 	req := mcp.CallToolRequest{}
 	req.Params.Name = probe.name
-	req.Params.Arguments = probe.args
-	if req.Params.Arguments == nil {
-		req.Params.Arguments = map[string]any{}
-	}
+	req.Params.Arguments = callToolArguments(probe.args)
 
 	result, err := session.CallTool(ctx, req)
 	if err != nil {
@@ -862,6 +864,244 @@ func expandEnvSlice(vals []string) []string {
 	return out
 }
 
+func normalizeConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
+	switch strings.ToLower(cfg.Type) {
+	case "mysql":
+		return normalizeEnvConfig(cfg, []string{
+			"MYSQL_DSN",
+		})
+	case "redis":
+		return normalizeRedisConnectionConfig(cfg)
+	case "postgres":
+		return normalizeEnvConfig(cfg, []string{
+			"DATABASE_URL",
+		})
+	case "etcd":
+		return normalizeEnvConfig(cfg, []string{
+			"ETCD_ENDPOINTS",
+			"ETCD_USERNAME",
+			"ETCD_PASSWORD",
+		})
+	case "elasticsearch":
+		return normalizeElasticsearchConnectionConfig(cfg)
+	case "kafka":
+		return normalizeKafkaConnectionConfig(cfg)
+	case "nacos":
+		return normalizeNacosConnectionConfig(cfg)
+	default:
+		return cfg
+	}
+}
+
+func normalizeEnvConfig(cfg ConnectionConfig, keys []string) ConnectionConfig {
+	generated := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := envValue(cfg.Env, key)
+		if value != "" {
+			generated = append(generated, key+"="+value)
+		}
+	}
+	return withGeneratedEnv(cfg, generated, keys)
+}
+
+func normalizeRedisConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
+	generated := make([]string, 0, 5)
+	if host := envValue(cfg.Env, "REDIS_HOST"); host != "" {
+		generated = append(generated, "REDIS_HOST="+host)
+	}
+	if port := envValue(cfg.Env, "REDIS_PORT"); port != "" {
+		generated = append(generated, "REDIS_PORT="+port)
+	}
+	if username := envValue(cfg.Env, "REDIS_USERNAME"); username != "" {
+		generated = append(generated, "REDIS_USERNAME="+username)
+	}
+	if database := envValue(cfg.Env, "REDIS_DB"); database != "" {
+		generated = append(generated, "REDIS_DB="+database)
+	}
+	if password := envValueAny(cfg.Env, "REDIS_PWD", "REDIS_PASSWORD"); password != "" {
+		generated = append(generated, "REDIS_PWD="+password)
+	}
+	return withGeneratedEnv(cfg, generated, []string{
+		"REDIS_HOST",
+		"REDIS_PORT",
+		"REDIS_USERNAME",
+		"REDIS_DB",
+		"REDIS_PWD",
+		"REDIS_PASSWORD",
+	})
+}
+
+func normalizeElasticsearchConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
+	hosts := envValueAny(cfg.Env, "ELASTICSEARCH_HOSTS", "ELASTICSEARCH_URL")
+	generated := make([]string, 0, 3)
+	if hosts != "" {
+		generated = append(generated, "ELASTICSEARCH_HOSTS="+hosts)
+	}
+	if username := envValue(cfg.Env, "ELASTICSEARCH_USERNAME"); username != "" {
+		generated = append(generated, "ELASTICSEARCH_USERNAME="+username)
+	}
+	if password := envValue(cfg.Env, "ELASTICSEARCH_PASSWORD"); password != "" {
+		generated = append(generated, "ELASTICSEARCH_PASSWORD="+password)
+	}
+	return withGeneratedEnv(cfg, generated, []string{
+		"ELASTICSEARCH_HOSTS",
+		"ELASTICSEARCH_URL",
+		"ELASTICSEARCH_USERNAME",
+		"ELASTICSEARCH_PASSWORD",
+	})
+}
+
+func normalizeKafkaConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
+	bootstrap := envValueAny(cfg.Env, "BOOTSTRAP_SERVERS", "KAFKA_BOOTSTRAP_SERVERS")
+	username := envValueAny(cfg.Env, "KAFKA_API_KEY", "KAFKA_SASL_USERNAME")
+	password := envValueAny(cfg.Env, "KAFKA_API_SECRET", "KAFKA_SASL_PASSWORD")
+	securityProtocol := envValue(cfg.Env, "KAFKA_SECURITY_PROTOCOL")
+	saslMechanism := envValueAny(cfg.Env, "KAFKA_SASL_MECHANISM", "KAFKA_SASL_MECHANISMS")
+
+	if username != "" && password != "" {
+		if securityProtocol == "" {
+			securityProtocol = "sasl_plaintext"
+		}
+		if saslMechanism == "" {
+			saslMechanism = "PLAIN"
+		}
+	}
+
+	generated := make([]string, 0, 5)
+	if bootstrap != "" {
+		generated = append(generated, "BOOTSTRAP_SERVERS="+bootstrap)
+	}
+	if username != "" && password != "" {
+		generated = append(generated, "KAFKA_API_KEY="+username)
+		generated = append(generated, "KAFKA_API_SECRET="+password)
+	}
+	if securityProtocol != "" {
+		generated = append(generated, "KAFKA_SECURITY_PROTOCOL="+securityProtocol)
+	}
+	if saslMechanism != "" {
+		generated = append(generated, "KAFKA_SASL_MECHANISM="+saslMechanism)
+	}
+	return withGeneratedEnv(cfg, generated, []string{
+		"BOOTSTRAP_SERVERS",
+		"KAFKA_BOOTSTRAP_SERVERS",
+		"KAFKA_API_KEY",
+		"KAFKA_API_SECRET",
+		"KAFKA_SASL_USERNAME",
+		"KAFKA_SASL_PASSWORD",
+		"KAFKA_SECURITY_PROTOCOL",
+		"KAFKA_SASL_MECHANISM",
+		"KAFKA_SASL_MECHANISMS",
+	})
+}
+
+func normalizeNacosConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
+	addr := envValue(cfg.Env, "NACOS_ADDR")
+	if addr == "" {
+		addr = joinHostPort(argValue(cfg.Args, "--host"), argValue(cfg.Args, "--port"))
+	}
+
+	generated := make([]string, 0, 4)
+	if addr != "" {
+		generated = append(generated, "NACOS_ADDR="+addr)
+	}
+	if username := envValue(cfg.Env, "NACOS_USERNAME"); username != "" {
+		generated = append(generated, "NACOS_USERNAME="+username)
+	}
+	if password := envValue(cfg.Env, "NACOS_PASSWORD"); password != "" {
+		generated = append(generated, "NACOS_PASSWORD="+password)
+	}
+	if namespace := envValue(cfg.Env, "NACOS_NAMESPACE"); namespace != "" {
+		generated = append(generated, "NACOS_NAMESPACE="+namespace)
+	}
+
+	cfg.Args = stripArgsWithValues(cfg.Args, []string{"--host", "--port", "--access_token"})
+	return withGeneratedEnv(cfg, generated, []string{
+		"NACOS_ADDR",
+		"NACOS_USERNAME",
+		"NACOS_PASSWORD",
+		"NACOS_NAMESPACE",
+	})
+}
+
+func withGeneratedEnv(cfg ConnectionConfig, generated []string, keys []string) ConnectionConfig {
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+	extra := make([]string, 0, len(cfg.Env))
+	for _, item := range cfg.Env {
+		if _, ok := keySet[envKey(item)]; ok {
+			continue
+		}
+		extra = append(extra, item)
+	}
+	next := append(append([]string{}, generated...), extra...)
+	if slices.Equal(cfg.Env, next) {
+		return cfg
+	}
+	cfg.Env = next
+	return cfg
+}
+
+func envKey(env string) string {
+	key, _, _ := strings.Cut(env, "=")
+	return strings.TrimSpace(key)
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
+		}
+	}
+	return ""
+}
+
+func envValueAny(env []string, keys ...string) string {
+	for _, key := range keys {
+		if value := envValue(env, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func argValue(args []string, flag string) string {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func joinHostPort(host, port string) string {
+	if host == "" {
+		return ""
+	}
+	if port == "" || strings.Contains(host, ":") || strings.Contains(host, ",") || strings.Contains(host, "://") {
+		return host
+	}
+	return host + ":" + port
+}
+
+func stripArgsWithValues(args []string, flags []string) []string {
+	flagSet := make(map[string]struct{}, len(flags))
+	for _, flag := range flags {
+		flagSet[flag] = struct{}{}
+	}
+	kept := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if _, ok := flagSet[args[i]]; ok {
+			i++
+			continue
+		}
+		kept = append(kept, args[i])
+	}
+	return kept
+}
+
 func (m *Manager) load() error {
 	ctx := context.Background()
 	records, err := m.runtime.ListMCPConnections(ctx)
@@ -871,6 +1111,17 @@ func (m *Manager) load() error {
 	m.config.Connections = mcpConnectionsFromRuntime(records)
 	if m.config.Connections == nil {
 		m.config.Connections = []ConnectionConfig{}
+	}
+	normalized := false
+	for i := range m.config.Connections {
+		next := normalizeConnectionConfig(m.config.Connections[i])
+		if !sameRuntimeConfig(m.config.Connections[i], next) {
+			m.config.Connections[i] = next
+			normalized = true
+		}
+	}
+	if normalized {
+		return m.saveLocked()
 	}
 	return nil
 }
@@ -882,6 +1133,7 @@ func (m *Manager) saveLocked() error {
 func mcpConnectionsToRuntime(connections []ConnectionConfig) []runtimestore.MCPConnectionRecord {
 	records := make([]runtimestore.MCPConnectionRecord, len(connections))
 	for i, c := range connections {
+		c = normalizeConnectionConfig(c)
 		records[i] = runtimestore.MCPConnectionRecord{
 			ID:          c.ID,
 			Name:        c.Name,

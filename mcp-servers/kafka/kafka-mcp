@@ -22,16 +22,90 @@ if [[ -n "${KAFKA_REST_URL:-}" && -z "${KAFKA_REST_ENDPOINT:-}" ]]; then
   export KAFKA_REST_ENDPOINT="${KAFKA_REST_URL}"
 fi
 
+extra_args=()
+kafka_config_file=""
+
+cleanup_kafka_config() {
+  if [[ -n "${kafka_config_file}" ]]; then
+    rm -f "${kafka_config_file}"
+    kafka_config_file=""
+  fi
+}
+
+run_mcp() {
+  if [[ -n "${kafka_config_file}" ]]; then
+    trap 'cleanup_kafka_config' EXIT
+    local status=0
+    "$@" || status=$?
+    cleanup_kafka_config
+    trap - EXIT
+    return "${status}"
+  fi
+
+  exec "$@"
+}
+
+has_arg() {
+  local needle="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [[ "${arg}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+write_property() {
+  local key="$1"
+  local value="$2"
+  if [[ -n "${value}" ]]; then
+    printf '%s=%s\n' "${key}" "${value}" >> "${kafka_config_file}"
+  fi
+}
+
+configure_kafka_args() {
+  if has_arg "--kafka-config-file" "$@"; then
+    return
+  fi
+
+  local security_protocol="${KAFKA_SECURITY_PROTOCOL:-}"
+  local sasl_mechanism="${KAFKA_SASL_MECHANISM:-${KAFKA_SASL_MECHANISMS:-}}"
+  local username="${KAFKA_API_KEY:-${KAFKA_SASL_USERNAME:-}}"
+  local password="${KAFKA_API_SECRET:-${KAFKA_SASL_PASSWORD:-}}"
+
+  if [[ -z "${security_protocol}" && -z "${sasl_mechanism}" ]]; then
+    return
+  fi
+  if [[ -z "${sasl_mechanism}" && -n "${username}" && -n "${password}" ]]; then
+    sasl_mechanism="PLAIN"
+  fi
+
+  kafka_config_file="$(mktemp "${TMPDIR:-/tmp}/oops-kafka-mcp.XXXXXX")"
+  trap 'cleanup_kafka_config' EXIT
+  chmod 600 "${kafka_config_file}"
+  write_property "bootstrap.servers" "${BOOTSTRAP_SERVERS:-}"
+  write_property "sasl.username" "${username}"
+  write_property "sasl.password" "${password}"
+  write_property "security.protocol" "${security_protocol}"
+  write_property "sasl.mechanisms" "${sasl_mechanism}"
+  extra_args+=(--kafka-config-file "${kafka_config_file}")
+}
+
+configure_kafka_args "$@"
+
 if [[ -x "${MCP_CONFLUENT_BIN}" ]]; then
-  exec "${MCP_CONFLUENT_BIN}" "$@"
+  run_mcp "${MCP_CONFLUENT_BIN}" "${extra_args[@]}" "$@"
+  exit $?
 fi
 
 run_confluent() {
-  exec "${NPX_BIN}" -y \
+  run_mcp "${NPX_BIN}" -y \
     --package "${MCP_CONFLUENT_PACKAGE}" \
     --package "${MCP_SDK_PACKAGE}" \
     --package "${ZOD_PACKAGE}" \
-    mcp-confluent "$@"
+    mcp-confluent "${extra_args[@]}" "$@"
 }
 
 node_major="$("${NODE_BIN}" -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')"
@@ -49,11 +123,12 @@ if (( node_major > NODE_MAJOR_TARGET )); then
   if command -v fnm >/dev/null 2>&1 && fnm list 2>/dev/null | grep -Eq "v${NODE_MAJOR_TARGET}\\."; then
     export npm_config_cache="${OOPS_MCP_NPM_CACHE:-${HOME}/.cache/oops/mcp-confluent-node22-npm}"
     mkdir -p "${npm_config_cache}"
-    exec fnm exec --using "${NODE_MAJOR_TARGET}" npx -y \
+    run_mcp fnm exec --using "${NODE_MAJOR_TARGET}" npx -y \
       --package "${MCP_CONFLUENT_PACKAGE}" \
       --package "${MCP_SDK_PACKAGE}" \
       --package "${ZOD_PACKAGE}" \
-      mcp-confluent "$@"
+      mcp-confluent "${extra_args[@]}" "$@"
+    exit $?
   fi
 
   if [[ "${OOPS_MCP_ALLOW_UNTESTED_NODE:-}" != "1" ]]; then

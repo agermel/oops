@@ -17,8 +17,8 @@ import (
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/cloudwego/eino/components/tool"
 	mcpp "github.com/cloudwego/eino-ext/components/tool/mcp"
+	"github.com/cloudwego/eino/components/tool"
 )
 
 // StderrBuffer is a thread-safe buffer that captures stderr output from an
@@ -65,6 +65,7 @@ func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.Base
 }
 
 func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
+	// 新连接 Client
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("stdio: create client: %w", err)
@@ -84,18 +85,7 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 		}()
 	}
 
-	// Give the MCP server time to connect to its backend before init.
-	select {
-	case <-ctx.Done():
-		c.Close()
-		stderr := stderrBuf.String()
-		if stderr != "" {
-			return nil, nil, nil, fmt.Errorf("stdio: startup timeout: %w\nstderr: %s", ctx.Err(), stderr)
-		}
-		return nil, nil, nil, ctx.Err()
-	case <-time.After(2 * time.Second):
-	}
-
+	// 握手请求？
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcp.Implementation{
@@ -103,6 +93,7 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 		Version: "1.0.0",
 	}
 
+	// 开始 initalize，只是测试一下能不能initalize？
 	if _, err = c.Initialize(ctx, initReq); err != nil {
 		c.Close()
 		stderr := stderrBuf.String()
@@ -112,6 +103,7 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool
 		return nil, nil, nil, fmt.Errorf("stdio: initialize: %w", err)
 	}
 
+	// 获取工具
 	tools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: c})
 	if err != nil {
 		c.Close()

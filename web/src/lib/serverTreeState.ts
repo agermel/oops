@@ -14,3 +14,34 @@ export function shouldAutoExpandFirstServer(input: AutoExpandInput): boolean {
   if (input.autoExpandConsumed) return false;
   return true;
 }
+
+export type ContainerStatusInput = {
+  containerState: string;
+  stale: boolean;
+};
+
+export type ContainerStatusPresentation = {
+  alive: boolean;
+  unknown: boolean;
+  disabled: boolean;
+  title: string;
+};
+
+export function containerStatusPresentation(input: ContainerStatusInput): ContainerStatusPresentation {
+  if (input.stale) {
+    return {
+      alive: false,
+      unknown: true,
+      disabled: true,
+      title: "状态未知",
+    };
+  }
+
+  const alive = input.containerState === "running";
+  return {
+    alive,
+    unknown: false,
+    disabled: false,
+    title: alive ? "运行中" : "已停止",
+  };
+}

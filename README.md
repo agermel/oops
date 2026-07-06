@@ -225,6 +225,16 @@ docker compose -f docker-compose.nodelet.yml up -d
 
 Kafka 使用 Confluent 官方 MCP Server（`@confluentinc/mcp-confluent`）。默认 Docker 镜像会在构建阶段预装并编译 Kafka MCP 依赖，运行时直接使用 `/opt/oops/mcp-confluent/node_modules/.bin/mcp-confluent`。裸机 Linux 部署时请安装 Node.js 22 LTS 和 npm，或通过 `OOPS_MCP_NODE_BIN` / `OOPS_MCP_NPX_BIN` 指向 Node 22 的二进制。
 
+Kafka MCP 表单中的用户名 / 密码会生成 `KAFKA_API_KEY` / `KAFKA_API_SECRET`。`Security Protocol` 和 `SASL Mechanism` 会写入官方 server 的 `--kafka-config-file`，常见内网 Kafka 可使用 `sasl_plaintext + PLAIN`。示例：
+
+```yaml
+bootstrap_servers: kafka.example.com:9094
+username: root
+password: <secret>
+security_protocol: sasl_plaintext
+sasl_mechanism: PLAIN
+```
+
 ---
 
 ## 项目结构

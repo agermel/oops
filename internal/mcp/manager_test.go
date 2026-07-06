@@ -1,9 +1,13 @@
 package mcp
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	runtimestore "oops/internal/store/runtime"
 )
 
@@ -45,5 +49,103 @@ func TestManagerRuntimeLoadsSQLiteConnections(t *testing.T) {
 	}
 	if list[0].Status != "stopped" {
 		t.Fatalf("status = %q, want stopped", list[0].Status)
+	}
+}
+
+func TestCallToolArgumentsKeepsEmptyObject(t *testing.T) {
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "list-topics"
+	req.Params.Arguments = callToolArguments(nil)
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, `"arguments":{}`) {
+		t.Fatalf("request json = %s", got)
+	}
+}
+
+func TestNormalizeConnectionConfigBackfillsKafkaAuthDefaults(t *testing.T) {
+	cfg := normalizeConnectionConfig(ConnectionConfig{
+		Type: "kafka",
+		Env: []string{
+			"BOOTSTRAP_SERVERS=kafka.example.com:9094",
+			"KAFKA_API_KEY=root",
+			"KAFKA_API_SECRET=secret",
+		},
+	})
+
+	if envValue(cfg.Env, "KAFKA_SECURITY_PROTOCOL") != "sasl_plaintext" {
+		t.Fatalf("KAFKA_SECURITY_PROTOCOL = %q", envValue(cfg.Env, "KAFKA_SECURITY_PROTOCOL"))
+	}
+	if envValue(cfg.Env, "KAFKA_SASL_MECHANISM") != "PLAIN" {
+		t.Fatalf("KAFKA_SASL_MECHANISM = %q", envValue(cfg.Env, "KAFKA_SASL_MECHANISM"))
+	}
+}
+
+func TestNormalizeConnectionConfigKeepsExplicitKafkaProtocol(t *testing.T) {
+	cfg := normalizeConnectionConfig(ConnectionConfig{
+		Type: "kafka",
+		Env: []string{
+			"BOOTSTRAP_SERVERS=kafka.example.com:9094",
+			"KAFKA_API_KEY=root",
+			"KAFKA_API_SECRET=secret",
+			"KAFKA_SECURITY_PROTOCOL=sasl_ssl",
+			"KAFKA_SASL_MECHANISM=SCRAM-SHA-512",
+		},
+	})
+
+	if envValue(cfg.Env, "KAFKA_SECURITY_PROTOCOL") != "sasl_ssl" {
+		t.Fatalf("KAFKA_SECURITY_PROTOCOL = %q", envValue(cfg.Env, "KAFKA_SECURITY_PROTOCOL"))
+	}
+	if envValue(cfg.Env, "KAFKA_SASL_MECHANISM") != "SCRAM-SHA-512" {
+		t.Fatalf("KAFKA_SASL_MECHANISM = %q", envValue(cfg.Env, "KAFKA_SASL_MECHANISM"))
+	}
+}
+
+func TestNormalizeConnectionConfigRemovesBlankRedisGeneratedEnv(t *testing.T) {
+	cfg := normalizeConnectionConfig(ConnectionConfig{
+		Type: "redis",
+		Env: []string{
+			"REDIS_HOST=redis.example.com",
+			"REDIS_PORT=6379",
+			"REDIS_USERNAME=",
+			"REDIS_DB=0",
+			"REDIS_PASSWORD=secret",
+			"EXTRA=1",
+		},
+	})
+
+	want := []string{
+		"REDIS_HOST=redis.example.com",
+		"REDIS_PORT=6379",
+		"REDIS_DB=0",
+		"REDIS_PWD=secret",
+		"EXTRA=1",
+	}
+	if !slices.Equal(cfg.Env, want) {
+		t.Fatalf("env = %#v, want %#v", cfg.Env, want)
+	}
+}
+
+func TestNormalizeConnectionConfigMovesNacosHostArgsToEnv(t *testing.T) {
+	cfg := normalizeConnectionConfig(ConnectionConfig{
+		Type: "nacos",
+		Args: []string{"--host", "nacos.example.com", "--port", "8848", "--debug"},
+		Env:  []string{"NACOS_USERNAME=nacos", "NACOS_PASSWORD=secret", "EXTRA=1"},
+	})
+
+	wantEnv := []string{
+		"NACOS_ADDR=nacos.example.com:8848",
+		"NACOS_USERNAME=nacos",
+		"NACOS_PASSWORD=secret",
+		"EXTRA=1",
+	}
+	if !slices.Equal(cfg.Env, wantEnv) {
+		t.Fatalf("env = %#v, want %#v", cfg.Env, wantEnv)
+	}
+	if !slices.Equal(cfg.Args, []string{"--debug"}) {
+		t.Fatalf("args = %#v, want --debug", cfg.Args)
 	}
 }

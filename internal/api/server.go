@@ -260,7 +260,6 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mcp/connections", authed(s.handleMCPAdd))
 	mux.HandleFunc("PUT /api/mcp/connections/{id}", authed(s.handleMCPUpdate))
 	mux.HandleFunc("DELETE /api/mcp/connections/{id}", authed(s.handleMCPRemove))
-	mux.HandleFunc("POST /api/mcp/connections/{id}/test", authed(s.handleMCPTest))
 	mux.HandleFunc("POST /api/mcp/connections/{id}/tools/{toolName}/test", authed(s.handleMCPToolTestRoute))
 	mux.HandleFunc("POST /api/mcp/connections/test", authed(s.handleMCPTest))
 
