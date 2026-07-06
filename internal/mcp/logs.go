@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"oops/internal/loghub"
 )
 
 const connectionLogHistorySize = 1000
@@ -22,17 +24,13 @@ type LogEntry struct {
 // ConnectionLogHub keeps recent logs for one MCP connection and fans out live entries.
 type ConnectionLogHub struct {
 	connectionID string
-	mu           sync.RWMutex
-	subscribers  map[chan LogEntry]struct{}
-	history      []LogEntry
-	pos          int
+	entries      *loghub.Hub[LogEntry]
 }
 
 func NewConnectionLogHub(connectionID string) *ConnectionLogHub {
 	return &ConnectionLogHub{
 		connectionID: connectionID,
-		subscribers:  make(map[chan LogEntry]struct{}),
-		history:      make([]LogEntry, connectionLogHistorySize),
+		entries:      loghub.New[LogEntry](connectionLogHistorySize),
 	}
 }
 
@@ -52,70 +50,19 @@ func (h *ConnectionLogHub) Append(stream, level, message string) {
 		RawMessage:   message,
 		Level:        level,
 	}
-	h.push(entry)
-	h.broadcast(entry)
+	h.entries.Push(entry)
 }
 
 func (h *ConnectionLogHub) Snapshot(tail int) []LogEntry {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	total := h.pos
-	if total > connectionLogHistorySize {
-		total = connectionLogHistorySize
-	}
-	if tail <= 0 || tail > total {
-		tail = total
-	}
-
-	out := make([]LogEntry, 0, tail)
-	start := h.pos - tail
-	for i := start; i < h.pos; i++ {
-		out = append(out, h.history[i%connectionLogHistorySize])
-	}
-	return out
+	return h.entries.Snapshot(tail)
 }
 
 func (h *ConnectionLogHub) Subscribe(tail int) (<-chan LogEntry, func()) {
-	ch := make(chan LogEntry, 256)
-
-	for _, entry := range h.Snapshot(tail) {
-		ch <- entry
-	}
-
-	h.mu.Lock()
-	h.subscribers[ch] = struct{}{}
-	h.mu.Unlock()
-
-	cancel := func() {
-		h.mu.Lock()
-		delete(h.subscribers, ch)
-		h.mu.Unlock()
-		close(ch)
-	}
-	return ch, cancel
+	return h.entries.Subscribe(tail)
 }
 
 func (h *ConnectionLogHub) LineWriter(stream string) *ConnectionLogLineWriter {
 	return &ConnectionLogLineWriter{hub: h, stream: stream}
-}
-
-func (h *ConnectionLogHub) push(entry LogEntry) {
-	h.mu.Lock()
-	h.history[h.pos%connectionLogHistorySize] = entry
-	h.pos++
-	h.mu.Unlock()
-}
-
-func (h *ConnectionLogHub) broadcast(entry LogEntry) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for ch := range h.subscribers {
-		select {
-		case ch <- entry:
-		default:
-		}
-	}
 }
 
 // ConnectionLogLineWriter turns chunked process output into connection log lines.

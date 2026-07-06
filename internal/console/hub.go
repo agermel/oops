@@ -11,8 +11,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	"oops/internal/loghub"
 )
 
 // Entry is a single console log line shipped to the browser.
@@ -28,15 +29,11 @@ const historySize = 200
 // all connected SSE subscribers. It keeps a small ring buffer so
 // new subscribers see recent history.
 type Hub struct {
-	mu          sync.RWMutex
-	subscribers map[chan Entry]struct{}
-	history     []Entry // ring buffer
-	pos         int     // next write position
+	entries *loghub.Hub[Entry]
 }
 
 var defaultHub = &Hub{
-	subscribers: make(map[chan Entry]struct{}),
-	history:     make([]Entry, historySize),
+	entries: loghub.New[Entry](historySize),
 }
 
 // Default returns the process-wide singleton hub.
@@ -55,8 +52,7 @@ func (h *Hub) Write(p []byte) (int, error) {
 		Level:     levelFrom(msg),
 		Message:   msg,
 	}
-	h.push(entry)
-	h.broadcast(entry)
+	h.entries.Push(entry)
 	return len(p), nil
 }
 
@@ -67,28 +63,6 @@ func Feed(format string, args ...any) {
 	defaultHub.Write([]byte(msg))
 }
 
-func (h *Hub) push(e Entry) {
-	h.mu.Lock()
-	h.history[h.pos%historySize] = e
-	h.pos++
-	h.mu.Unlock()
-}
-
-func (h *Hub) snapshot() []Entry {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	total := h.pos
-	if total > historySize {
-		total = historySize
-	}
-	out := make([]Entry, 0, total)
-	for i := max(0, h.pos-historySize); i < h.pos; i++ {
-		out = append(out, h.history[i%historySize])
-	}
-	return out
-}
-
 // RedirectLog sets the standard log package's output to write to both
 // os.Stderr and the hub so all log.Printf calls appear in the console.
 func RedirectLog() {
@@ -97,40 +71,10 @@ func RedirectLog() {
 	log.Default().SetOutput(multi)
 }
 
-func (h *Hub) broadcast(e Entry) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for ch := range h.subscribers {
-		select {
-		case ch <- e:
-		default:
-			// drop for slow clients
-		}
-	}
-}
-
 // Subscribe registers a new SSE subscriber. The returned channel
 // receives recent history first, then live entries. Call cancel when done.
 func (h *Hub) Subscribe() (<-chan Entry, func()) {
-	ch := make(chan Entry, 256)
-
-	// Replay recent history before adding to subscribers.
-	history := h.snapshot()
-	for _, e := range history {
-		ch <- e
-	}
-
-	h.mu.Lock()
-	h.subscribers[ch] = struct{}{}
-	h.mu.Unlock()
-
-	cancel := func() {
-		h.mu.Lock()
-		delete(h.subscribers, ch)
-		h.mu.Unlock()
-		close(ch)
-	}
-	return ch, cancel
+	return h.entries.Subscribe(historySize)
 }
 
 // SSEHandler is an http.HandlerFunc that streams console logs to the browser.
