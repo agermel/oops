@@ -452,6 +452,7 @@
 .chat-footer-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: end;
   gap: 10px;
 }
 
@@ -460,9 +461,18 @@
   font-size: var(--text-base);
 }
 
+.chat-footer-main .chat-input {
+  height: 48px;
+  max-height: 120px;
+  resize: vertical;
+  overflow-y: auto;
+  font-family: inherit;
+  line-height: 1.45;
+}
+
 .chat-footer-main button {
   width: 48px;
-  height: 40px;
+  height: 48px;
   display: grid;
   place-items: center;
   color: var(--surface-card);

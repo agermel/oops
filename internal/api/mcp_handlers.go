@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"oops/internal/config"
 	llmtools "oops/internal/llm/tools"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
@@ -53,16 +54,71 @@ func (s *Server) onMCPToolsChanged(mcpTools []mcp.ConnectionTool) {
 }
 
 func (s *Server) namespacedMCPToolEntries(ctx context.Context) []mcp.ConnectionTool {
+	return s.namespacedMCPToolEntriesForProject(ctx, "")
+}
+
+func (s *Server) namespacedMCPToolEntriesForProject(ctx context.Context, projectID string) []mcp.ConnectionTool {
 	if s.mcpManager == nil {
 		return nil
 	}
-	entries := s.withMCPToolServerNames(s.mcpManager.GetConnectionToolEntries())
+	entries := s.mcpToolEntriesForProject(projectID)
 	nativeTools, err := llmtools.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return namespaceMCPTools(entries, nil)
 	}
 	return namespaceMCPTools(entries, nativeToolNames(ctx, nativeTools))
+}
+
+func (s *Server) chatToolsAndInventory(ctx context.Context, projectID string) ([]tool.InvokableTool, string) {
+	nativeTools, err := llmtools.NewTools(s, s.skillStore)
+	if err != nil {
+		logutil.Error("mcp: create native tools", zap.Error(err))
+		return nil, ""
+	}
+	entries := s.mcpToolEntriesForProject(projectID)
+	namespacedEntries := namespaceMCPTools(entries, nativeToolNames(ctx, nativeTools))
+
+	allTools := make([]tool.InvokableTool, 0, len(nativeTools)+len(namespacedEntries))
+	allTools = append(allTools, nativeTools...)
+	for _, mt := range namespacedEntries {
+		if it, ok := mt.Tool.(tool.InvokableTool); ok {
+			allTools = append(allTools, namespacedMCPTool{
+				modelName: mt.ModelName,
+				inner:     it,
+			})
+		}
+	}
+	return allTools, formatMCPToolInventory(namespacedEntries)
+}
+
+func (s *Server) mcpToolEntriesForProject(projectID string) []mcp.ConnectionTool {
+	if s.mcpManager == nil {
+		return nil
+	}
+	entries := s.withMCPToolServerNames(s.mcpManager.GetConnectionToolEntries())
+	return filterMCPToolEntriesForProject(entries, projectID, s.projectStore)
+}
+
+func filterMCPToolEntriesForProject(entries []mcp.ConnectionTool, projectID string, projectStore *config.ProjectStore) []mcp.ConnectionTool {
+	if projectID == "" || projectStore == nil {
+		return entries
+	}
+	p := projectStore.Get(projectID)
+	if p == nil {
+		return nil
+	}
+	nodeletSet := make(map[string]struct{}, len(p.NodeletIDs))
+	for _, id := range p.NodeletIDs {
+		nodeletSet[id] = struct{}{}
+	}
+	filtered := make([]mcp.ConnectionTool, 0, len(entries))
+	for _, entry := range entries {
+		if _, ok := nodeletSet[entry.NodeletID]; ok {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func (s *Server) withMCPToolServerNames(entries []mcp.ConnectionTool) []mcp.ConnectionTool {
@@ -223,7 +279,7 @@ func mcpErrorStatus(err error) int {
 	if strings.Contains(msg, "not found") {
 		return http.StatusNotFound
 	}
-	if strings.Contains(msg, "id is required") || strings.Contains(msg, "not in the allowed list") {
+	if strings.Contains(msg, "id is required") || strings.Contains(msg, "nodeletId is required") || strings.Contains(msg, "not in the allowed list") {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError

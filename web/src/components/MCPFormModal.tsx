@@ -167,6 +167,9 @@ function emptyForm(type?: string): MCPConnectionStatus {
 }
 
 function bindingOptionLabel(option: MCPContainerBindingOption): string {
+  if (option.kind === "nodelet") {
+    return `${option.nodeletName} · 服务器`;
+  }
   return [
     option.nodeletName,
     option.containerName,
@@ -176,6 +179,9 @@ function bindingOptionLabel(option: MCPContainerBindingOption): string {
 }
 
 function bindingOptionSearchText(option: MCPContainerBindingOption): string {
+  if (option.kind === "nodelet") {
+    return `${option.nodeletName} ${option.nodeletId} 服务器`.toLowerCase();
+  }
   return [
     option.containerName,
     option.nodeletName,
@@ -185,6 +191,7 @@ function bindingOptionSearchText(option: MCPContainerBindingOption): string {
 }
 
 function bindingServiceText(option: MCPContainerBindingOption): string {
+  if (option.kind === "nodelet") return "服务器";
   return serviceLabel(option.serviceType);
 }
 
@@ -317,13 +324,17 @@ export function MCPFormModal({
 
   // Track meaningful prefill identity to avoid re-init on every render.
   const prefillKey = prefill ? `${prefill.containerId || ""}:${prefill.nodeletId || ""}:${prefill.name || ""}` : "";
-  const selectedBindingKey = editing?.nodeletId && editing.containerId
-    ? `${editing.nodeletId}/${editing.containerId}`
+  const selectedBindingKey = editing?.nodeletId
+    ? `${editing.nodeletId}/${editing.containerId || ""}`
     : "";
   const selectedBindingLabel = React.useMemo(() => {
-    if (!editing?.nodeletId || !editing.containerId) return "";
+    if (!editing?.nodeletId) return "";
+    if (!editing.containerId) {
+      const option = containerOptions.find((item) => item.kind === "nodelet" && item.nodeletId === editing.nodeletId);
+      return option ? bindingOptionLabel(option) : `${editing.nodeletId} · 服务器`;
+    }
     const option = containerOptions.find((item) =>
-      item.nodeletId === editing.nodeletId && item.containerId === editing.containerId
+      item.kind === "container" && item.nodeletId === editing.nodeletId && item.containerId === editing.containerId
     );
     return option
       ? bindingOptionLabel(option)
@@ -435,6 +446,13 @@ export function MCPFormModal({
   function applyBindingPrefill(option: MCPContainerBindingOption, config?: DSNConfig) {
     setEditing((prev) => {
       if (!prev) return prev;
+      if (option.kind === "nodelet") {
+        return {
+          ...prev,
+          nodeletId: option.nodeletId,
+          containerId: "",
+        };
+      }
       const nextType = supportedMCPType(option.serviceType, prev.type);
       const defaults = typeDefaults[nextType] || typeDefaults.other;
       const dsn = dsnRecord(config);
@@ -458,10 +476,14 @@ export function MCPFormModal({
     setBindingQuery("");
     setBindingOpen(false);
     setSaveError("");
-    setEditing((prev) => prev ? { ...prev, nodeletId: option.nodeletId, containerId: option.containerId } : prev);
+    setEditing((prev) => prev ? {
+      ...prev,
+      nodeletId: option.nodeletId,
+      containerId: option.kind === "container" ? option.containerId : "",
+    } : prev);
 
     const requestId = ++bindingDSNRequestRef.current;
-    if (!projectId) {
+    if (option.kind === "nodelet" || !projectId) {
       applyBindingPrefill(option);
       return;
     }
@@ -484,8 +506,12 @@ export function MCPFormModal({
 
   async function handleSave() {
     if (!editing || saving) return;
-    if (bindingQuery.trim() && !selectedBindingKey) {
-      setSaveError("请从列表中选择绑定容器，或清空绑定");
+    if (bindingQuery.trim()) {
+      setSaveError("请从列表中选择绑定项");
+      return;
+    }
+    if (!selectedBindingKey) {
+      setSaveError("请选择绑定服务器或容器");
       return;
     }
     const credentialError = validateCredentials(editing.type, creds);
@@ -525,6 +551,14 @@ export function MCPFormModal({
 
   async function handleTest() {
     if (!editing) return;
+    if (bindingQuery.trim()) {
+      setTestResult("请从列表中选择绑定项");
+      return;
+    }
+    if (!selectedBindingKey) {
+      setTestResult("请选择绑定服务器或容器");
+      return;
+    }
     const credentialError = validateCredentials(editing.type, creds);
     if (credentialError) {
       setTestResult(credentialError);
@@ -567,14 +601,25 @@ export function MCPFormModal({
       onClose={closeForm}
       maxWidth="560px"
       footer={
-        <>
-          <Button variant="ghost" onClick={handleTest} disabled={testing || bindingDSNLoading}>
-            {testing ? "测试中..." : "测试连接"}
-          </Button>
-          <Button onClick={handleSave} disabled={!editing?.name.trim() || saving || bindingDSNLoading}>
-            {saving ? "保存中..." : "保存"}
-          </Button>
-        </>
+        <div className="mcp-form-footer">
+          {testResult && (
+            <span
+              className={`mcp-test-result-inline ${testResult.includes("成功") ? "success" : "error"}`}
+              role="status"
+              title={testResult}
+            >
+              {testResult}
+            </span>
+          )}
+          <div className="mcp-form-actions">
+            <Button variant="ghost" onClick={handleTest} disabled={testing || bindingDSNLoading}>
+              {testing ? "测试中..." : "测试连接"}
+            </Button>
+            <Button onClick={handleSave} disabled={!editing?.name.trim() || !selectedBindingKey || saving || bindingDSNLoading}>
+              {saving ? "保存中..." : "保存"}
+            </Button>
+          </div>
+        </div>
       }
     >
       <label htmlFor="mcp-name">名称</label>
@@ -615,7 +660,7 @@ export function MCPFormModal({
         <option value="other">其他</option>
       </select>
 
-      <label htmlFor="mcp-container-binding">绑定容器</label>
+      <label htmlFor="mcp-container-binding">绑定服务器/容器</label>
       <div className="mcp-binding-control">
         <div className="mcp-binding-row">
           <div
@@ -663,20 +708,24 @@ export function MCPFormModal({
             {containerOptionsLoading ? (
               <div className="mcp-binding-empty">读取容器中...</div>
             ) : filteredBindingOptions.length === 0 ? (
-              <div className="mcp-binding-empty">没有匹配容器</div>
+              <div className="mcp-binding-empty">没有匹配绑定项</div>
             ) : (
               filteredBindingOptions.map((option) => {
-                const selected = editing?.nodeletId === option.nodeletId &&
+                const selected = option.kind === "nodelet"
+                  ? editing?.nodeletId === option.nodeletId && !editing?.containerId
+                  : editing?.nodeletId === option.nodeletId &&
                   editing?.containerId === option.containerId;
-                const metaParts = [
-                  option.containerName,
-                  bindingServiceText(option),
-                  option.containerId.slice(0, 12),
-                ].filter(Boolean);
+                const metaParts = option.kind === "nodelet"
+                  ? ["服务器级连接"]
+                  : [
+                    option.containerName,
+                    bindingServiceText(option),
+                    option.containerId.slice(0, 12),
+                  ].filter(Boolean);
                 return (
                   <button
                     type="button"
-                    key={`${option.nodeletId}/${option.containerId}`}
+                    key={option.kind === "nodelet" ? `${option.nodeletId}/` : `${option.nodeletId}/${option.containerId}`}
                     className={`mcp-binding-option ${selected ? "selected" : ""}`}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => selectBinding(option)}
@@ -691,7 +740,7 @@ export function MCPFormModal({
         )}
       </div>
       <div className="field-hint">
-        {bindingDSNLoading ? "正在读取容器 DSN..." : "选择容器后会自动填充 MCP 连接参数。"}
+        {bindingDSNLoading ? "正在读取容器 DSN..." : "MCP 连接必须绑定到项目服务器；选择容器后会自动填充连接参数。"}
       </div>
 
       <label htmlFor="mcp-transport">传输方式</label>
@@ -797,12 +846,6 @@ export function MCPFormModal({
       </label>
 
       {saveError && <div className="error-banner">{saveError}</div>}
-
-      {testResult && (
-        <div className={testResult.includes("成功") ? "success-banner" : "error-banner"}>
-          {testResult}
-        </div>
-      )}
     </Modal>
   );
 }

@@ -303,6 +303,7 @@ export function ContainerMCP({
           prefill={formPrefill}
           projectId={projectId}
           containerOptions={[{
+            kind: "container",
             nodeletId,
             nodeletName: nodeletId,
             containerId,

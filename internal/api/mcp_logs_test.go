@@ -31,6 +31,7 @@ func TestHandleMCPLogs(t *testing.T) {
 		Type:      "redis",
 		Transport: "stdio",
 		Enabled:   false,
+		NodeletID: "node-1",
 	}); err != nil {
 		t.Fatalf("add connection: %v", err)
 	}

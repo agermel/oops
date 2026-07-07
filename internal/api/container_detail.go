@@ -15,12 +15,12 @@ import (
 
 // ContainerDetail 是容器详情页的聚合视图。
 type ContainerDetail struct {
-	Container      nodelet.ContainerInspect `json:"container"`
-	ServiceType    string                   `json:"serviceType"`
-	DSN            *docker.DSNInfo          `json:"dsn,omitempty"`
-	DSNOverrides   map[string]string        `json:"dsnOverrides,omitempty"`
-	HasDSNOverrides bool                    `json:"hasDSNOverrides"`
-	MCP            *mcpStatus               `json:"mcp,omitempty"`
+	Container       nodelet.ContainerInspect `json:"container"`
+	ServiceType     string                   `json:"serviceType"`
+	DSN             *docker.DSNInfo          `json:"dsn,omitempty"`
+	DSNOverrides    map[string]string        `json:"dsnOverrides,omitempty"`
+	HasDSNOverrides bool                     `json:"hasDSNOverrides"`
+	MCP             *mcpStatus               `json:"mcp,omitempty"`
 }
 
 // mcpStatus 是容器级 MCP 连接的运行时状态。
@@ -75,16 +75,15 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 	}
 
 	result := &ContainerDetail{
-		Container:      detail,
-		ServiceType:    string(stype),
-		DSN:            dsn,
-		DSNOverrides:   dsnOverrides,
+		Container:       detail,
+		ServiceType:     string(stype),
+		DSN:             dsn,
+		DSNOverrides:    dsnOverrides,
 		HasDSNOverrides: len(dsnOverrides) > 0,
 	}
 
-	// 查找匹配的 MCP 连接：优先按容器 ID 精确匹配，回退按类型匹配。
+	// 查找绑定到当前容器的 MCP 连接。
 	if s.mcpManager != nil && (stype.IsDatabase() || stype.IsMiddleware()) {
-		// Primary: match by container binding.
 		bound := s.mcpManager.FindByContainer(nodeletID, containerID)
 		if bound != nil {
 			if bound.Status == "running" {
@@ -98,31 +97,6 @@ func (s *Server) buildContainerDetail(ctx context.Context, nodeletID string, con
 					Connected:    false,
 					Error:        bound.Error,
 					ConnectionID: bound.ID,
-				}
-			}
-		} else {
-			// Fallback: type-based matching for backward compat with
-			// existing connections that have no container binding.
-			for _, conn := range s.mcpManager.List() {
-				if conn.Type == string(stype) && conn.Status == "running" {
-					result.MCP = &mcpStatus{
-						Connected:    true,
-						ToolCount:    conn.ToolCount,
-						ConnectionID: conn.ID,
-					}
-					break
-				}
-			}
-			if result.MCP == nil {
-				for _, conn := range s.mcpManager.List() {
-					if conn.Type == string(stype) {
-						result.MCP = &mcpStatus{
-							Connected:    false,
-							Error:        conn.Error,
-							ConnectionID: conn.ID,
-						}
-						break
-					}
 				}
 			}
 		}

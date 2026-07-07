@@ -197,13 +197,15 @@ func parseEntryTimestamp(raw json.RawMessage) time.Time {
 type schemaMsg struct {
 	Role       string           `json:"role"`
 	Content    string           `json:"content"`
-	ToolCallID string           `json:"toolCallId,omitempty"`
-	ToolName   string           `json:"toolName,omitempty"`
-	ToolCalls  []schemaToolCall `json:"toolCalls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolName   string           `json:"tool_name,omitempty"`
+	ToolCalls  []schemaToolCall `json:"tool_calls,omitempty"`
 }
 
 type schemaToolCall struct {
+	Index    *int               `json:"index,omitempty"`
 	ID       string             `json:"id"`
+	Type     string             `json:"type"`
 	Function schemaToolCallFunc `json:"function"`
 }
 
@@ -221,7 +223,9 @@ func (m *schemaMsg) toSchemaMessage() *schema.Message {
 	}
 	for _, tc := range m.ToolCalls {
 		msg.ToolCalls = append(msg.ToolCalls, schema.ToolCall{
-			ID: tc.ID,
+			Index: tc.Index,
+			ID:    tc.ID,
+			Type:  tc.Type,
 			Function: schema.FunctionCall{
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,

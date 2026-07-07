@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"oops/internal/llm/prompt"
 	"oops/internal/llm/session"
 
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -100,6 +102,17 @@ type chatRequest struct {
 	Question  string `json:"question"`
 }
 
+type chatRunContext struct {
+	session     *session.Session
+	messages    []*schema.Message
+	trimmed     int
+	totalTokens int
+	maxStep     int
+	runID       string
+	seq         int
+	tools       []tool.InvokableTool
+}
+
 // handleChat 处理 LLM 对话请求。
 // 接受 session_id（可选）和 question，通过 SSE 流式返回每一步执行过程。
 // 若不传 session_id，后端自动创建新会话并通过首条 SSE 事件返回 session ID。
@@ -130,7 +143,33 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	// 获取或创建会话。
+	runCtx := s.buildChatRunContext(ctx, req, projectID)
+	onMessage := func(_ context.Context, msg *schema.Message) error {
+		s.persistAgentMessage(runCtx.session, runCtx.runID, projectID, &runCtx.seq, msg)
+		return nil
+	}
+
+	events, err := s.llmClient.AskWithTools(ctx, runCtx.tools, runCtx.messages, onMessage, runCtx.maxStep)
+	if err != nil {
+		sanitizedError(w, "chat ask", err, http.StatusInternalServerError)
+		return
+	}
+
+	flusher, err := requireFlusher(w)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	setSSEHeaders(w)
+	w.WriteHeader(http.StatusOK)
+
+	if err := streamStepEvents(w, flusher, runCtx.session.ID, events, runCtx.totalTokens, runCtx.trimmed, runCtx.maxStep); err != nil {
+		return
+	}
+}
+
+func (s *Server) buildChatRunContext(ctx context.Context, req chatRequest, projectID string) chatRunContext {
 	var sess *session.Session
 	if req.SessionID != "" {
 		sess = s.sessionStore.GetOrCreate(req.SessionID, projectID)
@@ -138,7 +177,6 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		sess = s.sessionStore.Create(projectID)
 	}
 
-	// 查项目元数据，注入 system prompt。
 	var projectCtx *prompt.ProjectContext
 	if projectID != "" && s.projectStore != nil {
 		if p := s.projectStore.Get(projectID); p != nil {
@@ -152,13 +190,11 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		}
 	}
 
-	// 使用 ContextBuilder 构建上下文（compaction + system prompt + skills）。
-	// BuildContext → compactIfNeeded → 注入摘要 → 组装。
 	var messages []*schema.Message
 	var trimmed int
 	var totalTokens int
-
 	userMsg := schema.UserMessage(req.Question)
+	tools, inventory := s.chatToolsAndInventory(ctx, projectID)
 
 	if s.contextBuilder != nil {
 		buildResult := s.contextBuilder.Build(ctx, ctxbuilder.BuildOptions{
@@ -170,7 +206,6 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		trimmed = buildResult.Trimmed
 		totalTokens = buildResult.Tokens
 	} else {
-		// 回退：手动组装（contextBuilder 未初始化时，如 skillStore 加载失败）。
 		systemPrompt := prompt.BasePrompt
 		if projectCtx != nil {
 			systemPrompt = systemPrompt + "\n\n" + prompt.FormatProjectContext(projectCtx)
@@ -190,94 +225,102 @@ func (s *Server) handleChatWithProject(w http.ResponseWriter, r *http.Request, p
 		totalTokens = trimResult.TotalTokens
 	}
 
-	// 用户消息写入 session（Build 不修改 session，这里追加）。
+	if inventory != "" {
+		messages = appendSystemPromptSection(messages, inventory)
+		trimResult := budget.TrimToBudget(messages, budget.DefaultBudget)
+		messages = trimResult.Messages
+		trimmed += trimResult.Trimmed
+		totalTokens = trimResult.TotalTokens
+	}
+
 	s.sessionStore.AppendMessage(sess.ID, userMsg)
 	maxStep := 15
 
-	// 生成 run ID（用于事件持久化）。
-	runID := sess.ID + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	return chatRunContext{
+		session:     sess,
+		messages:    messages,
+		trimmed:     trimmed,
+		totalTokens: totalTokens,
+		maxStep:     maxStep,
+		runID:       sess.ID + "_" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		tools:       tools,
+	}
+}
 
-	// onMessage 回调：agent 产生的每条新消息追加到 session + event store。
-	seq := 0
-	onMessage := func(_ context.Context, msg *schema.Message) error {
-		s.sessionStore.AppendMessage(sess.ID, msg)
-		if s.eventStore != nil {
-			evt := agentevents.StepEvent{
-				Type:       string(msg.Role),
-				Content:    msg.Content,
-				ToolName:   msg.ToolName,
-				ToolCallID: msg.ToolCallID,
-			}
-			// 对 tool_call 类型也记录参数。
-			if msg.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
-				for _, tc := range msg.ToolCalls {
-					s.eventStore.AppendEvent(runID, sess.ID, projectID, seq, agentevents.StepEvent{
-						Type:       "tool_call",
-						Content:    tc.Function.Name,
-						ToolName:   tc.Function.Name,
-						ToolArgs:   tc.Function.Arguments,
-						ToolCallID: tc.ID,
-					})
-					seq++
-				}
-			}
-			s.eventStore.AppendEvent(runID, sess.ID, projectID, seq, evt)
-			seq++
+func (s *Server) persistAgentMessage(sess *session.Session, runID, projectID string, seq *int, msg *schema.Message) {
+	s.sessionStore.AppendMessage(sess.ID, msg)
+	if s.eventStore == nil {
+		return
+	}
+
+	evt := agentevents.StepEvent{
+		Type:       string(msg.Role),
+		Content:    msg.Content,
+		ToolName:   msg.ToolName,
+		ToolCallID: msg.ToolCallID,
+	}
+	if msg.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
+		for _, tc := range msg.ToolCalls {
+			s.eventStore.AppendEvent(runID, sess.ID, projectID, *seq, agentevents.StepEvent{
+				Type:       "tool_call",
+				Content:    tc.Function.Name,
+				ToolName:   tc.Function.Name,
+				ToolArgs:   tc.Function.Arguments,
+				ToolCallID: tc.ID,
+			})
+			(*seq)++
 		}
-		return nil
 	}
+	s.eventStore.AppendEvent(runID, sess.ID, projectID, *seq, evt)
+	(*seq)++
+}
 
-	events, err := s.llmClient.Ask(ctx, messages, onMessage, maxStep)
-	if err != nil {
-		sanitizedError(w, "chat ask", err, http.StatusInternalServerError)
-		return
+func streamStepEvents(w io.Writer, flusher http.Flusher, sessionID string, events <-chan agentevents.StepEvent, totalTokens, trimmed, maxStep int) error {
+	if _, err := fmt.Fprintf(w, ":ok\n\n"); err != nil {
+		return err
 	}
-
-	flusher, err := requireFlusher(w)
-	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	setSSEHeaders(w)
-	w.WriteHeader(http.StatusOK)
-
-	// 发送初始注释，强制浏览器进入流模式。
-	fmt.Fprintf(w, ":ok\n\n")
 	flusher.Flush()
 
-	// 首条事件：告知客户端 session ID + Agent 类型 + 最大步数。
 	sessionEvt := agentevents.StepEvent{
 		Type:      "session",
-		Content:   sess.ID,
+		Content:   sessionID,
 		AgentType: "default",
 		MaxStep:   maxStep,
 	}
-	data, _ := json.Marshal(sessionEvt)
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
-
-	for evt := range events {
-		data, err := json.Marshal(evt)
-		if err != nil {
-			return
-		}
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
-			return
-		}
-		flusher.Flush()
+	if err := writeSSEData(w, flusher, sessionEvt); err != nil {
+		return err
 	}
 
-	// 末尾事件：token 用量统计。
+	for evt := range events {
+		if err := writeSSEData(w, flusher, evt); err != nil {
+			return err
+		}
+	}
+
 	statsEvt := agentevents.StepEvent{
 		Type:    "stats",
 		Tokens:  totalTokens,
 		Trimmed: trimmed,
 	}
-	statsData, _ := json.Marshal(statsEvt)
-	fmt.Fprintf(w, "data: %s\n\n", statsData)
-	flusher.Flush()
+	if err := writeSSEData(w, flusher, statsEvt); err != nil {
+		return err
+	}
 
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	if _, err := fmt.Fprintf(w, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
 	flusher.Flush()
+	return nil
+}
+
+func writeSSEData(w io.Writer, flusher http.Flusher, evt agentevents.StepEvent) error {
+	data, err := json.Marshal(evt)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
 }

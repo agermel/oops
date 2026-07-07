@@ -72,19 +72,19 @@ func (c *Client) DisabledTools() map[string]bool {
 // rebuildLocked 根据 disabled 过滤 allTools 并赋值给 c.tools。
 // 调用方必须持有 c.toolsMu。
 func (c *Client) rebuildLocked() {
-	if len(c.disabled) == 0 {
-		c.tools = c.allTools
-		return
-	}
-	filtered := make([]tool.InvokableTool, 0, len(c.allTools))
-	for _, t := range c.allTools {
+	c.tools = c.filterEnabledLocked(c.allTools)
+}
+
+func (c *Client) filterEnabledLocked(tools []tool.InvokableTool) []tool.InvokableTool {
+	filtered := make([]tool.InvokableTool, 0, len(tools))
+	for _, t := range tools {
 		info, err := t.Info(context.Background())
 		if err != nil || c.disabled[info.Name] {
 			continue
 		}
 		filtered = append(filtered, t)
 	}
-	c.tools = filtered
+	return filtered
 }
 
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
@@ -96,6 +96,15 @@ func (c *Client) Ask(ctx context.Context, messages []*schema.Message, onMessage 
 	tools := c.tools
 	c.toolsMu.RUnlock()
 	return Ask(ctx, c.model, tools, messages, onMessage, maxStep)
+}
+
+// AskWithTools runs an agent turn with a request-scoped tool list while preserving
+// the client's disabled-tool state.
+func (c *Client) AskWithTools(ctx context.Context, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan agentevents.StepEvent, error) {
+	c.toolsMu.RLock()
+	enabledTools := c.filterEnabledLocked(tools)
+	c.toolsMu.RUnlock()
+	return Ask(ctx, c.model, enabledTools, messages, onMessage, maxStep)
 }
 
 // Complete 发送无工具调用的简单补全请求（用于 compaction 摘要等场景）。

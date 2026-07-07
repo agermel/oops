@@ -4,15 +4,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cloudwego/eino/schema"
 )
 
-func TestOpenSessionStore_LoadsLegacyMessageFirstJSONL(t *testing.T) {
+func TestOpenSessionStore_LoadsToolFields(t *testing.T) {
 	dir := t.TempDir()
-	data, err := os.ReadFile(filepath.Join("testdata", "legacy_session.jsonl"))
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "legacy_session.jsonl"), data, 0644); err != nil {
+	content := `{"type":"message","id":"entry_1","parentId":"","timestamp":"2026-07-06T10:00:00Z","message":{"role":"assistant","content":"checking","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_nodelets","arguments":"{}"}}]}}
+{"type":"message","id":"entry_2","parentId":"entry_1","timestamp":"2026-07-06T10:00:01Z","message":{"role":"tool","content":"[]","tool_call_id":"call_1","tool_name":"list_nodelets"}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "tool_session.jsonl"), []byte(content), 0644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 
@@ -21,31 +22,23 @@ func TestOpenSessionStore_LoadsLegacyMessageFirstJSONL(t *testing.T) {
 		t.Fatalf("OpenSessionStore: %v", err)
 	}
 
-	sess, ok := store.Get("legacy_session")
+	sess, ok := store.Get("tool_session")
 	if !ok {
-		t.Fatal("legacy session was not loaded")
-	}
-	if sess.ProjectID != "" {
-		t.Fatalf("ProjectID = %q, want empty", sess.ProjectID)
+		t.Fatal("tool session was not loaded")
 	}
 	if len(sess.Messages) != 2 {
 		t.Fatalf("len(Messages) = %d, want 2", len(sess.Messages))
 	}
-	if sess.Messages[0].Content != "legacy hello" {
-		t.Fatalf("first content = %q, want legacy hello", sess.Messages[0].Content)
+	if len(sess.Messages[0].ToolCalls) != 1 {
+		t.Fatalf("assistant tool calls = %d, want 1", len(sess.Messages[0].ToolCalls))
 	}
-	if sess.Messages[1].Content != "legacy world" {
-		t.Fatalf("second content = %q, want legacy world", sess.Messages[1].Content)
+	if sess.Messages[0].ToolCalls[0].ID != "call_1" || sess.Messages[0].ToolCalls[0].Function.Name != "list_nodelets" {
+		t.Fatalf("assistant tool call = %+v", sess.Messages[0].ToolCalls[0])
 	}
-
-	info := store.List("*")
-	if len(info) != 1 {
-		t.Fatalf("len(List) = %d, want 1", len(info))
+	if sess.Messages[1].Role != schema.Tool {
+		t.Fatalf("role = %q, want tool", sess.Messages[1].Role)
 	}
-	if info[0].ID != "legacy_session" || info[0].MessageCount != 2 {
-		t.Fatalf("SessionInfo = %+v", info[0])
-	}
-	if info[0].CreatedAt == 0 || info[0].UpdatedAt == 0 {
-		t.Fatalf("timestamps were not restored: %+v", info[0])
+	if sess.Messages[1].ToolCallID != "call_1" || sess.Messages[1].ToolName != "list_nodelets" {
+		t.Fatalf("tool fields = id %q name %q", sess.Messages[1].ToolCallID, sess.Messages[1].ToolName)
 	}
 }

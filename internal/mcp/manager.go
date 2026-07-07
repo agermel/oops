@@ -146,6 +146,7 @@ type Manager struct {
 	errors    map[string]string // id → last error
 	logs      map[string]*ConnectionLogHub
 	onChange  func([]ConnectionTool)
+	startProc func(ConnectionConfig, *ConnectionLogHub) (*managedProcess, error)
 	closed    bool
 }
 
@@ -161,6 +162,7 @@ func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]Connecti
 		errors:    make(map[string]string),
 		logs:      make(map[string]*ConnectionLogHub),
 		onChange:  onChange,
+		startProc: startProcess,
 	}
 
 	if err := m.load(); err != nil {
@@ -322,6 +324,10 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("id is required")
 	}
+	if err := validateServerBoundConnection(cfg); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	if cfg.Transport == "sse" {
 		if cfg.URL == "" {
 			m.mu.Unlock()
@@ -377,6 +383,10 @@ func (m *Manager) Update(cfg ConnectionConfig) error {
 	m.mu.Lock()
 	cfg = normalizeConnectionConfig(cfg)
 
+	if err := validateServerBoundConnection(cfg); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	if cfg.Transport == "sse" {
 		if cfg.URL == "" {
 			m.mu.Unlock()
@@ -634,10 +644,10 @@ func inferStringDefault(name string) string {
 // When the tested config matches a saved connection, the runtime status is
 // updated so the UI reflects current MCP availability.
 func (m *Manager) Test(cfg ConnectionConfig) error {
-	// 为什么要在后端清洗
-	// 不是应该随着用户填写参数然后实时将参数处理好在参数页面实时渲染？
 	cfg = normalizeConnectionConfig(cfg)
-	// 执行测试，返回结果
+	if err := validateServerBoundConnection(cfg); err != nil {
+		return err
+	}
 	var hub *ConnectionLogHub
 	if cfg.ID != "" {
 		if existingHub, ok := m.connectionLogHub(cfg.ID); ok {
@@ -708,18 +718,32 @@ func (m *Manager) applyTestResult(cfg ConnectionConfig, testErr error) {
 		return
 	}
 
+	var start *connectionStart
 	m.mu.Lock()
-	if _, ok := m.connectionLocked(cfg.ID); !ok {
+	savedCfg, ok := m.connectionLocked(cfg.ID)
+	if !ok {
 		m.mu.Unlock()
 		return
 	}
 
 	if testErr == nil {
-		if _, ok := m.processes[cfg.ID]; ok {
+		if sameRuntimeConfig(savedCfg, cfg) {
 			delete(m.errors, cfg.ID)
+			if savedCfg.Enabled {
+				if _, running := m.processes[cfg.ID]; !running {
+					if _, starting := m.starting[cfg.ID]; !starting {
+						token := m.scheduleStartLocked(cfg.ID)
+						m.appendConnectionLogLocked(cfg.ID, "system", "info", "start scheduled after successful test")
+						start = &connectionStart{cfg: savedCfg, token: token}
+					}
+				}
+			}
 		}
 		m.notifyChangeLocked()
 		m.mu.Unlock()
+		if start != nil {
+			go m.startAsync(start.cfg, start.token)
+		}
 		return
 	}
 
@@ -770,6 +794,20 @@ func sameRuntimeConfig(a, b ConnectionConfig) bool {
 		normalizedTransport(a.Transport) == normalizedTransport(b.Transport) &&
 		a.Command == b.Command &&
 		a.URL == b.URL &&
+		slices.Equal(a.Args, b.Args) &&
+		slices.Equal(a.Env, b.Env)
+}
+
+func sameStoredConnectionConfig(a, b ConnectionConfig) bool {
+	return a.ID == b.ID &&
+		a.Name == b.Name &&
+		a.Type == b.Type &&
+		normalizedTransport(a.Transport) == normalizedTransport(b.Transport) &&
+		a.Command == b.Command &&
+		a.URL == b.URL &&
+		a.Enabled == b.Enabled &&
+		a.ContainerID == b.ContainerID &&
+		a.NodeletID == b.NodeletID &&
 		slices.Equal(a.Args, b.Args) &&
 		slices.Equal(a.Env, b.Env)
 }
@@ -962,6 +1000,8 @@ func expandEnvSlice(vals []string) []string {
 }
 
 func normalizeConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
+	cfg.NodeletID = strings.TrimSpace(cfg.NodeletID)
+	cfg.ContainerID = strings.TrimSpace(cfg.ContainerID)
 	switch strings.ToLower(cfg.Type) {
 	case "mysql":
 		return normalizeEnvConfig(cfg, []string{
@@ -988,6 +1028,13 @@ func normalizeConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
 	default:
 		return cfg
 	}
+}
+
+func validateServerBoundConnection(cfg ConnectionConfig) error {
+	if strings.TrimSpace(cfg.NodeletID) == "" {
+		return fmt.Errorf("nodeletId is required")
+	}
+	return nil
 }
 
 func normalizeEnvConfig(cfg ConnectionConfig, keys []string) ConnectionConfig {
@@ -1205,14 +1252,24 @@ func (m *Manager) load() error {
 	if err != nil {
 		return err
 	}
-	m.config.Connections = mcpConnectionsFromRuntime(records)
+	m.config.Connections = make([]ConnectionConfig, 0, len(records))
+	for _, r := range records {
+		m.config.Connections = append(m.config.Connections, mcpConnectionFromRuntime(r))
+	}
 	if m.config.Connections == nil {
 		m.config.Connections = []ConnectionConfig{}
 	}
 	normalized := false
 	for i := range m.config.Connections {
 		next := normalizeConnectionConfig(m.config.Connections[i])
-		if !sameRuntimeConfig(m.config.Connections[i], next) {
+		if strings.TrimSpace(next.NodeletID) == "" && next.Enabled {
+			next.Enabled = false
+			logutil.Warn("mcp: disabled unbound connection pending server binding",
+				zap.String("id", next.ID),
+				zap.String("name", next.Name),
+			)
+		}
+		if !sameStoredConnectionConfig(m.config.Connections[i], next) {
 			m.config.Connections[i] = next
 			normalized = true
 		}
@@ -1251,21 +1308,25 @@ func mcpConnectionsToRuntime(connections []ConnectionConfig) []runtimestore.MCPC
 func mcpConnectionsFromRuntime(records []runtimestore.MCPConnectionRecord) []ConnectionConfig {
 	connections := make([]ConnectionConfig, len(records))
 	for i, r := range records {
-		connections[i] = ConnectionConfig{
-			ID:          r.ID,
-			Name:        r.Name,
-			Type:        r.Type,
-			Transport:   r.Transport,
-			Command:     r.Command,
-			Args:        append([]string{}, r.Args...),
-			Env:         append([]string{}, r.Env...),
-			URL:         r.URL,
-			Enabled:     r.Enabled,
-			ContainerID: r.ContainerID,
-			NodeletID:   r.NodeletID,
-		}
+		connections[i] = mcpConnectionFromRuntime(r)
 	}
 	return connections
+}
+
+func mcpConnectionFromRuntime(r runtimestore.MCPConnectionRecord) ConnectionConfig {
+	return ConnectionConfig{
+		ID:          r.ID,
+		Name:        r.Name,
+		Type:        r.Type,
+		Transport:   r.Transport,
+		Command:     r.Command,
+		Args:        append([]string{}, r.Args...),
+		Env:         append([]string{}, r.Env...),
+		URL:         r.URL,
+		Enabled:     r.Enabled,
+		ContainerID: r.ContainerID,
+		NodeletID:   r.NodeletID,
+	}
 }
 
 func (m *Manager) scheduleStartLocked(id string) int64 {
@@ -1279,7 +1340,11 @@ func (m *Manager) scheduleStartLocked(id string) int64 {
 func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
 	hub := m.ensureLogHub(cfg.ID)
 	hub.Append("system", "info", fmt.Sprintf("starting connection %q", cfg.Name))
-	proc, err := startProcess(cfg, hub)
+	startProc := m.startProc
+	if startProc == nil {
+		startProc = startProcess
+	}
+	proc, err := startProc(cfg, hub)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

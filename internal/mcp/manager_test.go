@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -52,6 +53,110 @@ func TestManagerRuntimeLoadsSQLiteConnections(t *testing.T) {
 	}
 	if list[0].Status != "stopped" {
 		t.Fatalf("status = %q, want stopped", list[0].Status)
+	}
+}
+
+func TestManagerRuntimePreservesAndDisablesGlobalConnections(t *testing.T) {
+	dir := t.TempDir()
+
+	runtime, err := runtimestore.Open(filepath.Join(dir, "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer runtime.Close()
+	if err := runtime.ReplaceMCPConnections(t.Context(), []runtimestore.MCPConnectionRecord{
+		{
+			ID:      "global",
+			Name:    "global mysql",
+			Type:    "mysql",
+			Enabled: true,
+		},
+		{
+			ID:        "server",
+			Name:      "server mysql",
+			Type:      "mysql",
+			Enabled:   false,
+			NodeletID: "n1",
+		},
+	}); err != nil {
+		t.Fatalf("seed runtime mcp connections: %v", err)
+	}
+
+	manager, err := NewManagerWithRuntime(runtime, nil)
+	if err != nil {
+		t.Fatalf("NewManagerWithRuntime: %v", err)
+	}
+	list := manager.List()
+	if len(list) != 2 {
+		t.Fatalf("len(list) = %d, want 2: %+v", len(list), list)
+	}
+	if list[0].ID != "global" || list[0].Enabled || list[0].Status != "stopped" {
+		t.Fatalf("global connection = %+v, want preserved disabled stopped", list[0])
+	}
+	if list[1].ID != "server" {
+		t.Fatalf("server connection = %q, want server", list[1].ID)
+	}
+
+	records, err := runtime.ListMCPConnections(t.Context())
+	if err != nil {
+		t.Fatalf("ListMCPConnections: %v", err)
+	}
+	if len(records) != 2 || records[0].ID != "global" || records[0].Enabled || records[1].ID != "server" {
+		t.Fatalf("persisted records = %+v, want preserved disabled global and server", records)
+	}
+}
+
+func TestManagerRejectsGlobalConnection(t *testing.T) {
+	dir := t.TempDir()
+
+	runtime, err := runtimestore.Open(filepath.Join(dir, "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer runtime.Close()
+
+	manager, err := NewManagerWithRuntime(runtime, nil)
+	if err != nil {
+		t.Fatalf("NewManagerWithRuntime: %v", err)
+	}
+
+	if err := manager.Add(ConnectionConfig{ID: "global", Name: "global", Type: "mysql"}); err == nil {
+		t.Fatal("Add accepted global connection")
+	}
+	if err := manager.Test(ConnectionConfig{ID: "global", Name: "global", Type: "mysql"}); err == nil {
+		t.Fatal("Test accepted global connection")
+	}
+}
+
+func TestApplySuccessfulTestRestartsEnabledConnection(t *testing.T) {
+	cfg := ConnectionConfig{
+		ID:        "kafka-1",
+		Name:      "kafka",
+		Type:      "kafka",
+		Transport: "stdio",
+		Command:   "./mcp-servers/kafka/kafka-mcp",
+		Enabled:   true,
+		NodeletID: "n1",
+	}
+	started := make(chan struct{})
+	manager := &Manager{
+		config:    managerState{Connections: []ConnectionConfig{cfg}},
+		processes: map[string]*managedProcess{},
+		starting:  map[string]int64{},
+		errors:    map[string]string{cfg.ID: "old error"},
+		logs:      map[string]*ConnectionLogHub{},
+		startProc: func(ConnectionConfig, *ConnectionLogHub) (*managedProcess, error) {
+			close(started)
+			return &managedProcess{closer: func() {}}, nil
+		},
+	}
+
+	manager.applyTestResult(cfg, nil)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("connection restart was not scheduled")
 	}
 }
 

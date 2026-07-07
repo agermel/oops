@@ -86,14 +86,21 @@ export function useProjectContainerOptions(projectId: string, servers: ServerWit
 
   const data: MCPContainerBindingOption[] = results.flatMap((result, index) => {
     const server = servers[index];
-    if (!server || !result.data) return [];
-    return result.data.map((container) => ({
+    if (!server) return [];
+    const serverOption: MCPContainerBindingOption = {
+      kind: "nodelet",
+      nodeletId: server.nodelet.id,
+      nodeletName: server.nodelet.name,
+    };
+    const containerOptions = (result.data || []).map((container): MCPContainerBindingOption => ({
+      kind: "container",
       nodeletId: server.nodelet.id,
       nodeletName: server.nodelet.name,
       containerId: container.id,
       containerName: container.name,
       serviceType: container.serviceType,
     }));
+    return [serverOption, ...containerOptions];
   });
 
   return {

@@ -431,7 +431,16 @@
 .tree-node-main {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
+}
+
+.tree-node-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 24px);
+  align-items: center;
+  justify-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
 }
 
 .tree-remove-btn {
@@ -461,7 +470,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
   min-height: 38px;
   padding: 5px 8px;
@@ -1569,6 +1579,40 @@
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--border);
   flex: 0 0 auto;
+}
+
+.mcp-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.mcp-form-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+}
+
+.mcp-test-result-inline {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  line-height: 1.35;
+}
+
+.mcp-test-result-inline.success {
+  color: var(--success-text);
+}
+
+.mcp-test-result-inline.error {
+  color: var(--error-text);
 }
 
 .skills-edit-form {

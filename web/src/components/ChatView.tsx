@@ -268,11 +268,13 @@ export function ChatView({
       <div className="chat-footer">
         <div className="chat-footer-main">
           <FormInput
-            placeholder="输入问题，按 Enter 发送"
+            multiline
+            className="chat-input"
+            placeholder="输入问题，Enter 发送，Shift+Enter 换行"
             value={chatInput}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={(e: React.KeyboardEvent) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 onSend();
               }

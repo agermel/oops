@@ -492,25 +492,27 @@ export function ServerTree({
                           <strong>{sw.nodelet.name}</strong>
                           <small>{sw.nodelet.address}</small>
                         </div>
-                        <StatusDot alive={sw.host?.available ?? false} unknown={isStatusUnknown} />
                       </button>
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        className="tree-remove-btn"
-                        title="刷新此服务器"
-                        aria-label={`刷新 ${sw.nodelet.name}`}
-                        disabled={Boolean(refreshingNodeletId)}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void refreshServer(sw.nodelet.id);
-                        }}
-                      >
-                        <RefreshCw size={12} className={refreshingNodeletId === sw.nodelet.id ? "spin" : ""} />
-                      </Button>
-                      <Button size="xs" variant="ghost" className="tree-remove-btn" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
-                        <Trash2 size={12} />
-                      </Button>
+                      <div className="tree-node-actions">
+                        <StatusDot alive={sw.host?.available ?? false} unknown={isStatusUnknown} />
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          className="tree-remove-btn"
+                          title="刷新此服务器"
+                          aria-label={`刷新 ${sw.nodelet.name}`}
+                          disabled={Boolean(refreshingNodeletId)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void refreshServer(sw.nodelet.id);
+                          }}
+                        >
+                          <RefreshCw size={12} className={refreshingNodeletId === sw.nodelet.id ? "spin" : ""} />
+                        </Button>
+                        <Button size="xs" variant="ghost" className="tree-remove-btn" title="从项目中移除" onClick={() => removeServer(sw.nodelet.id)}>
+                          <Trash2 size={12} />
+                        </Button>
+                      </div>
                     </div>
 
                     {isExpanded && (
