@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../lib/api";
 import { sessionPaths, sessionBasePaths } from "../lib/paths";
 import { queryKeys } from "./queries";
-import type { SessionInfo, SessionDetail } from "../types";
+import type { SessionInfo, SessionResponse } from "../types";
 
 export function useSessions(projectId?: string) {
   return useQuery<SessionInfo[]>({
@@ -19,10 +19,10 @@ export function useSessions(projectId?: string) {
 }
 
 export function useSessionDetail(sessionId: string) {
-  return useQuery<SessionDetail>({
+  return useQuery<SessionResponse>({
     queryKey: queryKeys.sessions.detail(sessionId),
     queryFn: () =>
-      apiRequest<SessionDetail>(sessionPaths(sessionId).get + "?include_messages=true"),
+      apiRequest<SessionResponse>(sessionPaths(sessionId).get + "?include_messages=true"),
     enabled: !!sessionId,
   });
 }

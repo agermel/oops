@@ -319,8 +319,9 @@ func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (
 		return runtime.Resume(ctx, req.SessionID)
 	}
 	return runtime.NewSession(ctx, harness.NewSessionOptions{
-		Model:    s.llmConfig.Model,
-		Provider: runProviderLabel,
+		Model:     s.llmConfig.Model,
+		Provider:  runProviderLabel,
+		ProjectID: req.ProjectID,
 	})
 }
 

@@ -15,6 +15,7 @@ type Session struct {
 
 	id        string
 	cwd       string
+	projectID string
 	name      string
 	entries   map[string]Entry
 	order     []string
@@ -54,11 +55,13 @@ func (s *Session) Info() Info {
 	return Info{
 		ID:        s.id,
 		CWD:       s.cwd,
+		ProjectID: s.projectID,
 		Name:      s.name,
 		LeafID:    s.leafID,
 		CreatedAt: s.createdAt,
 		UpdatedAt: s.updatedAt,
 		Entries:   len(s.entries),
+		Messages:  s.messageCountLocked(),
 	}
 }
 
@@ -80,7 +83,11 @@ func (s *Session) Entry(id string) (Entry, bool) {
 }
 
 func (s *Session) AppendSessionInfo(cwd, name string) (Entry, error) {
-	return s.append(Entry{Type: EntrySessionInfo, CWD: cwd, Name: name})
+	return s.AppendSessionInfoWithProject(cwd, name, "")
+}
+
+func (s *Session) AppendSessionInfoWithProject(cwd, name, projectID string) (Entry, error) {
+	return s.append(Entry{Type: EntrySessionInfo, CWD: cwd, Name: name, ProjectID: projectID})
 }
 
 func (s *Session) AppendMessage(message protocol.AgentMessage) (Entry, error) {
@@ -170,6 +177,7 @@ func (s *Session) Fork(newID, leafID string) (*Session, error) {
 	}
 	fork := New(newID)
 	fork.cwd = s.cwd
+	fork.projectID = s.projectID
 	fork.name = s.name
 	fork.createdAt = s.createdAt
 	fork.updatedAt = time.Now()
@@ -250,6 +258,9 @@ func (s *Session) storeEntryLocked(entry Entry) {
 		if entry.CWD != "" {
 			s.cwd = entry.CWD
 		}
+		if entry.ProjectID != "" {
+			s.projectID = entry.ProjectID
+		}
 		if entry.Name != "" {
 			s.name = entry.Name
 		}
@@ -266,6 +277,16 @@ func (s *Session) storeEntryLocked(entry Entry) {
 	} else {
 		s.updatedAt = time.Now()
 	}
+}
+
+func (s *Session) messageCountLocked() int {
+	count := 0
+	for _, entry := range s.entries {
+		if entry.Type == EntryMessage || entry.Type == EntryCustomMessage {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Session) loadEntryLocked(entry Entry) error {

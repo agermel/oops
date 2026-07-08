@@ -121,6 +121,67 @@ func TestFileStorageLoadsOldJSONL(t *testing.T) {
 	}
 }
 
+func TestFileStorageLoadsProjectID(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(storage)
+	s := repo.Create("s1")
+	entry, err := s.AppendSessionInfoWithProject("/tmp/project", "work", "proj-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveEntry(s.ID(), entry); err != nil {
+		t.Fatal(err)
+	}
+
+	reloadedRepo := NewRepository(storage)
+	reloaded, err := reloadedRepo.Load("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := reloaded.Info()
+	if info.ProjectID != "proj-1" || info.CWD != "/tmp/project" || info.Name != "work" {
+		t.Fatalf("info = %+v", info)
+	}
+	if info.Messages != 0 || info.Entries != 1 {
+		t.Fatalf("counts = messages:%d entries:%d", info.Messages, info.Entries)
+	}
+}
+
+func TestRepositoryDeleteRemovesFileAndCache(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(storage)
+	s := repo.Create("s1")
+	entry, err := s.AppendSessionInfoWithProject("/tmp/project", "work", "proj-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveEntry(s.ID(), entry); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := repo.Delete("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("Delete() = false, want true")
+	}
+	if _, ok := repo.Get("s1"); ok {
+		t.Fatal("deleted session still cached")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s1.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("deleted file stat error = %v, want not exist", err)
+	}
+}
+
 func mustAppendMessage(t *testing.T, s *Session, text string) Entry {
 	t.Helper()
 	entry, err := s.AppendMessage(protocol.UserMessage{

@@ -639,12 +639,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .runtime-tree-label.active {
   color: var(--primary);
   border-color: var(--primary);
   background: var(--blue-50);
+}
+
+.runtime-tree-label:disabled {
+  cursor: default;
 }
 
 .runtime-tree-children {

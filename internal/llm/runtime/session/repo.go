@@ -68,6 +68,18 @@ func (r *Repository) SaveEntry(sessionID string, entry Entry) error {
 	return r.storage.Append(sessionID, entry)
 }
 
+func (r *Repository) Delete(id string) (bool, error) {
+	r.mu.Lock()
+	_, cached := r.sessions[id]
+	delete(r.sessions, id)
+	r.mu.Unlock()
+	if r.storage == nil {
+		return cached, nil
+	}
+	deleted, err := r.storage.Delete(id)
+	return cached || deleted, err
+}
+
 func (r *Repository) List() ([]Info, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

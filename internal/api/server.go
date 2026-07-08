@@ -273,6 +273,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
 	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
 	mux.HandleFunc("DELETE /api/sessions/{id}", authed(s.handleSessionDelete))
+	mux.HandleFunc("POST /api/sessions/{id}/branch", authed(s.handleSessionBranch))
 
 	// ---- MCP Connections ----
 	mux.HandleFunc("GET /api/mcp/connections", authed(s.handleMCPList))

@@ -91,3 +91,17 @@ func (s *FileStorage) List() ([]string, error) {
 	sort.Strings(ids)
 	return ids, nil
 }
+
+func (s *FileStorage) Delete(sessionID string) (bool, error) {
+	if sessionID == "" {
+		return false, fmt.Errorf("session id is required")
+	}
+	path := filepath.Join(s.dir, sessionID+".jsonl")
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

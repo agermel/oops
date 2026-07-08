@@ -45,6 +45,7 @@ export function ChatView({
   onClear,
   onNewChat,
   onSelectSession,
+  onSelectLeaf,
 }: {
   session: SessionResponse;
   chatInput: string;
@@ -57,6 +58,7 @@ export function ChatView({
   onClear: () => void;
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
+  onSelectLeaf: (leafId: string) => void;
 }) {
   const sessionId = session.sessionId;
   const messages = session.messages || [];
@@ -140,7 +142,7 @@ export function ChatView({
             <ToolExecutionList states={runningTools} />
           </RuntimePanel>
           <RuntimePanel title="Session Tree" icon={<GitBranch size={15} />}>
-            <SessionTree nodes={tree} activeLeafId={session.leafId || ""} />
+            <SessionTree nodes={tree} activeLeafId={session.leafId || ""} disabled={chatLoading} onSelectLeaf={onSelectLeaf} />
           </RuntimePanel>
           <RuntimePanel title="事件时间线" icon={<MessageSquare size={15} />}>
             <EventTimeline events={events} />
@@ -288,29 +290,66 @@ function EventTimeline({ events }: { events: AgentEvent[] }) {
   );
 }
 
-function SessionTree({ nodes, activeLeafId }: { nodes: TreeNode[]; activeLeafId: string }) {
+function SessionTree({
+  nodes,
+  activeLeafId,
+  disabled,
+  onSelectLeaf,
+}: {
+  nodes: TreeNode[];
+  activeLeafId: string;
+  disabled: boolean;
+  onSelectLeaf: (leafId: string) => void;
+}) {
   if (nodes.length === 0) return <div className="runtime-empty">暂无 entry</div>;
   return (
     <div className="runtime-tree">
       {nodes.map((node) => (
-        <TreeNodeView key={node.entry.id || node.entry.timestamp || node.entry.type} node={node} activeLeafId={activeLeafId} />
+        <TreeNodeView
+          key={node.entry.id || node.entry.timestamp || node.entry.type}
+          node={node}
+          activeLeafId={activeLeafId}
+          disabled={disabled}
+          onSelectLeaf={onSelectLeaf}
+        />
       ))}
     </div>
   );
 }
 
-function TreeNodeView({ node, activeLeafId }: { node: TreeNode; activeLeafId: string }) {
+function TreeNodeView({
+  node,
+  activeLeafId,
+  disabled,
+  onSelectLeaf,
+}: {
+  node: TreeNode;
+  activeLeafId: string;
+  disabled: boolean;
+  onSelectLeaf: (leafId: string) => void;
+}) {
   const id = node.entry.id || "";
-  const active = activeLeafId && activeLeafId === id;
+  const active = Boolean(activeLeafId && activeLeafId === id);
   return (
     <div className="runtime-tree-node">
-      <div className={`runtime-tree-label ${active ? "active" : ""}`}>
+      <button
+        type="button"
+        className={`runtime-tree-label ${active ? "active" : ""}`}
+        disabled={disabled || !id || active}
+        onClick={() => id && onSelectLeaf(id)}
+      >
         <span>{entryLabel(node.entry)}</span>
-      </div>
+      </button>
       {node.children.length > 0 && (
         <div className="runtime-tree-children">
           {node.children.map((child) => (
-            <TreeNodeView key={child.entry.id || child.entry.timestamp || child.entry.type} node={child} activeLeafId={activeLeafId} />
+            <TreeNodeView
+              key={child.entry.id || child.entry.timestamp || child.entry.type}
+              node={child}
+              activeLeafId={activeLeafId}
+              disabled={disabled}
+              onSelectLeaf={onSelectLeaf}
+            />
           ))}
         </div>
       )}

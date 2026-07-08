@@ -22,6 +22,7 @@ type RuntimeOptions struct {
 type NewSessionOptions struct {
 	ID              string
 	Name            string
+	ProjectID       string
 	Model           string
 	Provider        string
 	Reasoning       string
@@ -72,7 +73,7 @@ func (r *AgentSessionRuntime) NewSession(ctx context.Context, options NewSession
 	r.mu.Unlock()
 
 	name := options.Name
-	entry, err := sess.AppendSessionInfo(cwd, name)
+	entry, err := sess.AppendSessionInfoWithProject(cwd, name, options.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +161,8 @@ func (r *AgentSessionRuntime) Fork(ctx context.Context, sessionID, newSessionID,
 	cwd := r.cwd
 	loader := r.loader
 	r.mu.Unlock()
-	if _, err := forked.AppendSessionInfo(cwd, forked.Info().Name); err != nil {
+	forkInfo := forked.Info()
+	if _, err := forked.AppendSessionInfoWithProject(cwd, forkInfo.Name, forkInfo.ProjectID); err != nil {
 		return nil, err
 	}
 	if leafID != "" {

@@ -34,7 +34,8 @@ type Entry struct {
 	ParentID  string    `json:"parentId,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 
-	CWD string `json:"cwd,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
+	ProjectID string `json:"projectId,omitempty"`
 
 	Message protocol.AgentMessage `json:"message,omitempty"`
 
@@ -61,6 +62,7 @@ type entryWire struct {
 	ParentID         string          `json:"parentId,omitempty"`
 	Timestamp        time.Time       `json:"timestamp"`
 	CWD              string          `json:"cwd,omitempty"`
+	ProjectID        string          `json:"projectId,omitempty"`
 	Message          json.RawMessage `json:"message,omitempty"`
 	Model            string          `json:"model,omitempty"`
 	Provider         string          `json:"provider,omitempty"`
@@ -95,6 +97,7 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 		ParentID:         e.ParentID,
 		Timestamp:        e.Timestamp,
 		CWD:              e.CWD,
+		ProjectID:        e.ProjectID,
 		Message:          rawMessage,
 		Model:            e.Model,
 		Provider:         e.Provider,
@@ -131,6 +134,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 		ParentID:         wire.ParentID,
 		Timestamp:        wire.Timestamp,
 		CWD:              wire.CWD,
+		ProjectID:        wire.ProjectID,
 		Message:          message,
 		Model:            wire.Model,
 		Provider:         wire.Provider,
@@ -196,17 +200,20 @@ type Context struct {
 type Info struct {
 	ID        string
 	CWD       string
+	ProjectID string
 	Name      string
 	LeafID    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Entries   int
+	Messages  int
 }
 
 type Storage interface {
 	Append(sessionID string, entry Entry) error
 	Load(sessionID string) ([]Entry, error)
 	List() ([]string, error)
+	Delete(sessionID string) (bool, error)
 }
 
 func normalizeEntryType(entryType EntryType) EntryType {

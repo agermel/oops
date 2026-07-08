@@ -31,7 +31,7 @@ import {
   EMPTY_AGENT_SESSION,
   RUN_EVENT_TYPES,
   applyAgentEventToSession,
-  sessionFromDetail,
+  sessionFromAPI,
 } from "./lib/session";
 import { shouldAutoExpandFirstServer } from "./lib/serverTreeState";
 import { Header } from "./components/Header";
@@ -190,11 +190,12 @@ export function App() {
     let cancelled = false;
     async function load() {
       try {
-        const detail = await apiRequest<SessionDetail>(
+        const detail = await apiRequest<SessionResponse | SessionDetail>(
           sessionPaths(sessionId).get + "?include_messages=true"
         );
-        if (!cancelled && detail?.id) {
-          setAgentSession(sessionFromDetail(detail));
+        const nextSession = detail ? sessionFromAPI(detail) : null;
+        if (!cancelled && nextSession?.sessionId) {
+          setAgentSession(nextSession);
           setSessionLoaded(true);
           queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
         }
@@ -367,14 +368,15 @@ export function App() {
     setChatLoading(true); // 用 chatLoading 指示会话切换中
     setChatError("");
     try {
-      const detail = await apiRequest<SessionDetail>(
+      const detail = await apiRequest<SessionResponse | SessionDetail>(
         sessionPaths(id).get + "?include_messages=true"
       );
-      if (detail?.id) {
-        setAgentSession(sessionFromDetail(detail));
+      const nextSession = detail ? sessionFromAPI(detail) : null;
+      if (nextSession?.sessionId) {
+        setAgentSession(nextSession);
         setChatError("");
-        setSessionId(id);
-        localStorage.setItem(SESSION_STORAGE_KEY, id);
+        setSessionId(nextSession.sessionId);
+        localStorage.setItem(SESSION_STORAGE_KEY, nextSession.sessionId);
         setSessionLoaded(true);
         queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
       }
@@ -382,6 +384,34 @@ export function App() {
       setChatError(getErrorMessage(err, "加载会话失败"));
     } finally {
       setChatLoading(false);
+    }
+  }
+
+  async function switchBranch(leafId: string) {
+    if (!sessionId || chatLoadingRef.current || leafId === agentSession.leafId) return;
+    await abortRun();
+    setChatLoading(true);
+    setChatError("");
+    try {
+      const resp = await fetch(sessionPaths(sessionId).branch, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leafId }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      const nextSession = sessionFromAPI(await resp.json() as SessionResponse);
+      setAgentSession(nextSession);
+      setSessionId(nextSession.sessionId);
+      localStorage.setItem(SESSION_STORAGE_KEY, nextSession.sessionId);
+      setSessionLoaded(true);
+    } catch (err) {
+      setChatError(getErrorMessage(err, "切换分支失败"));
+    } finally {
+      setChatLoading(false);
+      chatLoadingRef.current = false;
     }
   }
 
@@ -682,6 +712,7 @@ export function App() {
               onClear={clearChat}
               onNewChat={startNewChat}
               onSelectSession={switchSession}
+              onSelectLeaf={(leafId) => void switchBranch(leafId)}
             />
           </section>
         )}

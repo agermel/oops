@@ -96,6 +96,20 @@ export function sessionFromDetail(detail: SessionDetail): SessionResponse {
   };
 }
 
+export function sessionFromAPI(detail: SessionResponse | SessionDetail): SessionResponse {
+  if ("sessionId" in detail) {
+    return {
+      ...EMPTY_AGENT_SESSION,
+      ...detail,
+      messages: detail.messages || [],
+      events: detail.events || [],
+      tools: detail.tools || [],
+      entries: detail.entries || [],
+    };
+  }
+  return sessionFromDetail(detail);
+}
+
 export function applyAgentEventToSession(session: SessionResponse, event: AgentEvent): SessionResponse {
   const next: SessionResponse = {
     ...session,

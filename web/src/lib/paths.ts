@@ -29,6 +29,7 @@ export function sessionPaths(sessionId: string) {
   return {
     get: `/api/sessions/${sid}`,
     delete: `/api/sessions/${sid}`,
+    branch: `/api/sessions/${sid}/branch`,
   };
 }
 
