@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"oops/internal/llm/ai/protocol"
+	"oops/internal/llm/core/toolruntime"
 )
 
 const defaultMaxTurns = 15
@@ -16,8 +17,6 @@ var (
 )
 
 type EventSink func(context.Context, protocol.AgentEvent) error
-
-type ToolUpdateSink func(context.Context, protocol.AgentEvent) error
 
 type AgentContext struct {
 	SystemPrompt string
@@ -35,10 +34,6 @@ type StreamRequest struct {
 
 type StreamFn func(context.Context, StreamRequest) (*protocol.AssistantMessageEventStream, error)
 
-type ToolRunner interface {
-	ExecuteTool(context.Context, protocol.ToolCallContent, ToolUpdateSink) (protocol.ToolResult, bool, error)
-}
-
 type AgentLoopConfig struct {
 	Model               string
 	Provider            string
@@ -46,7 +41,7 @@ type AgentLoopConfig struct {
 	SessionID           string
 	MaxTurns            int
 	Stream              StreamFn
-	ToolRunner          ToolRunner
+	ToolRunner          toolruntime.ToolRunner
 	TransformContext    func(context.Context, protocol.MessageList) (protocol.MessageList, error)
 	ConvertToLLM        func(context.Context, protocol.MessageList) (protocol.MessageList, error)
 	PrepareNextTurn     func(context.Context, TurnContext) (TurnUpdate, error)

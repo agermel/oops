@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"oops/internal/llm/ai/protocol"
+	"oops/internal/llm/core/toolruntime"
 )
 
 func TestRunAgentLoopTextAnswerEventOrder(t *testing.T) {
@@ -305,7 +306,7 @@ func TestRunAgentLoopCancelAfterToolCallSkipsToolRunner(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: queueStreams(toolCallStream(call), textStream("done")),
-			ToolRunner: toolRunnerFunc(func(context.Context, protocol.ToolCallContent, ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(context.Context, protocol.ToolCallContent, toolUpdateSink) (protocol.ToolResult, bool, error) {
 				called = true
 				return protocol.ToolResult{Content: protocol.ContentList{protocol.NewTextContent("found")}}, false, nil
 			}),
@@ -344,7 +345,7 @@ func TestRunAgentLoopToolRunnerContextCancelAborts(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: queueStreams(toolCallStream(call), textStream("done")),
-			ToolRunner: toolRunnerFunc(func(toolCtx context.Context, _ protocol.ToolCallContent, _ ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(toolCtx context.Context, _ protocol.ToolCallContent, _ toolUpdateSink) (protocol.ToolResult, bool, error) {
 				cancel()
 				return protocol.ToolResult{}, false, toolCtx.Err()
 			}),
@@ -562,7 +563,7 @@ func TestRunAgentLoopMixedTerminateContinues(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: streams.stream,
-			ToolRunner: toolRunnerFunc(func(_ context.Context, call protocol.ToolCallContent, _ ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(_ context.Context, call protocol.ToolCallContent, _ toolUpdateSink) (protocol.ToolResult, bool, error) {
 				return protocol.ToolResult{Content: protocol.ContentList{protocol.NewTextContent(call.ID)}, Terminate: call.ID == "call_1"}, false, nil
 			}),
 		},
@@ -632,7 +633,7 @@ func TestRunAgentLoopMissingToolRunnerCreatesErrorToolResult(t *testing.T) {
 	}
 }
 
-func TestRunAgentLoopToolUpdateSinkFillsMetadata(t *testing.T) {
+func TestRunAgentLooptoolUpdateSinkFillsMetadata(t *testing.T) {
 	call := toolCall("call_1", "lookup", `{}`)
 	var update protocol.AgentEvent
 	_, err := RunAgentLoop(
@@ -641,7 +642,7 @@ func TestRunAgentLoopToolUpdateSinkFillsMetadata(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: queueStreams(toolCallStream(call), textStream("done")),
-			ToolRunner: toolRunnerFunc(func(ctx context.Context, _ protocol.ToolCallContent, emit ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(ctx context.Context, _ protocol.ToolCallContent, emit toolUpdateSink) (protocol.ToolResult, bool, error) {
 				if err := emit(ctx, protocol.AgentEvent{Delta: "working"}); err != nil {
 					return protocol.ToolResult{}, false, err
 				}
@@ -673,7 +674,7 @@ func TestRunAgentLoopToolUpdateEmitErrorStops(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: queueStreams(toolCallStream(call), textStream("done")),
-			ToolRunner: toolRunnerFunc(func(ctx context.Context, _ protocol.ToolCallContent, emit ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(ctx context.Context, _ protocol.ToolCallContent, emit toolUpdateSink) (protocol.ToolResult, bool, error) {
 				if err := emit(ctx, protocol.AgentEvent{Delta: "working"}); err != nil {
 					return protocol.ToolResult{}, false, err
 				}
@@ -706,7 +707,7 @@ func TestRunAgentLoopToolRunnerErrorCreatesErrorToolResult(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: queueStreams(toolCallStream(call), textStream("done")),
-			ToolRunner: toolRunnerFunc(func(context.Context, protocol.ToolCallContent, ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(context.Context, protocol.ToolCallContent, toolUpdateSink) (protocol.ToolResult, bool, error) {
 				return protocol.ToolResult{}, false, errors.New("tool failed")
 			}),
 		},
@@ -782,7 +783,7 @@ func TestRunAgentLoopToolRunnerArgsClone(t *testing.T) {
 		AgentContext{},
 		AgentLoopConfig{
 			Stream: queueStreams(toolCallStream(call), textStream("done")),
-			ToolRunner: toolRunnerFunc(func(_ context.Context, call protocol.ToolCallContent, _ ToolUpdateSink) (protocol.ToolResult, bool, error) {
+			ToolRunner: toolRunnerFunc(func(_ context.Context, call protocol.ToolCallContent, _ toolUpdateSink) (protocol.ToolResult, bool, error) {
 				call.Arguments[1] = 'x'
 				return protocol.ToolResult{Content: protocol.ContentList{protocol.NewTextContent("found")}}, false, nil
 			}),
@@ -968,14 +969,111 @@ func (r *requestRecorder) stream(_ context.Context, req StreamRequest) (*protoco
 	return stream, nil
 }
 
-type toolRunnerFunc func(context.Context, protocol.ToolCallContent, ToolUpdateSink) (protocol.ToolResult, bool, error)
+type toolUpdateSink func(context.Context, protocol.AgentEvent) error
 
-func (fn toolRunnerFunc) ExecuteTool(ctx context.Context, call protocol.ToolCallContent, emit ToolUpdateSink) (protocol.ToolResult, bool, error) {
-	return fn(ctx, call, emit)
+type testToolUpdateEmitError struct {
+	err error
 }
 
-func successTool(terminate bool, text string) func(context.Context, protocol.ToolCallContent, ToolUpdateSink) (protocol.ToolResult, bool, error) {
-	return func(context.Context, protocol.ToolCallContent, ToolUpdateSink) (protocol.ToolResult, bool, error) {
+func (e testToolUpdateEmitError) Error() string {
+	return e.err.Error()
+}
+
+func (e testToolUpdateEmitError) Unwrap() error {
+	return e.err
+}
+
+type toolRunnerFunc func(context.Context, protocol.ToolCallContent, toolUpdateSink) (protocol.ToolResult, bool, error)
+
+func (fn toolRunnerFunc) ExecuteTools(ctx context.Context, req toolruntime.ToolRunRequest) (toolruntime.ToolRunResult, error) {
+	messages := make([]protocol.ToolResultMessage, 0, len(req.ToolCalls))
+	terminateCount := 0
+	for _, call := range req.ToolCalls {
+		if err := ctx.Err(); err != nil {
+			return toolruntime.ToolRunResult{Messages: messages}, err
+		}
+		call = protocol.CloneToolCallContent(call)
+		if err := emitTestEvent(ctx, req.Emit, protocol.AgentEvent{
+			Type:       protocol.AgentEventToolExecutionStart,
+			Turn:       req.Turn,
+			ToolCallID: call.ID,
+			ToolName:   call.Name,
+			Args:       protocol.CloneToolCallContent(call).Arguments,
+		}); err != nil {
+			return toolruntime.ToolRunResult{}, err
+		}
+		updateSink := func(updateCtx context.Context, event protocol.AgentEvent) error {
+			event.Type = protocol.AgentEventToolExecutionUpdate
+			event.Turn = req.Turn
+			if event.ToolCallID == "" {
+				event.ToolCallID = call.ID
+			}
+			if event.ToolName == "" {
+				event.ToolName = call.Name
+			}
+			if err := emitTestEvent(updateCtx, req.Emit, event); err != nil {
+				return testToolUpdateEmitError{err: err}
+			}
+			return nil
+		}
+		result, isError, err := fn(ctx, call, updateSink)
+		if err != nil {
+			var updateErr testToolUpdateEmitError
+			if errors.As(err, &updateErr) {
+				return toolruntime.ToolRunResult{}, updateErr.err
+			}
+			if ctx.Err() != nil {
+				return toolruntime.ToolRunResult{Messages: messages}, ctx.Err()
+			}
+			result = protocol.ToolResult{Content: protocol.ContentList{protocol.NewTextContent(err.Error())}}
+			isError = true
+		}
+		if ctx.Err() != nil {
+			return toolruntime.ToolRunResult{Messages: messages}, ctx.Err()
+		}
+		if result.Terminate {
+			terminateCount++
+		}
+		if err := emitTestEvent(ctx, req.Emit, protocol.AgentEvent{
+			Type:       protocol.AgentEventToolExecutionEnd,
+			Turn:       req.Turn,
+			ToolCallID: call.ID,
+			ToolName:   call.Name,
+			Result:     &result,
+			IsError:    isError,
+		}); err != nil {
+			return toolruntime.ToolRunResult{}, err
+		}
+		message := protocol.ToolResultMessage{
+			ToolCallID: call.ID,
+			ToolName:   call.Name,
+			Content:    result.Content,
+			Details:    result.Details,
+			IsError:    isError,
+		}
+		if err := emitTestEvent(ctx, req.Emit, protocol.AgentEvent{Type: protocol.AgentEventMessageStart, Turn: req.Turn, Message: message}); err != nil {
+			return toolruntime.ToolRunResult{}, err
+		}
+		if err := emitTestEvent(ctx, req.Emit, protocol.AgentEvent{Type: protocol.AgentEventMessageEnd, Turn: req.Turn, Message: message}); err != nil {
+			return toolruntime.ToolRunResult{}, err
+		}
+		messages = append(messages, message)
+	}
+	return toolruntime.ToolRunResult{
+		Messages:  messages,
+		Terminate: len(req.ToolCalls) > 0 && terminateCount == len(req.ToolCalls),
+	}, nil
+}
+
+func emitTestEvent(ctx context.Context, emit toolruntime.EventSink, event protocol.AgentEvent) error {
+	if emit == nil {
+		return nil
+	}
+	return emit(ctx, event)
+}
+
+func successTool(terminate bool, text string) func(context.Context, protocol.ToolCallContent, toolUpdateSink) (protocol.ToolResult, bool, error) {
+	return func(context.Context, protocol.ToolCallContent, toolUpdateSink) (protocol.ToolResult, bool, error) {
 		return protocol.ToolResult{
 			Content:   protocol.ContentList{protocol.NewTextContent(text)},
 			Terminate: terminate,

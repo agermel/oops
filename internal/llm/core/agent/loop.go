@@ -112,9 +112,9 @@ func runLoop(ctx context.Context, current AgentContext, config AgentLoopConfig, 
 					if err := ctx.Err(); err != nil {
 						return emitActiveTerminalError(ctx, emit, newMessages, turn, config, err.Error(), protocol.StopReasonAborted)
 					}
-					toolBatch, err := executeToolCalls(ctx, config, emit, turn, toolCalls)
-					if len(toolBatch.messages) > 0 {
-						toolResults = toolBatch.messages
+					toolBatch, err := executeToolCalls(ctx, current, config, emit, turn, message, toolCalls)
+					if len(toolBatch.Messages) > 0 {
+						toolResults = toolBatch.Messages
 						for _, result := range toolResults {
 							current.Messages = append(current.Messages, result)
 							newMessages = append(newMessages, result)
@@ -126,7 +126,7 @@ func runLoop(ctx context.Context, current AgentContext, config AgentLoopConfig, 
 						}
 						return nil, err
 					}
-					hasMoreToolCalls = !toolBatch.terminate
+					hasMoreToolCalls = !toolBatch.Terminate
 				}
 			}
 
