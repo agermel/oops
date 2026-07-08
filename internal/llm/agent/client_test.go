@@ -126,8 +126,8 @@ func toolNames(t *testing.T, tools []tool.InvokableTool) []string {
 	return names
 }
 
-// TestClientAskSkipped 在没有真实 API key 时跳过测试。
-func TestClientAskSkipped(t *testing.T) {
+// TestClientCompleteSkipped 在没有真实 API key 时跳过测试。
+func TestClientCompleteSkipped(t *testing.T) {
 	if os.Getenv("OOPS_LLM_TEST_API_KEY") == "" {
 		t.Skip("OOPS_LLM_TEST_API_KEY not set, skipping LLM integration test")
 	}
@@ -160,20 +160,14 @@ func TestClientAskSkipped(t *testing.T) {
 
 	messages := []*schema.Message{
 		schema.SystemMessage(prompt.BasePrompt),
-		schema.UserMessage("有哪些机器？如果不止一台，请列出它们的名称。"),
+		schema.UserMessage("用一句话回答：系统可以辅助排查容器问题。"),
 	}
-	events, err := client.Ask(ctx, messages, nil, 15)
+	answer, err := client.Complete(ctx, messages)
 	if err != nil {
-		t.Fatalf("Ask() error = %v", err)
-	}
-	var answer string
-	for evt := range events {
-		if evt.Type == "answer" {
-			answer = evt.Content
-		}
+		t.Fatalf("Complete() error = %v", err)
 	}
 	if answer == "" {
-		t.Fatal("Ask() returned empty answer")
+		t.Fatal("Complete() returned empty answer")
 	}
 	t.Logf("Answer: %s", answer)
 }

@@ -100,7 +100,7 @@
   --hover: var(--surface-hover);
   --card-bg: var(--surface-card);
 
-  /* ---- Legacy status colors (keep for StatusDot, StatusPill) ---- */
+  /* ---- Status colors (keep for StatusDot, StatusPill) ---- */
   --alive: #52c41a;
   --dead: #ff4d4f;
   --unknown: #faad14;

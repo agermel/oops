@@ -7,11 +7,13 @@ import (
 
 	"oops/internal/config"
 	"oops/internal/llm/agent"
+	"oops/internal/llm/ai/protocol"
+	"oops/internal/llm/core/toolruntime"
+	tooladapter "oops/internal/llm/core/toolruntime/einoadapter"
 	llmtools "oops/internal/llm/tools"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
 
-	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 )
@@ -54,41 +56,41 @@ func TestMCPToolHooksUseModelFacingToolName(t *testing.T) {
 	}
 	var beforeName string
 	var afterName string
-	model := &mcpHookTestModel{
-		generate: func(call int, input []*schema.Message) (*schema.Message, error) {
-			if call == 1 {
-				return schema.AssistantMessage("need redis", []schema.ToolCall{{
-					ID: "call-1",
-					Function: schema.FunctionCall{
-						Name:      "redis_info",
-						Arguments: `{"section":"default"}`,
-					},
-				}}), nil
-			}
-			return schema.AssistantMessage("done", nil), nil
-		},
+	runtimeTools, _, err := tooladapter.FromInvokableTools(context.Background(), []tool.InvokableTool{wrapped})
+	if err != nil {
+		t.Fatalf("FromInvokableTools() error = %v", err)
 	}
-
-	events, err := agent.NewRunner().Run(context.Background(), agent.RunRequest{
-		Model:    model,
-		Tools:    []tool.InvokableTool{wrapped},
-		Messages: []*schema.Message{schema.UserMessage("use redis info")},
-		MaxStep:  3,
-		Hooks: agent.RunHooks{
-			BeforeToolCall: func(_ context.Context, input agent.ToolCallInput) (string, error) {
-				beforeName = input.Name
-				return input.Arguments, nil
+	runner, err := toolruntime.NewRunner(toolruntime.RunnerConfig{
+		Tools: runtimeTools,
+		Hooks: toolruntime.Hooks{
+			BeforeToolCall: func(_ context.Context, input toolruntime.BeforeToolCallContext) (toolruntime.BeforeToolCallResult, error) {
+				beforeName = input.ToolCall.Name
+				return toolruntime.BeforeToolCallResult{Arguments: input.RawArguments}, nil
 			},
-			SemanticAfterToolCall: func(_ context.Context, input agent.ToolCallInput, output agent.ToolCallOutput) (string, error) {
-				afterName = input.Name
-				return output.Result, nil
+			AfterToolCall: func(_ context.Context, input toolruntime.AfterToolCallContext) (toolruntime.AfterToolCallResult, error) {
+				afterName = input.ToolCall.Name
+				return toolruntime.AfterToolCallResult{}, nil
 			},
 		},
 	})
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("NewRunner() error = %v", err)
 	}
-	for range events {
+	toolCall := protocol.NewToolCallContent("call-1", "redis_info", []byte(`{"section":"default"}`))
+	_, err = runner.ExecuteTools(context.Background(), toolruntime.ToolRunRequest{
+		AssistantMessage: protocol.AssistantMessage{
+			Content: protocol.ContentList{
+				protocol.NewTextContent("need redis"),
+				toolCall,
+			},
+		},
+		ToolCalls: []protocol.ToolCallContent{toolCall},
+		Emit: func(context.Context, protocol.AgentEvent) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTools() error = %v", err)
 	}
 
 	if beforeName != "redis_info" || afterName != "redis_info" {
@@ -324,29 +326,4 @@ func (t *invokableToolForTest) Info(context.Context) (*schema.ToolInfo, error) {
 func (t *invokableToolForTest) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	t.lastArgs = argumentsInJSON
 	return t.output, nil
-}
-
-type mcpHookTestModel struct {
-	calls    int
-	generate func(call int, input []*schema.Message) (*schema.Message, error)
-}
-
-func (m *mcpHookTestModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	m.calls++
-	return m.generate(m.calls, input)
-}
-
-func (m *mcpHookTestModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	msg, err := m.Generate(ctx, input, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
-}
-
-func (m *mcpHookTestModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
-	return m, nil
 }

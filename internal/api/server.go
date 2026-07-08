@@ -10,8 +10,6 @@ import (
 	"oops/internal/config"
 	"oops/internal/console"
 	"oops/internal/llm/agent"
-	"oops/internal/llm/ctxbuilder"
-	"oops/internal/llm/events"
 	runtimesession "oops/internal/llm/runtime/session"
 	"oops/internal/llm/session"
 	"oops/internal/llm/skills"
@@ -64,8 +62,6 @@ type Server struct {
 	llmClient      *agent.Client
 	llmConfig      config.LLMConfig
 	skillStore     *skills.SkillStore
-	contextBuilder *ctxbuilder.ContextBuilder
-	eventStore     *events.EventStore
 	mcpManager     *mcp.Manager
 	projectStore   *config.ProjectStore
 	dsnStore       *config.ContainerDSNStore
@@ -207,20 +203,6 @@ func New(options Options) *Server {
 		s.skillStore = ss
 	}
 
-	// ContextBuilder：上下文工程引擎（compaction + system prompt + skills 注入）。
-	if s.llmClient != nil && s.skillStore != nil {
-		s.contextBuilder = ctxbuilder.NewContextBuilder(s.sessionStore, s.skillStore, s.llmClient)
-		logutil.Info("context: builder ready")
-	}
-
-	// SQLite 事件持久化。
-	es, err := events.OpenEventStore("data/events.db")
-	if err != nil {
-		logutil.Warn("llm: event store", zap.Error(err))
-	} else {
-		s.eventStore = es
-	}
-
 	return s
 }
 
@@ -238,7 +220,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	authed := func(f http.HandlerFunc) http.HandlerFunc {
 		return securityHeaders(rateLimit(s.authMiddleware(s.requireAuth(limitBody(f)))))
 	}
-	authedChat := func(f http.HandlerFunc) http.HandlerFunc {
+	authedRun := func(f http.HandlerFunc) http.HandlerFunc {
 		return securityHeaders(rateLimitChat(s.authMiddleware(s.requireAuth(limitBody(f)))))
 	}
 	publicWrap := func(f http.HandlerFunc) http.HandlerFunc {
@@ -266,8 +248,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs/stream", authed(s.handleNodeletLogsStreamRoute))
 
 	// ---- Chat & Sessions ----
-	mux.HandleFunc("POST /api/chat", authedChat(s.handleChat))
-	mux.HandleFunc("POST /api/runs", authedChat(s.handleRunCreate))
+	mux.HandleFunc("POST /api/runs", authedRun(s.handleRunCreate))
 	mux.HandleFunc("GET /api/runs/{id}/events", authed(s.handleRunEvents))
 	mux.HandleFunc("POST /api/runs/{id}/abort", authed(s.handleRunAbort))
 	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
@@ -307,9 +288,6 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	// ---- Project Container Exclusions ----
 	mux.HandleFunc("POST /api/projects/{pid}/excluded-containers", authed(s.handleProjectExcludeContainer))
 	mux.HandleFunc("DELETE /api/projects/{pid}/excluded-containers", authed(s.handleProjectIncludeContainer))
-
-	// ---- Project Chat ----
-	mux.HandleFunc("POST /api/projects/{pid}/chat", authedChat(s.handleProjectChat))
 
 	// ---- Project Sessions ----
 	mux.HandleFunc("GET /api/projects/{pid}/sessions", authed(s.handleProjectSessions))

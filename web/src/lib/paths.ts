@@ -9,7 +9,6 @@ export function projectPaths(projectId: string) {
   return {
     detail: `/api/projects/${pid}`,
     servers: `/api/projects/${pid}/servers`,
-    chat: `/api/projects/${pid}/chat`,
     sessions: `/api/projects/${pid}/sessions`,
     session: (sid: string) => `/api/projects/${pid}/sessions/${enc(sid)}`,
     excludedContainers: `/api/projects/${pid}/excluded-containers`,
@@ -109,10 +108,6 @@ export const authPaths = {
 
 export const consolePaths = {
   stream: "/api/console/stream",
-} as const;
-
-export const chatPaths = {
-  default: "/api/chat",
 } as const;
 
 export const runPaths = {

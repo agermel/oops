@@ -304,11 +304,13 @@ All authenticated routes pass through: `securityHeaders → rateLimit → authMi
 | `GET` | `/api/nodelets/{nodeletID}/containers/{containerID}/logs` | Get container logs |
 | `GET` | `/api/nodelets/{nodeletID}/containers/{containerID}/logs/stream` | Stream container logs (SSE) |
 
-### Chat & Sessions
+### Agent Runs & Sessions
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/chat` | Send chat message (global scope) |
+| `POST` | `/api/runs` | Create an agent run |
+| `GET` | `/api/runs/{id}/events` | Stream agent events (SSE) |
+| `POST` | `/api/runs/{id}/abort` | Abort an active run |
 | `GET` | `/api/sessions` | List sessions |
 | `GET` | `/api/sessions/{id}` | Get session detail |
 | `DELETE` | `/api/sessions/{id}` | Delete a session |
@@ -343,7 +345,6 @@ All authenticated routes pass through: `securityHeaders → rateLimit → authMi
 | `GET` | `/api/projects/{pid}` | Get project detail |
 | `PUT` | `/api/projects/{pid}` | Update project |
 | `DELETE` | `/api/projects/{pid}` | Delete project |
-| `POST` | `/api/projects/{pid}/chat` | Project-scoped chat |
 | `GET` | `/api/projects/{pid}/sessions` | List project sessions |
 | `GET` | `/api/projects/{pid}/sessions/{id}` | Get project session |
 | `DELETE` | `/api/projects/{pid}/sessions/{id}` | Delete project session |

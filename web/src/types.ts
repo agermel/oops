@@ -418,28 +418,6 @@ export type RunErrorEvent = {
 
 export type RunStreamEvent = AgentEvent | RunDoneEvent | RunErrorEvent;
 
-export type StepEvent = {
-  type: "thinking" | "tool_call" | "tool_result" | "answer" | "error" | "session" | "stats";
-  content: string;
-  toolName?: string;
-  toolArgs?: string;
-  toolCallId?: string;
-  // session 事件专用
-  sessionId?: string;
-  agentType?: string;   // Agent 类型: diagnose | inspect | default
-  maxStep?: number;     // 最大步数
-  // stats 事件专用
-  tokens?: number;      // 估算 token 用量
-  trimmed?: number;     // 被裁剪的消息数
-};
-
-export type ChatExchange = {
-  question: string;
-  steps: StepEvent[];
-  answer?: string;
-  error?: string;
-};
-
 export type SessionInfo = {
   id: string;
   projectId?: string;

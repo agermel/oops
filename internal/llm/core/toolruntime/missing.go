@@ -17,7 +17,7 @@ func (MissingRunner) ExecuteTools(ctx context.Context, req ToolRunRequest) (Tool
 		result := protocol.ToolResult{
 			Content: protocol.ContentList{protocol.NewTextContent("tool runner is not configured")},
 		}
-		if err := emitLifecycleEvent(ctx, req.Emit, protocol.AgentEvent{
+		if err := emitAgentEvent(ctx, req.Emit, protocol.AgentEvent{
 			Type:       protocol.AgentEventToolExecutionStart,
 			Turn:       req.Turn,
 			ToolCallID: call.ID,
@@ -26,7 +26,7 @@ func (MissingRunner) ExecuteTools(ctx context.Context, req ToolRunRequest) (Tool
 		}); err != nil {
 			return ToolRunResult{}, err
 		}
-		if err := emitLifecycleEvent(ctx, req.Emit, protocol.AgentEvent{
+		if err := emitAgentEvent(ctx, req.Emit, protocol.AgentEvent{
 			Type:       protocol.AgentEventToolExecutionEnd,
 			Turn:       req.Turn,
 			ToolCallID: call.ID,
@@ -42,10 +42,10 @@ func (MissingRunner) ExecuteTools(ctx context.Context, req ToolRunRequest) (Tool
 			Content:    protocol.CloneContentList(result.Content),
 			IsError:    true,
 		}
-		if err := emitLifecycleEvent(ctx, req.Emit, protocol.AgentEvent{Type: protocol.AgentEventMessageStart, Turn: req.Turn, Message: message}); err != nil {
+		if err := emitAgentEvent(ctx, req.Emit, protocol.AgentEvent{Type: protocol.AgentEventMessageStart, Turn: req.Turn, Message: message}); err != nil {
 			return ToolRunResult{}, err
 		}
-		if err := emitLifecycleEvent(ctx, req.Emit, protocol.AgentEvent{Type: protocol.AgentEventMessageEnd, Turn: req.Turn, Message: message}); err != nil {
+		if err := emitAgentEvent(ctx, req.Emit, protocol.AgentEvent{Type: protocol.AgentEventMessageEnd, Turn: req.Turn, Message: message}); err != nil {
 			return ToolRunResult{}, err
 		}
 		messages = append(messages, message)
@@ -53,7 +53,7 @@ func (MissingRunner) ExecuteTools(ctx context.Context, req ToolRunRequest) (Tool
 	return ToolRunResult{Messages: messages}, nil
 }
 
-func emitLifecycleEvent(ctx context.Context, emit EventSink, event protocol.AgentEvent) error {
+func emitAgentEvent(ctx context.Context, emit EventSink, event protocol.AgentEvent) error {
 	if emit == nil {
 		return nil
 	}

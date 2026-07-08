@@ -111,7 +111,7 @@ test("normalizes redis password alias into canonical env", () => {
   ]);
 });
 
-test("normalizes nacos legacy host args into the saved env shape", () => {
+test("normalizes nacos old host args into the saved env shape", () => {
   const config = normalizeMCPConnectionConfig({
     id: "nacos-1",
     name: "nacos",

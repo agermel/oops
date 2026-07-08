@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"oops/internal/config"
-	agentevents "oops/internal/llm/events"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -95,26 +94,6 @@ func (c *Client) filterEnabledLocked(tools []tool.InvokableTool) []tool.Invokabl
 		filtered = append(filtered, t)
 	}
 	return filtered
-}
-
-// Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
-// messages 是完整的消息列表（system prompt + 历史消息 + 当前问题）。
-// onMessage 在 agent 产生每条新消息时被调用，用于持久化到 session。
-// maxStep 控制 Agent 最大步数；<=0 时使用默认值 15。
-func (c *Client) Ask(ctx context.Context, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan agentevents.StepEvent, error) {
-	c.toolsMu.RLock()
-	tools := c.tools
-	c.toolsMu.RUnlock()
-	return Ask(ctx, c.model, tools, messages, onMessage, maxStep)
-}
-
-// AskWithTools runs an agent turn with a request-scoped tool list while preserving
-// the client's disabled-tool state.
-func (c *Client) AskWithTools(ctx context.Context, tools []tool.InvokableTool, messages []*schema.Message, onMessage MessageCallback, maxStep int) (<-chan agentevents.StepEvent, error) {
-	c.toolsMu.RLock()
-	enabledTools := c.filterEnabledLocked(tools)
-	c.toolsMu.RUnlock()
-	return Ask(ctx, c.model, enabledTools, messages, onMessage, maxStep)
 }
 
 // Complete 发送无工具调用的简单补全请求（用于 compaction 摘要等场景）。
