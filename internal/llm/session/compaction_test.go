@@ -48,6 +48,23 @@ func TestSessionStore_BuildContext_NoCompaction(t *testing.T) {
 	}
 }
 
+func TestSessionStore_BuildContext_UsesCurrentLeafPathOnly(t *testing.T) {
+	store := NewSessionStore()
+	sess := store.Create("")
+
+	store.AppendMessage(sess.ID, schema.UserMessage("root"))
+	rootID := lastEntryID(t, store, sess.ID)
+
+	store.AppendMessage(sess.ID, schema.AssistantMessage("branch-a", nil))
+	store.leafIDs[sess.ID] = rootID
+	store.AppendMessage(sess.ID, schema.AssistantMessage("branch-b", nil))
+
+	assertMessageContents(t, store.BuildContext(sess.ID), []string{
+		"root",
+		"branch-b",
+	})
+}
+
 func TestSessionStore_CompactIfNeeded(t *testing.T) {
 	store := NewSessionStore()
 	sess := store.Create("")
@@ -86,38 +103,57 @@ func TestSessionStore_CompactIfNeeded(t *testing.T) {
 	}
 }
 
+func TestSessionStore_BuildContext_CompactionPreservesSummaryKeptAndNewMessageOrder(t *testing.T) {
+	store := NewSessionStore()
+	sess := store.Create("")
+
+	store.AppendMessage(sess.ID, schema.UserMessage("old message"))
+	store.AppendMessage(sess.ID, schema.AssistantMessage("first kept", nil))
+	firstKeptID := lastEntryID(t, store, sess.ID)
+	store.AppendMessage(sess.ID, schema.UserMessage("second kept"))
+	store.AppendCompaction(sess.ID, &SessionEntry{
+		Summary:          "summary-one",
+		FirstKeptEntryID: firstKeptID,
+	})
+	store.AppendMessage(sess.ID, schema.UserMessage("new message"))
+
+	assertMessageContents(t, store.BuildContext(sess.ID), []string{
+		summaryContentForTest("summary-one"),
+		"first kept",
+		"second kept",
+		"new message",
+	})
+}
+
 func TestSessionStore_BuildContext_MultipleCompactions(t *testing.T) {
 	store := NewSessionStore()
 	sess := store.Create("")
 
-	longMsg := strings.Repeat("y", 200)
-	for range 20 {
-		store.AppendMessage(sess.ID, schema.UserMessage(longMsg))
-		store.AppendMessage(sess.ID, schema.AssistantMessage(longMsg, nil))
-	}
-	entry1 := store.CompactIfNeeded(sess.ID, 500, 4)
-	if entry1 == nil {
-		t.Fatal("first compaction returned nil")
-	}
-	store.AppendCompaction(sess.ID, entry1)
+	store.AppendMessage(sess.ID, schema.UserMessage("old before first"))
+	store.AppendMessage(sess.ID, schema.AssistantMessage("first compaction kept", nil))
+	firstCompactionKeptID := lastEntryID(t, store, sess.ID)
+	store.AppendMessage(sess.ID, schema.UserMessage("before first compaction"))
+	store.AppendCompaction(sess.ID, &SessionEntry{
+		Summary:          "summary-one",
+		FirstKeptEntryID: firstCompactionKeptID,
+	})
 
-	for range 20 {
-		store.AppendMessage(sess.ID, schema.UserMessage(longMsg))
-		store.AppendMessage(sess.ID, schema.AssistantMessage(longMsg, nil))
-	}
-	entry2 := store.CompactIfNeeded(sess.ID, 500, 4)
-	if entry2 == nil {
-		t.Fatal("second compaction returned nil")
-	}
-	store.AppendCompaction(sess.ID, entry2)
+	store.AppendMessage(sess.ID, schema.UserMessage("after first compaction old"))
+	store.AppendMessage(sess.ID, schema.AssistantMessage("last compaction kept", nil))
+	lastCompactionKeptID := lastEntryID(t, store, sess.ID)
+	store.AppendMessage(sess.ID, schema.UserMessage("before second compaction"))
+	store.AppendCompaction(sess.ID, &SessionEntry{
+		Summary:          "summary-two",
+		FirstKeptEntryID: lastCompactionKeptID,
+	})
+	store.AppendMessage(sess.ID, schema.UserMessage("after second compaction"))
 
-	msgs := store.BuildContext(sess.ID)
-	if len(msgs) == 0 {
-		t.Fatal("BuildContext returned empty")
-	}
-	if !strings.Contains(msgs[0].Content, "旧上下文摘要") {
-		t.Errorf("first message should be summary, got: %s", msgs[0].Content[:100])
-	}
+	assertMessageContents(t, store.BuildContext(sess.ID), []string{
+		summaryContentForTest("summary-two"),
+		"last compaction kept",
+		"before second compaction",
+		"after second compaction",
+	})
 }
 
 func TestSessionStore_MessagesBefore(t *testing.T) {
@@ -165,4 +201,39 @@ func TestSummarizeEntries(t *testing.T) {
 	if !strings.Contains(summary, "Redis") {
 		t.Error("summary should contain the message content")
 	}
+}
+
+func lastEntryID(t *testing.T, store *SessionStore, sessionID string) string {
+	t.Helper()
+
+	path := store.pathToLeaf(sessionID)
+	if len(path) == 0 {
+		t.Fatal("pathToLeaf returned empty")
+	}
+	return path[len(path)-1].ID
+}
+
+func assertMessageContents(t *testing.T, messages []*schema.Message, want []string) {
+	t.Helper()
+
+	if len(messages) != len(want) {
+		t.Fatalf("len(messages) = %d, want %d: %#v", len(messages), len(want), messageContents(messages))
+	}
+	for i, msg := range messages {
+		if msg.Content != want[i] {
+			t.Fatalf("message[%d] = %q, want %q; all messages: %#v", i, msg.Content, want[i], messageContents(messages))
+		}
+	}
+}
+
+func messageContents(messages []*schema.Message) []string {
+	contents := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		contents = append(contents, msg.Content)
+	}
+	return contents
+}
+
+func summaryContentForTest(summary string) string {
+	return "以下是旧上下文摘要。后续回答必须参考它，但最近消息优先级更高。\n\n" + summary
 }

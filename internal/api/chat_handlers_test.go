@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	agentevents "oops/internal/llm/events"
@@ -77,11 +78,21 @@ func TestPersistAgentMessageKeepsRawArgsWithSemanticResult(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("len(events) = %d, want 3", len(events))
 	}
-	if events[0].Type != "tool_call" || events[0].ToolArgs != `{"raw":true}` || events[0].ToolCallID != "call-1" {
-		t.Fatalf("tool call event = %#v", events[0])
+	wantEvents := []agentevents.StepEvent{
+		{Type: "tool_call", Content: "lookup", ToolName: "lookup", ToolArgs: `{"raw":true}`, ToolCallID: "call-1"},
+		{Type: string(schema.Assistant), Content: "checking"},
+		{Type: string(schema.Tool), Content: "semantic result", ToolName: "lookup", ToolCallID: "call-1"},
 	}
-	if events[2].Type != string(schema.Tool) || events[2].Content != "semantic result" || events[2].ToolArgs != "" {
-		t.Fatalf("tool event = %#v", events[2])
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %#v, want %#v", events, wantEvents)
+	}
+	assertStoredMessageOrder(t, eventStore, sess.ID, []storedMessage{
+		{Seq: 0, Role: "tool_call", Content: "lookup", ToolName: "lookup", ToolCallID: "call-1", RunID: runID},
+		{Seq: 1, Role: string(schema.Assistant), Content: "checking", RunID: runID},
+		{Seq: 2, Role: string(schema.Tool), Content: "semantic result", ToolName: "lookup", ToolCallID: "call-1", RunID: runID},
+	})
+	if seq != 3 {
+		t.Fatalf("seq = %d, want 3", seq)
 	}
 }
 
@@ -117,16 +128,52 @@ func TestPersistAgentMessageKeepsToolCallEventOrderAndRawArgs(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("len(events) = %d, want 3", len(events))
 	}
-	if events[0].Type != "tool_call" || events[0].ToolArgs != `{"id":1}` || events[0].ToolCallID != "call-1" {
-		t.Fatalf("tool call event = %#v", events[0])
+	wantEvents := []agentevents.StepEvent{
+		{Type: "tool_call", Content: "lookup", ToolName: "lookup", ToolArgs: `{"id":1}`, ToolCallID: "call-1"},
+		{Type: string(schema.Assistant), Content: "checking"},
+		{Type: string(schema.Tool), Content: "ok", ToolName: "lookup", ToolCallID: "call-1"},
 	}
-	if events[1].Type != string(schema.Assistant) || events[1].Content != "checking" {
-		t.Fatalf("assistant event = %#v", events[1])
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %#v, want %#v", events, wantEvents)
 	}
-	if events[2].Type != string(schema.Tool) || events[2].Content != "ok" || events[2].ToolName != "lookup" {
-		t.Fatalf("tool event = %#v", events[2])
-	}
+	assertStoredMessageOrder(t, eventStore, sess.ID, []storedMessage{
+		{Seq: 0, Role: "tool_call", Content: "lookup", ToolName: "lookup", ToolCallID: "call-1", RunID: runID},
+		{Seq: 1, Role: string(schema.Assistant), Content: "checking", RunID: runID},
+		{Seq: 2, Role: string(schema.Tool), Content: "ok", ToolName: "lookup", ToolCallID: "call-1", RunID: runID},
+	})
 	if seq != 3 {
 		t.Fatalf("seq = %d, want 3", seq)
+	}
+}
+
+type storedMessage struct {
+	Seq        int
+	Role       string
+	Content    string
+	ToolName   string
+	ToolCallID string
+	RunID      string
+}
+
+func assertStoredMessageOrder(t *testing.T, store *agentevents.EventStore, sessionID string, want []storedMessage) {
+	t.Helper()
+
+	gotMessages, err := store.GetSessionMessages(sessionID)
+	if err != nil {
+		t.Fatalf("GetSessionMessages() error = %v", err)
+	}
+	if len(gotMessages) != len(want) {
+		t.Fatalf("len(GetSessionMessages) = %d, want %d: %#v", len(gotMessages), len(want), gotMessages)
+	}
+	for i, got := range gotMessages {
+		wantMsg := want[i]
+		if got.Seq != wantMsg.Seq ||
+			got.Role != wantMsg.Role ||
+			got.Content != wantMsg.Content ||
+			got.ToolName != wantMsg.ToolName ||
+			got.ToolCallID != wantMsg.ToolCallID ||
+			got.RunID != wantMsg.RunID {
+			t.Fatalf("stored message[%d] = %#v, want %#v", i, got, wantMsg)
+		}
 	}
 }

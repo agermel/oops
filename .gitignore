@@ -16,3 +16,4 @@ internal/api/data/
 bin/
 .DS_Store
 .omx
+AGENTS.md
