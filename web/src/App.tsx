@@ -1,7 +1,8 @@
 import React from "react";
 import type {
-  StepEvent,
-  ChatExchange,
+  CreateRunResponse,
+  RunStreamEvent,
+  SessionResponse,
   SessionDetail,
   MCPConnectionStatus,
   ProjectMCPConnection,
@@ -25,8 +26,13 @@ import { useSessions } from "./hooks/useSessions";
 import { queryKeys } from "./hooks/queries";
 import { pageConfig } from "./lib/config";
 import { apiRequest, getErrorMessage } from "./lib/api";
-import { projectPaths, sessionPaths, authPaths, chatPaths } from "./lib/paths";
-import { deserializeSessionMessages } from "./lib/session";
+import { projectPaths, sessionPaths, authPaths, runPaths } from "./lib/paths";
+import {
+  EMPTY_AGENT_SESSION,
+  RUN_EVENT_TYPES,
+  applyAgentEventToSession,
+  sessionFromDetail,
+} from "./lib/session";
 import { shouldAutoExpandFirstServer } from "./lib/serverTreeState";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
@@ -130,17 +136,6 @@ export function App() {
 
   const queryClient = useQueryClient();
 
-  // agentMeta: 从 skills 派生
-  const agentMeta = React.useMemo(() => {
-    const meta: Record<string, { label: string; iconName: string; color: string }> = {};
-    for (const s of skills) {
-      if (s.enabled) {
-        meta[s.name] = { label: s.label, iconName: s.icon, color: s.color };
-      }
-    }
-    return meta;
-  }, [skills]);
-
   // 将 Prober 状态合并到服务器列表（原 mergeProberStatus 函数，现用 useMemo）
   const servers = React.useMemo(() => {
     if (rawServers.length === 0) return rawServers;
@@ -173,15 +168,13 @@ export function App() {
   );
 
   // ---- 聊天状态 ----
-  const [chatExchanges, setChatExchanges] = React.useState<ChatExchange[]>([]);
-  const [currentSteps, setCurrentSteps] = React.useState<StepEvent[]>([]);
+  const [agentSession, setAgentSession] = React.useState<SessionResponse>(EMPTY_AGENT_SESSION);
   const [chatInput, setChatInput] = React.useState("");
-  const [currentQuestion, setCurrentQuestion] = React.useState("");
   const [chatLoading, setChatLoading] = React.useState(false);
   const [chatError, setChatError] = React.useState("");
   const chatLoadingRef = React.useRef(false);
-  const chatStepsRef = React.useRef<StepEvent[]>([]);
-  const chatAbortRef = React.useRef<AbortController | null>(null);
+  const chatEventSourceRef = React.useRef<EventSource | null>(null);
+  const activeRunIdRef = React.useRef("");
   const [sessionId, setSessionId] = React.useState<string>(() => {
     return localStorage.getItem(SESSION_STORAGE_KEY) || "";
   });
@@ -190,9 +183,6 @@ export function App() {
   const [sessionLoaded, setSessionLoaded] = React.useState(false);
   const sessionLoadedRef = React.useRef(sessionLoaded);
   sessionLoadedRef.current = sessionLoaded;
-  const [agentType, setAgentType] = React.useState<string>("");
-  const [maxStep, setMaxStep] = React.useState<number>(0);
-  const [tokenStats, setTokenStats] = React.useState<{ tokens: number; trimmed: number } | null>(null);
 
   // ---- 会话加载 ----
   React.useEffect(() => {
@@ -204,7 +194,7 @@ export function App() {
           sessionPaths(sessionId).get + "?include_messages=true"
         );
         if (!cancelled && detail?.id) {
-          setChatExchanges(deserializeSessionMessages(detail.messages));
+          setAgentSession(sessionFromDetail(detail));
           setSessionLoaded(true);
           queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
         }
@@ -231,90 +221,116 @@ export function App() {
     if (!chatLoading) chatLoadingRef.current = false;
     if (chatLoadingRef.current) return;
 
-    // Abort any in-flight request
-    chatAbortRef.current?.abort();
-    const controller = new AbortController();
-    chatAbortRef.current = controller;
+    closeRunStream();
 
     chatLoadingRef.current = true;
     setChatInput("");
     setChatError("");
-    chatStepsRef.current = [];
-    setCurrentSteps([]);
-    setCurrentQuestion(q);
     setChatLoading(true);
 
     try {
-      const url = selectedProjectID
-        ? projectPaths(selectedProjectID).chat
-        : chatPaths.default;
-      const resp = await fetch(url, {
+      const resp = await fetch(runPaths.create, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId || undefined, question: q }),
-        signal: controller.signal,
+        body: JSON.stringify({
+          session_id: sessionId || undefined,
+          project_id: selectedProjectID || undefined,
+          text: q,
+        }),
       });
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
         throw new Error(data.error || `HTTP ${resp.status}`);
       }
-
-      const reader = resp.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let streamDone = false;
-
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          if (line.startsWith("data: [DONE]")) { streamDone = true; break; }
-          if (line.startsWith("data: ")) {
-            try {
-              const evt: StepEvent = JSON.parse(line.slice(6));
-              if (evt.type === "session" && evt.content) {
-                setSessionId(evt.content);
-                setSessionLoaded(true);
-                localStorage.setItem(SESSION_STORAGE_KEY, evt.content);
-                if (evt.agentType) setAgentType(evt.agentType);
-                if (evt.maxStep) setMaxStep(evt.maxStep);
-                continue;
-              }
-              if (evt.type === "stats") {
-                setTokenStats({ tokens: evt.tokens || 0, trimmed: evt.trimmed || 0 });
-                continue;
-              }
-              chatStepsRef.current = [...chatStepsRef.current, evt];
-              setCurrentSteps(chatStepsRef.current);
-            } catch { /* skip */ }
-          }
-        }
-      }
-
-      const steps = chatStepsRef.current;
-      const answerContents = steps.filter((s) => s.type === "answer").map((s) => s.content);
-      const fullAnswer = answerContents.length > 0 ? answerContents.join("") : undefined;
-      const errStep = steps.filter((s) => s.type === "error").pop();
-      setChatExchanges((prev) => [...prev, { question: q, steps, answer: fullAnswer, error: errStep?.content }]);
-      chatStepsRef.current = [];
-      setCurrentSteps([]);
-      setCurrentQuestion("");
-      setChatLoading(false);
-      chatLoadingRef.current = false;
-      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
+      const payload = await resp.json() as CreateRunResponse;
+      activeRunIdRef.current = payload.runId;
+      setSessionId(payload.sessionId);
+      setSessionLoaded(true);
+      localStorage.setItem(SESSION_STORAGE_KEY, payload.sessionId);
+      setAgentSession((current) => ({
+        ...current,
+        sessionId: payload.sessionId,
+      }));
+      openRunStream(payload.runId);
     } catch (err) {
       const errorMessage = getErrorMessage(err, "聊天请求失败");
-      // 保存失败的 exchange，让用户能看到自己提的问题和错误信息；
-      // 不再设 chatError，避免与 exchange 内的 error 重复显示。
-      setChatExchanges((prev) => [...prev, { question: q, steps: [], error: errorMessage }]);
-      setCurrentQuestion("");
-      setCurrentSteps([]);
-      chatStepsRef.current = [];
+      setChatError(errorMessage);
       setChatLoading(false);
       chatLoadingRef.current = false;
+    }
+  }
+
+  function openRunStream(runId: string) {
+    const source = new EventSource(runPaths.events(runId));
+    chatEventSourceRef.current = source;
+    let finished = false;
+    const handleEvent = (message: MessageEvent<string>) => {
+      let event: RunStreamEvent;
+      try {
+        event = JSON.parse(message.data) as RunStreamEvent;
+      } catch {
+        setChatError("事件数据解析失败，请刷新会话确认结果。");
+        return;
+      }
+      if (event.type === "run_done") {
+        finished = true;
+        setAgentSession(event.session);
+        setSessionId(event.session.sessionId);
+        localStorage.setItem(SESSION_STORAGE_KEY, event.session.sessionId);
+        setChatLoading(false);
+        chatLoadingRef.current = false;
+        activeRunIdRef.current = "";
+        closeRunStream(source);
+        queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
+        return;
+      }
+      if (event.type === "run_error") {
+        finished = true;
+        setChatError(event.error);
+        setAgentSession(event.session);
+        setSessionId(event.session.sessionId);
+        if (event.session.sessionId) {
+          localStorage.setItem(SESSION_STORAGE_KEY, event.session.sessionId);
+        }
+        setChatLoading(false);
+        chatLoadingRef.current = false;
+        activeRunIdRef.current = "";
+        closeRunStream(source);
+        queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
+        return;
+      }
+      setAgentSession((current) => applyAgentEventToSession(current, event));
+    };
+
+    for (const eventType of RUN_EVENT_TYPES) {
+      source.addEventListener(eventType, handleEvent as EventListener);
+    }
+    source.onerror = () => {
+      if (!finished) {
+        setChatError("事件流连接中断，请刷新会话确认结果。");
+        setChatLoading(false);
+        chatLoadingRef.current = false;
+        activeRunIdRef.current = "";
+      }
+      closeRunStream(source);
+    };
+  }
+
+  function closeRunStream(source = chatEventSourceRef.current) {
+    source?.close();
+    if (!source || chatEventSourceRef.current === source) {
+      chatEventSourceRef.current = null;
+    }
+  }
+
+  async function abortRun() {
+    const runId = activeRunIdRef.current;
+    closeRunStream();
+    activeRunIdRef.current = "";
+    setChatLoading(false);
+    chatLoadingRef.current = false;
+    if (runId) {
+      await fetch(runPaths.abort(runId), { method: "POST" }).catch(() => undefined);
     }
   }
 
@@ -336,18 +352,12 @@ export function App() {
   }
 
   function startNewChat() {
-    chatAbortRef.current?.abort();
+    void abortRun();
     localStorage.removeItem(SESSION_STORAGE_KEY);
-    setChatExchanges([]);
-    setCurrentSteps([]);
-    chatStepsRef.current = [];
-    setCurrentQuestion("");
+    setAgentSession(EMPTY_AGENT_SESSION);
     setChatError("");
     setSessionId("");
     setSessionLoaded(false);
-    setAgentType("");
-    setMaxStep(0);
-    setTokenStats(null);
     setChatLoading(false);
     chatLoadingRef.current = false;
   }
@@ -361,17 +371,11 @@ export function App() {
         sessionPaths(id).get + "?include_messages=true"
       );
       if (detail?.id) {
-        setChatExchanges(deserializeSessionMessages(detail.messages));
-        setCurrentSteps([]);
-        chatStepsRef.current = [];
-        setCurrentQuestion("");
+        setAgentSession(sessionFromDetail(detail));
         setChatError("");
         setSessionId(id);
         localStorage.setItem(SESSION_STORAGE_KEY, id);
         setSessionLoaded(true);
-        setAgentType("");
-        setMaxStep(0);
-        setTokenStats(null);
         queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
       }
     } catch (err) {
@@ -383,7 +387,7 @@ export function App() {
 
 
   async function clearChat() {
-    chatAbortRef.current?.abort();
+    await abortRun();
     let deleted = false;
     if (sessionId) {
       try {
@@ -399,17 +403,11 @@ export function App() {
       return;
     }
     localStorage.removeItem(SESSION_STORAGE_KEY);
-    setChatExchanges([]);
-    setCurrentSteps([]);
-    chatStepsRef.current = [];
-    setCurrentQuestion("");
+    setAgentSession(EMPTY_AGENT_SESSION);
     setChatError("");
     setSessionId("");
     setSessionLoaded(false);
     queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
-    setAgentType("");
-    setMaxStep(0);
-    setTokenStats(null);
     setChatLoading(false);
     chatLoadingRef.current = false;
   }
@@ -417,9 +415,10 @@ export function App() {
   React.useEffect(() => {
     if (!authenticated) return;
     // 切换项目时中止进行中的请求并重置会话
-    chatAbortRef.current?.abort();
     if (sessionIdRef.current && sessionLoadedRef.current) {
       startNewChat();
+    } else {
+      void abortRun();
     }
     queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
   }, [authenticated, selectedProjectID]);
@@ -513,7 +512,7 @@ export function App() {
 
   React.useEffect(() => {
     return () => {
-      chatAbortRef.current?.abort();
+      closeRunStream();
     };
   }, []);
 
@@ -672,20 +671,14 @@ export function App() {
         {activeNav === "projects" && selectedProject && projectSection === "chat" && (
           <section className="workspace-card chat-workspace">
             <ChatView
-              chatExchanges={chatExchanges}
-              currentSteps={currentSteps}
-              currentQuestion={currentQuestion}
+              session={agentSession}
               chatInput={chatInput}
               chatLoading={chatLoading}
               chatError={chatError}
-              sessionId={sessionId}
               sessions={sessions}
-              agentType={agentType}
-              maxStep={maxStep}
-              tokenStats={tokenStats}
-              agentMeta={agentMeta}
               onInputChange={setChatInput}
               onSend={() => sendChat()}
+              onAbort={() => void abortRun()}
               onClear={clearChat}
               onNewChat={startNewChat}
               onSelectSession={switchSession}

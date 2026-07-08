@@ -355,6 +355,68 @@ export type AgentEvent =
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; delta: string }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean };
 
+export type SessionEntryType =
+  | "session_info"
+  | "message"
+  | "model_change"
+  | "thinking_level_change"
+  | "active_tools_change"
+  | "compaction"
+  | "branch_summary"
+  | "custom"
+  | "custom_message"
+  | "label"
+  | "leaf";
+
+export type SessionEntry = {
+  type: SessionEntryType;
+  version?: number;
+  id?: string;
+  parentId?: string;
+  timestamp?: string;
+  cwd?: string;
+  message?: AgentMessage;
+  model?: string;
+  provider?: string;
+  reasoning?: string;
+  toolNames?: string[];
+  summary?: string;
+  firstKeptEntryId?: string;
+  tokensBefore?: number;
+  customType?: string;
+  payload?: unknown;
+  label?: string;
+  name?: string;
+  leafId?: string;
+};
+
+export type SessionResponse = {
+  sessionId: string;
+  leafId?: string;
+  messages: AgentMessage[];
+  events: AgentEvent[];
+  tools: ToolDefinition[];
+  entries: SessionEntry[];
+};
+
+export type CreateRunResponse = {
+  runId: string;
+  sessionId: string;
+};
+
+export type RunDoneEvent = {
+  type: "run_done";
+  session: SessionResponse;
+};
+
+export type RunErrorEvent = {
+  type: "run_error";
+  error: string;
+  session: SessionResponse;
+};
+
+export type RunStreamEvent = AgentEvent | RunDoneEvent | RunErrorEvent;
+
 export type StepEvent = {
   type: "thinking" | "tool_call" | "tool_result" | "answer" | "error" | "session" | "stats";
   content: string;

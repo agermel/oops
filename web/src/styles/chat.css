@@ -504,3 +504,239 @@
 }
 
 /* Remove old single-rule footer button styles (now under .chat-footer-main) */
+
+/* ---- Agent Runtime ---- */
+
+.agent-runtime-panel {
+  background: var(--surface-card);
+}
+
+.runtime-session-id,
+.runtime-status {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface-card);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-normal);
+}
+
+.runtime-status {
+  color: var(--alive);
+  border-color: var(--alive);
+  font-family: inherit;
+}
+
+.agent-runtime-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 0;
+}
+
+.agent-message-list {
+  border-right: 1px solid var(--border);
+}
+
+.agent-runtime-sidebar {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(120px, 0.8fr) minmax(160px, 1fr);
+  overflow: hidden;
+  background: var(--surface-subtle);
+}
+
+.runtime-panel-section {
+  min-height: 0;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  overflow: auto;
+}
+
+.runtime-panel-section:last-child {
+  border-bottom: 0;
+}
+
+.runtime-panel-section h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+}
+
+.runtime-empty {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.runtime-tool-list,
+.runtime-event-list,
+.runtime-tree {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.runtime-tool-item,
+.runtime-event-row,
+.runtime-tree-label {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: var(--surface-card);
+}
+
+.runtime-tool-item {
+  display: grid;
+  gap: 3px;
+}
+
+.runtime-tool-item span,
+.runtime-event-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.runtime-tool-item small,
+.runtime-event-row small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.runtime-event-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.runtime-event-error {
+  color: var(--dead);
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.runtime-tree-node {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.runtime-tree-label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-tree-label.active {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--blue-50);
+}
+
+.runtime-tree-children {
+  display: grid;
+  gap: var(--space-1);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border);
+}
+
+.runtime-message {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.runtime-message.tool-result {
+  border-left: 3px solid var(--alive);
+  background: var(--success-bg);
+}
+
+.runtime-message.tool-error {
+  border-left-color: var(--dead);
+  background: var(--error-bg);
+}
+
+.runtime-message-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--font-semibold);
+}
+
+.runtime-message pre {
+  max-height: 260px;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  color: var(--gray-300);
+  background: var(--gray-800);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.runtime-thinking {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.runtime-tool-call {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--blue-50);
+  color: var(--primary);
+  font-size: var(--text-sm);
+}
+
+.runtime-tool-call code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.runtime-media-link {
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+  .agent-runtime-body {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-message-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .agent-runtime-sidebar {
+    grid-template-rows: repeat(4, minmax(110px, auto));
+    max-height: 52dvh;
+  }
+}

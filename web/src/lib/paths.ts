@@ -113,3 +113,9 @@ export const consolePaths = {
 export const chatPaths = {
   default: "/api/chat",
 } as const;
+
+export const runPaths = {
+  create: "/api/runs",
+  events: (runId: string) => `/api/runs/${enc(runId)}/events`,
+  abort: (runId: string) => `/api/runs/${enc(runId)}/abort`,
+} as const;
