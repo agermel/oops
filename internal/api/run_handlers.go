@@ -11,12 +11,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	einotool "github.com/cloudwego/eino/components/tool"
+
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/ai/provider"
 	coreagent "oops/internal/llm/core/agent"
+	"oops/internal/llm/core/toolruntime"
 	tooladapter "oops/internal/llm/core/toolruntime/einoadapter"
 	"oops/internal/llm/prompt"
 	"oops/internal/llm/runtime/harness"
+	workspacetools "oops/internal/llm/runtime/tools"
 )
 
 const (
@@ -292,12 +296,11 @@ func (s *Server) handleRunAbort(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (*harness.AgentSession, error) {
 	rawTools, inventory := s.chatToolsAndInventory(ctx, req.ProjectID)
-	enabledTools := s.llmClient.EnabledTools(rawTools)
-	runtimeTools, _, err := tooladapter.FromInvokableTools(ctx, enabledTools)
+	runtimeTools, modelTools, err := s.runToolSets(ctx, rawTools)
 	if err != nil {
 		return nil, err
 	}
-	streamFn, err := provider.NewEinoStreamFn(ctx, s.llmClient.Model(), enabledTools)
+	streamFn, err := provider.NewEinoStreamFn(ctx, s.llmClient.Model(), modelTools)
 	if err != nil {
 		return nil, err
 	}
@@ -323,6 +326,113 @@ func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (
 		Provider:  runProviderLabel,
 		ProjectID: req.ProjectID,
 	})
+}
+
+func (s *Server) runToolSets(ctx context.Context, platformTools []einotool.InvokableTool) ([]toolruntime.Tool, []einotool.InvokableTool, error) {
+	workspaceRuntimeTools, err := workspacetools.NewWorkspaceTools(workspacetools.Options{})
+	if err != nil {
+		return nil, nil, err
+	}
+	workspaceModelTools, err := tooladapter.ToInvokableTools(workspaceRuntimeTools)
+	if err != nil {
+		return nil, nil, err
+	}
+	workspaceNames := runtimeToolNameSet(workspaceRuntimeTools)
+	allModelTools := make([]einotool.InvokableTool, 0, len(platformTools)+len(workspaceModelTools))
+	allModelTools = append(allModelTools, workspaceModelTools...)
+	allModelTools = append(allModelTools, platformTools...)
+	allModelTools = uniqueInvokableTools(ctx, allModelTools)
+	enabledModelTools := s.llmClient.EnabledTools(allModelTools)
+	enabledNames := invokableToolNameSet(ctx, enabledModelTools)
+
+	enabledPlatformTools := filterInvokableTools(ctx, platformTools, enabledNames, workspaceNames)
+	runtimeTools, _, err := tooladapter.FromInvokableTools(ctx, enabledPlatformTools)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, item := range workspaceRuntimeTools {
+		if item == nil {
+			continue
+		}
+		if enabledNames[item.Definition().Name] {
+			runtimeTools = append(runtimeTools, item)
+		}
+	}
+	return runtimeTools, enabledModelTools, nil
+}
+
+func runtimeToolNameSet(tools []toolruntime.Tool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, item := range tools {
+		if item == nil {
+			continue
+		}
+		if name := item.Definition().Name; name != "" {
+			names[name] = true
+		}
+	}
+	return names
+}
+
+func invokableToolNameSet(ctx context.Context, tools []einotool.InvokableTool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, item := range tools {
+		if item == nil {
+			continue
+		}
+		info, err := item.Info(ctx)
+		if err != nil || info == nil || info.Name == "" {
+			continue
+		}
+		names[info.Name] = true
+	}
+	return names
+}
+
+func uniqueInvokableTools(ctx context.Context, tools []einotool.InvokableTool) []einotool.InvokableTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]einotool.InvokableTool, 0, len(tools))
+	for _, item := range tools {
+		if item == nil {
+			continue
+		}
+		info, err := item.Info(ctx)
+		if err != nil || info == nil || info.Name == "" {
+			continue
+		}
+		if seen[info.Name] {
+			continue
+		}
+		seen[info.Name] = true
+		out = append(out, item)
+	}
+	return out
+}
+
+func filterInvokableTools(ctx context.Context, tools []einotool.InvokableTool, enabled, reserved map[string]bool) []einotool.InvokableTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]einotool.InvokableTool, 0, len(tools))
+	for _, item := range tools {
+		if item == nil {
+			continue
+		}
+		info, err := item.Info(ctx)
+		if err != nil || info == nil {
+			continue
+		}
+		if reserved[info.Name] {
+			continue
+		}
+		if enabled[info.Name] {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func (s *Server) runSystemPrompt(projectID, inventory string) string {

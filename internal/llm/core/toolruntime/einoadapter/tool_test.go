@@ -3,6 +3,9 @@ package einoadapter
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	einotool "github.com/cloudwego/eino/components/tool"
@@ -10,6 +13,7 @@ import (
 
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/core/toolruntime"
+	workspacetools "oops/internal/llm/runtime/tools"
 )
 
 type fakeInvokable struct {
@@ -64,5 +68,41 @@ func TestToolExecutePassesRawArgumentsAndWrapsString(t *testing.T) {
 	text, ok := result.Content[0].(protocol.TextContent)
 	if !ok || text.Text != "ok" {
 		t.Fatalf("content = %#v, want text ok", result.Content[0])
+	}
+}
+
+func TestToInvokableToolExposesRuntimeDefinitionAndRunsTool(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtimeTools, err := workspacetools.NewWorkspaceTools(workspacetools.Options{Root: root})
+	if err != nil {
+		t.Fatalf("NewWorkspaceTools() error = %v", err)
+	}
+	invokable, err := ToInvokableTool(runtimeTools[0])
+	if err != nil {
+		t.Fatalf("ToInvokableTool() error = %v", err)
+	}
+	info, err := invokable.Info(context.Background())
+	if err != nil {
+		t.Fatalf("Info() error = %v", err)
+	}
+	if info.Name != "read" || info.ParamsOneOf == nil {
+		t.Fatalf("info = %#v", info)
+	}
+	js, err := info.ParamsOneOf.ToJSONSchema()
+	if err != nil {
+		t.Fatalf("ToJSONSchema() error = %v", err)
+	}
+	if js == nil {
+		t.Fatal("json schema is nil")
+	}
+	out, err := invokable.InvokableRun(context.Background(), `{"path":"notes.txt"}`)
+	if err != nil {
+		t.Fatalf("InvokableRun() error = %v", err)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Fatalf("out = %q", out)
 	}
 }
