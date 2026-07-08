@@ -59,8 +59,9 @@ type TurnContext struct {
 }
 
 type TurnUpdate struct {
-	Context   *AgentContext
-	Model     string
-	Provider  string
-	Reasoning string
+	Context    *AgentContext
+	Model      string
+	Provider   string
+	Reasoning  string
+	ToolRunner toolruntime.ToolRunner
 }

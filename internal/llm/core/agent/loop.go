@@ -214,6 +214,9 @@ func applyTurnUpdate(current *AgentContext, config *AgentLoopConfig, update Turn
 	if update.Reasoning != "" {
 		config.Reasoning = update.Reasoning
 	}
+	if update.ToolRunner != nil {
+		config.ToolRunner = update.ToolRunner
+	}
 }
 
 func emitEvent(ctx context.Context, emit EventSink, event protocol.AgentEvent) error {

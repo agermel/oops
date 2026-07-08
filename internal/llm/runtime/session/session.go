@@ -128,6 +128,22 @@ func (s *Session) AppendSessionName(name string) (Entry, error) {
 	return s.append(Entry{Type: EntrySessionInfo, Name: name})
 }
 
+func (s *Session) AppendLeaf(leafID string) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if leafID != "" {
+		if _, ok := s.entries[leafID]; !ok {
+			return Entry{}, fmt.Errorf("unknown leaf %q", leafID)
+		}
+	}
+	entry := Entry{Type: EntryLeaf, LeafID: leafID}
+	if err := s.prepareEntryLocked(&entry); err != nil {
+		return Entry{}, err
+	}
+	s.storeEntryLocked(entry)
+	return cloneEntry(entry), nil
+}
+
 func (s *Session) MoveTo(leafID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

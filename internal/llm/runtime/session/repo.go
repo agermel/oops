@@ -32,6 +32,15 @@ func (r *Repository) Get(id string) (*Session, bool) {
 	return session, ok
 }
 
+func (r *Repository) Put(session *Session) {
+	if session == nil {
+		return
+	}
+	r.mu.Lock()
+	r.sessions[session.ID()] = session
+	r.mu.Unlock()
+}
+
 func (r *Repository) Load(id string) (*Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
