@@ -1,9 +1,11 @@
-package agent
+package provider
 
 import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
+	"strings"
 
 	"oops/internal/llm/ai/protocol"
 	protoeino "oops/internal/llm/ai/protocol/einoadapter"
@@ -14,7 +16,9 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-func newEinoModelStreamFn(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool) (coreagent.StreamFn, error) {
+var providerPydanticTraceRe = regexp.MustCompile(`\n For further information visit https?://[^\s]+`)
+
+func NewEinoStreamFn(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool) (coreagent.StreamFn, error) {
 	if chatModel == nil {
 		return nil, coreagent.ErrMissingStream
 	}
@@ -209,11 +213,33 @@ func pushAssistantError(out *protocol.AssistantMessageEventStream, err error, re
 		reason = protocol.StopReasonError
 	}
 	message := protocol.AssistantMessage{
-		Content:      protocol.ContentList{protocol.NewTextContent(sanitizeError(err.Error()))},
+		Content:      protocol.ContentList{protocol.NewTextContent(cleanError(err.Error()))},
 		StopReason:   reason,
-		ErrorMessage: sanitizeError(err.Error()),
+		ErrorMessage: cleanError(err.Error()),
 	}
 	_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventError, Reason: reason, Error: &message})
+}
+
+func cleanError(raw string) string {
+	s := providerPydanticTraceRe.ReplaceAllString(raw, "")
+	s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return raw
+	}
+	return s
+}
+
+func asAssistantMessage(message protocol.AgentMessage) (protocol.AssistantMessage, bool) {
+	switch value := message.(type) {
+	case protocol.AssistantMessage:
+		return value, true
+	case *protocol.AssistantMessage:
+		if value != nil {
+			return *value, true
+		}
+	}
+	return protocol.AssistantMessage{}, false
 }
 
 func toolCallsFromAssistant(message protocol.AssistantMessage) []protocol.ToolCallContent {

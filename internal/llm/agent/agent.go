@@ -8,10 +8,10 @@ import (
 	"sync"
 
 	"oops/internal/config"
+	"oops/internal/llm/ai/provider"
 	agentevents "oops/internal/llm/events"
 	"oops/internal/logutil"
 
-	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -89,7 +89,7 @@ func lookupAfterToolCall(name string) (ToolResultHook, bool) {
 
 // newModel 创建 OpenAI 兼容的 ChatModel。
 func newModel(ctx context.Context, cfg config.LLMConfig) (model.ToolCallingChatModel, error) {
-	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+	chatModel, err := provider.NewOpenAICompatibleModel(ctx, provider.OpenAICompatibleConfig{
 		Model:   cfg.Model,
 		APIKey:  cfg.APIKey,
 		BaseURL: cfg.BaseURL,

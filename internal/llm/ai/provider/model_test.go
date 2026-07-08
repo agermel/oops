@@ -1,7 +1,8 @@
-package agent
+package provider
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"oops/internal/llm/ai/protocol"
@@ -11,7 +12,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-func TestEinoModelStreamAdapterHandlesSplitToolCallArguments(t *testing.T) {
+func TestEinoStreamFnHandlesSplitToolCallArguments(t *testing.T) {
 	index := 0
 	chatModel := &chunkedStreamModel{
 		chunks: []*schema.Message{
@@ -41,9 +42,9 @@ func TestEinoModelStreamAdapterHandlesSplitToolCallArguments(t *testing.T) {
 			},
 		},
 	}
-	streamFn, err := newEinoModelStreamFn(context.Background(), chatModel, nil)
+	streamFn, err := NewEinoStreamFn(context.Background(), chatModel, nil)
 	if err != nil {
-		t.Fatalf("newEinoModelStreamFn() error = %v", err)
+		t.Fatalf("NewEinoStreamFn() error = %v", err)
 	}
 
 	stream, err := streamFn(context.Background(), coreagent.StreamRequest{
@@ -84,15 +85,43 @@ func TestEinoModelStreamAdapterHandlesSplitToolCallArguments(t *testing.T) {
 	}
 }
 
+func TestEinoStreamFnEmitsErrorEventForStreamError(t *testing.T) {
+	streamFn, err := NewEinoStreamFn(context.Background(), &chunkedStreamModel{err: errors.New("stream failed")}, nil)
+	if err != nil {
+		t.Fatalf("NewEinoStreamFn() error = %v", err)
+	}
+	stream, err := streamFn(context.Background(), coreagent.StreamRequest{})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+	event := <-stream.Events()
+	if event.Type != protocol.AssistantEventError {
+		t.Fatalf("event type = %s, want error", event.Type)
+	}
+	if event.Error == nil || event.Error.ErrorMessage != "stream failed" {
+		t.Fatalf("error event = %#v", event)
+	}
+}
+
 type chunkedStreamModel struct {
 	chunks []*schema.Message
+	err    error
 }
 
 func (m *chunkedStreamModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return schema.ConcatMessages(m.chunks)
 }
 
 func (m *chunkedStreamModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	if m.err != nil {
+		reader, writer := schema.Pipe[*schema.Message](1)
+		writer.Send(nil, m.err)
+		writer.Close()
+		return reader, nil
+	}
 	return schema.StreamReaderFromArray(m.chunks), nil
 }
 

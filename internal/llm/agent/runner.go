@@ -6,6 +6,7 @@ import (
 
 	"oops/internal/llm/ai/protocol"
 	protoeino "oops/internal/llm/ai/protocol/einoadapter"
+	"oops/internal/llm/ai/provider"
 	coreagent "oops/internal/llm/core/agent"
 	"oops/internal/llm/core/toolruntime"
 	tooladapter "oops/internal/llm/core/toolruntime/einoadapter"
@@ -60,7 +61,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (<-chan LifecycleEvent
 		return nil, err
 	}
 
-	streamFn, err := newEinoModelStreamFn(ctx, req.Model, req.Tools)
+	streamFn, err := provider.NewEinoStreamFn(ctx, req.Model, req.Tools)
 	if err != nil {
 		return nil, err
 	}
