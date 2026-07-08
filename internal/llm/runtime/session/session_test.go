@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,6 +91,105 @@ func TestBuildContextAppliesStateAndBranchSummary(t *testing.T) {
 		"Branch summary:\n\nprevious branch chose read path",
 		"continue",
 	})
+}
+
+func TestSummaryDetailsAndProtectedFirstKept(t *testing.T) {
+	s := New("s1")
+	mustAppendMessage(t, s, "start")
+	assistant := mustAppendAssistantToolCall(t, s, "call_read", "read", `{"path":"README.md"}`)
+	result := mustAppendToolResult(t, s, "call_read", "read", "ok", map[string]any{"path": "README.md"})
+	after := mustAppendMessage(t, s, "after")
+
+	protected, err := s.ProtectedFirstKeptEntryID(result.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if protected != assistant.ID {
+		t.Fatalf("protected first kept = %q, want assistant %q", protected, assistant.ID)
+	}
+
+	details, err := s.SummaryDetailsBefore(after.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ReadFiles) != 1 || details.ReadFiles[0] != "README.md" {
+		t.Fatalf("read files = %#v", details.ReadFiles)
+	}
+	if len(details.ModifiedFiles) != 0 {
+		t.Fatalf("modified files = %#v", details.ModifiedFiles)
+	}
+}
+
+func TestSummaryDetailsMergePreviousDetails(t *testing.T) {
+	s := New("s1")
+	if _, err := s.AppendCompactionWithDetails("old summary", mustAppendMessage(t, s, "kept").ID, 10, SummaryDetails{
+		ReadFiles: []string{"old.md"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppendAssistantToolCall(t, s, "call_write", "write", `{"path":"new.md"}`)
+	after := mustAppendMessage(t, s, "after")
+
+	details, err := s.SummaryDetailsBefore(after.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ReadFiles) != 1 || details.ReadFiles[0] != "old.md" {
+		t.Fatalf("read files = %#v", details.ReadFiles)
+	}
+	if len(details.ModifiedFiles) != 1 || details.ModifiedFiles[0] != "new.md" {
+		t.Fatalf("modified files = %#v", details.ModifiedFiles)
+	}
+}
+
+func TestBranchSummaryDetailsCollectAbandonedBranch(t *testing.T) {
+	s := New("s1")
+	root := mustAppendMessage(t, s, "root")
+	left := mustAppendAssistantToolCall(t, s, "call_read", "read", `{"path":"left.md"}`)
+	if err := s.MoveTo(root.ID); err != nil {
+		t.Fatal(err)
+	}
+	right := mustAppendMessage(t, s, "right")
+	if err := s.MoveTo(left.ID); err != nil {
+		t.Fatal(err)
+	}
+	entries, common, err := s.EntriesForBranchSummary(right.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if common != root.ID || len(entries) != 1 || entries[0].ID != left.ID {
+		t.Fatalf("entries=%#v common=%q", entries, common)
+	}
+	details, err := s.BranchSummaryDetails(right.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ReadFiles) != 1 || details.ReadFiles[0] != "left.md" {
+		t.Fatalf("read files = %#v", details.ReadFiles)
+	}
+}
+
+func TestEntryDetailsRoundTrip(t *testing.T) {
+	s := New("s1")
+	entry, err := s.AppendBranchSummaryWithDetails("branch facts", SummaryDetails{ModifiedFiles: []string{"app.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Entry
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var details SummaryDetails
+	if err := json.Unmarshal(decoded.Details, &details); err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ModifiedFiles) != 1 || details.ModifiedFiles[0] != "app.go" {
+		t.Fatalf("details = %#v", details)
+	}
 }
 
 func TestFileStorageLoadsOldJSONL(t *testing.T) {
@@ -187,6 +287,36 @@ func mustAppendMessage(t *testing.T, s *Session, text string) Entry {
 	entry, err := s.AppendMessage(protocol.UserMessage{
 		Content:   protocol.ContentList{protocol.NewTextContent(text)},
 		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func mustAppendAssistantToolCall(t *testing.T, s *Session, callID, name, args string) Entry {
+	t.Helper()
+	entry, err := s.AppendMessage(protocol.AssistantMessage{
+		Content: protocol.ContentList{
+			protocol.NewToolCallContent(callID, name, json.RawMessage(args)),
+		},
+		StopReason: protocol.StopReasonToolUse,
+		Timestamp:  time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func mustAppendToolResult(t *testing.T, s *Session, callID, name, text string, details any) Entry {
+	t.Helper()
+	entry, err := s.AppendMessage(protocol.ToolResultMessage{
+		ToolCallID: callID,
+		ToolName:   name,
+		Content:    protocol.ContentList{protocol.NewTextContent(text)},
+		Details:    details,
+		Timestamp:  time.Now().UnixMilli(),
 	})
 	if err != nil {
 		t.Fatal(err)

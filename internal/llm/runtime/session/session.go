@@ -107,16 +107,33 @@ func (s *Session) AppendActiveToolsChange(toolNames []string) (Entry, error) {
 }
 
 func (s *Session) AppendCompaction(summary, firstKeptEntryID string, tokensBefore int) (Entry, error) {
+	return s.AppendCompactionWithDetails(summary, firstKeptEntryID, tokensBefore, nil)
+}
+
+func (s *Session) AppendCompactionWithDetails(summary, firstKeptEntryID string, tokensBefore int, details any) (Entry, error) {
+	rawDetails, err := marshalDetails(details)
+	if err != nil {
+		return Entry{}, err
+	}
 	return s.append(Entry{
 		Type:             EntryCompaction,
 		Summary:          summary,
 		FirstKeptEntryID: firstKeptEntryID,
 		TokensBefore:     tokensBefore,
+		Details:          rawDetails,
 	})
 }
 
 func (s *Session) AppendBranchSummary(summary string) (Entry, error) {
-	return s.append(Entry{Type: EntryBranchSummary, Summary: summary})
+	return s.AppendBranchSummaryWithDetails(summary, nil)
+}
+
+func (s *Session) AppendBranchSummaryWithDetails(summary string, details any) (Entry, error) {
+	rawDetails, err := marshalDetails(details)
+	if err != nil {
+		return Entry{}, err
+	}
+	return s.append(Entry{Type: EntryBranchSummary, Summary: summary, Details: rawDetails})
 }
 
 func (s *Session) AppendCustomEntry(customType string, payload []byte) (Entry, error) {

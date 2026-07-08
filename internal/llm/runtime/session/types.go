@@ -44,9 +44,10 @@ type Entry struct {
 	Reasoning string   `json:"reasoning,omitempty"`
 	ToolNames []string `json:"toolNames,omitempty"`
 
-	Summary          string `json:"summary,omitempty"`
-	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
-	TokensBefore     int    `json:"tokensBefore,omitempty"`
+	Summary          string          `json:"summary,omitempty"`
+	FirstKeptEntryID string          `json:"firstKeptEntryId,omitempty"`
+	TokensBefore     int             `json:"tokensBefore,omitempty"`
+	Details          json.RawMessage `json:"details,omitempty"`
 
 	CustomType string          `json:"customType,omitempty"`
 	Payload    json.RawMessage `json:"payload,omitempty"`
@@ -71,6 +72,7 @@ type entryWire struct {
 	Summary          string          `json:"summary,omitempty"`
 	FirstKeptEntryID string          `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int             `json:"tokensBefore,omitempty"`
+	Details          json.RawMessage `json:"details,omitempty"`
 	CustomType       string          `json:"customType,omitempty"`
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	Label            string          `json:"label,omitempty"`
@@ -106,6 +108,7 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 		Summary:          e.Summary,
 		FirstKeptEntryID: e.FirstKeptEntryID,
 		TokensBefore:     e.TokensBefore,
+		Details:          cloneRaw(e.Details),
 		CustomType:       e.CustomType,
 		Payload:          cloneRaw(e.Payload),
 		Label:            e.Label,
@@ -143,6 +146,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 		Summary:          wire.Summary,
 		FirstKeptEntryID: wire.FirstKeptEntryID,
 		TokensBefore:     wire.TokensBefore,
+		Details:          cloneRaw(wire.Details),
 		CustomType:       wire.CustomType,
 		Payload:          cloneRaw(wire.Payload),
 		Label:            wire.Label,
@@ -226,6 +230,7 @@ func normalizeEntryType(entryType EntryType) EntryType {
 func cloneEntry(entry Entry) Entry {
 	entry.Message = protocol.CloneMessage(entry.Message)
 	entry.ToolNames = cloneStrings(entry.ToolNames)
+	entry.Details = cloneRaw(entry.Details)
 	entry.Payload = cloneRaw(entry.Payload)
 	return entry
 }

@@ -267,7 +267,15 @@ func (s *AgentSession) Compact(summary string, firstKeptEntryID string, tokensBe
 	if s.agent.State().IsStreaming {
 		return session.Entry{}, coreagent.ErrAgentBusy
 	}
-	entry, err := s.session.AppendCompaction(summary, firstKeptEntryID, tokensBefore)
+	protectedFirstKeptID, err := s.session.ProtectedFirstKeptEntryID(firstKeptEntryID)
+	if err != nil {
+		return session.Entry{}, err
+	}
+	details, err := s.session.SummaryDetailsBefore(protectedFirstKeptID)
+	if err != nil {
+		return session.Entry{}, err
+	}
+	entry, err := s.session.AppendCompactionWithDetails(summary, protectedFirstKeptID, tokensBefore, details)
 	if err != nil {
 		return session.Entry{}, err
 	}
@@ -281,10 +289,35 @@ func (s *AgentSession) Compact(summary string, firstKeptEntryID string, tokensBe
 }
 
 func (s *AgentSession) NavigateTree(leafID string) error {
+	return s.navigateTree(leafID, "")
+}
+
+func (s *AgentSession) NavigateTreeWithSummary(leafID, summary string) error {
+	return s.navigateTree(leafID, summary)
+}
+
+func (s *AgentSession) navigateTree(leafID, summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.agent.State().IsStreaming {
 		return coreagent.ErrAgentBusy
+	}
+	if summary != "" {
+		details, err := s.session.BranchSummaryDetails(leafID)
+		if err != nil {
+			return err
+		}
+		if err := s.session.MoveTo(leafID); err != nil {
+			return err
+		}
+		entry, err := s.session.AppendBranchSummaryWithDetails(summary, details)
+		if err != nil {
+			return err
+		}
+		if err := s.saveEntryLocked(entry); err != nil {
+			return err
+		}
+		return s.rebuildAgentLocked()
 	}
 	entry, err := s.session.AppendLeaf(leafID)
 	if err != nil {

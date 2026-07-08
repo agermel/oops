@@ -15,7 +15,8 @@ import (
 )
 
 type runtimeBranchRequest struct {
-	LeafID string `json:"leafId"`
+	LeafID  string `json:"leafId"`
+	Summary string `json:"summary,omitempty"`
 }
 
 func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
@@ -38,12 +39,18 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	if err := agentSession.NavigateTree(req.LeafID); err != nil {
-		if errors.Is(err, coreagent.ErrAgentBusy) {
+	var navErr error
+	if req.Summary != "" {
+		navErr = agentSession.NavigateTreeWithSummary(req.LeafID, req.Summary)
+	} else {
+		navErr = agentSession.NavigateTree(req.LeafID)
+	}
+	if navErr != nil {
+		if errors.Is(navErr, coreagent.ErrAgentBusy) {
 			writeJSONError(w, "session is busy", http.StatusConflict)
 			return
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONError(w, navErr.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, agentSession.Snapshot())

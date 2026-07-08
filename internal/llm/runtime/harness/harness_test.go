@@ -159,6 +159,81 @@ func TestActiveToolsValidationAndBusyTreeOperations(t *testing.T) {
 	}
 }
 
+func TestCompactStoresSummaryDetails(t *testing.T) {
+	call := protocol.NewToolCallContent("call_read", "read", json.RawMessage(`{"path":"README.md"}`))
+	as := newHarnessSession(t, coreagent.AgentLoopConfig{
+		Stream: streamSequence(mustToolCallStream(t, call), textStream("done")),
+	}, []toolruntime.Tool{
+		fakeTool{name: "read", text: "file"},
+	})
+	if _, err := as.Prompt(context.Background(), protocol.MessageList{userMessage("inspect")}); err != nil {
+		t.Fatal(err)
+	}
+	finalAssistant := findLastMessageEntry(t, as.session, func(message protocol.AgentMessage) bool {
+		assistant, ok := message.(protocol.AssistantMessage)
+		return ok && len(assistant.Content) == 1 && textOf(t, assistant) == "done"
+	})
+	entry, err := as.Compact("older work", finalAssistant.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var details session.SummaryDetails
+	if err := json.Unmarshal(entry.Details, &details); err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ReadFiles) != 1 || details.ReadFiles[0] != "README.md" {
+		t.Fatalf("read files = %#v", details.ReadFiles)
+	}
+}
+
+func TestNavigateTreeWithSummaryAppendsBranchSummary(t *testing.T) {
+	as := newHarnessSession(t, coreagent.AgentLoopConfig{Stream: streamSequence(textStream("done"))}, nil)
+	root, err := as.session.AppendMessage(userMessage("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, err := as.session.AppendMessage(protocol.AssistantMessage{
+		Content: protocol.ContentList{
+			protocol.NewToolCallContent("call_read", "read", json.RawMessage(`{"path":"left.md"}`)),
+		},
+		StopReason: protocol.StopReasonToolUse,
+		Timestamp:  time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := as.session.MoveTo(root.ID); err != nil {
+		t.Fatal(err)
+	}
+	right, err := as.session.AppendMessage(userMessage("right"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := as.session.MoveTo(left.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := as.NavigateTreeWithSummary(right.ID, "left branch read left.md"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := as.SessionContext()
+	assertMessageTexts(t, ctx.Messages, []string{
+		"root",
+		"right",
+		"Branch summary:\n\nleft branch read left.md",
+	})
+	leaf, ok := as.session.Entry(as.session.LeafID())
+	if !ok || leaf.Type != session.EntryBranchSummary || leaf.ParentID != right.ID {
+		t.Fatalf("leaf = %#v ok=%v", leaf, ok)
+	}
+	var details session.SummaryDetails
+	if err := json.Unmarshal(leaf.Details, &details); err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ReadFiles) != 1 || details.ReadFiles[0] != "left.md" {
+		t.Fatalf("read files = %#v", details.ReadFiles)
+	}
+}
+
 func TestRuntimeResumeForkAndSwitchCWD(t *testing.T) {
 	loader := &recordingLoader{}
 	storage, err := session.NewFileStorage(t.TempDir())
@@ -460,6 +535,15 @@ func toolCallStream(call protocol.ToolCallContent) (*protocol.AssistantMessageEv
 	return stream, nil
 }
 
+func mustToolCallStream(t *testing.T, call protocol.ToolCallContent) *protocol.AssistantMessageEventStream {
+	t.Helper()
+	stream, err := toolCallStream(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stream
+}
+
 func toolCall(id, name string) protocol.ToolCallContent {
 	return protocol.NewToolCallContent(id, name, json.RawMessage(`{}`))
 }
@@ -477,6 +561,19 @@ func findFirstMessageEntry(t *testing.T, s *session.Session) string {
 	}
 	t.Fatal("message entry not found")
 	return ""
+}
+
+func findLastMessageEntry(t *testing.T, s *session.Session, match func(protocol.AgentMessage) bool) session.Entry {
+	t.Helper()
+	entries := s.Entries()
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if entry.Type == session.EntryMessage && match(entry.Message) {
+			return entry
+		}
+	}
+	t.Fatal("matching message entry not found")
+	return session.Entry{}
 }
 
 func assertMessageTexts(t *testing.T, messages protocol.MessageList, want []string) {

@@ -171,6 +171,40 @@ func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
 	}
 }
 
+func TestRuntimeSessionBranchCanAppendSummary(t *testing.T) {
+	repo := runtimesession.NewRepository(nil)
+	server, jwtToken := newRuntimeSessionTestServer(t, repo)
+	sess := createRuntimeSession(t, repo, "rt-summary", "proj-1", "root")
+	root := sess.LeafID()
+	left := appendRuntimeAssistantToolCall(t, repo, sess, "call_read", "read", `{"path":"left.md"}`)
+	if err := sess.MoveTo(root); err != nil {
+		t.Fatal(err)
+	}
+	right := appendRuntimeMessage(t, repo, sess, "right")
+	if err := sess.MoveTo(left.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := serveAuthed(t, server, jwtToken, http.MethodPost, "/api/sessions/rt-summary/branch", `{"leafId":"`+right.ID+`","summary":"left branch read left.md"}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
+	}
+	var snapshot harness.SessionSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode branch: %v", err)
+	}
+	if len(snapshot.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3", len(snapshot.Messages))
+	}
+	if runtimeMessageText(t, snapshot.Messages[2]) != "Branch summary:\n\nleft branch read left.md" {
+		t.Fatalf("summary message = %q", runtimeMessageText(t, snapshot.Messages[2]))
+	}
+	last := snapshot.Entries[len(snapshot.Entries)-1]
+	if last.Type != runtimesession.EntryBranchSummary || last.ParentID != right.ID {
+		t.Fatalf("last entry = %#v", last)
+	}
+}
+
 func newRuntimeSessionTestServer(t *testing.T, repo *runtimesession.Repository) (*Server, string) {
 	t.Helper()
 	userStore, tokenService, jwtToken := testAuthSetup(t)
@@ -202,6 +236,24 @@ func appendRuntimeMessage(t *testing.T, repo *runtimesession.Repository, sess *r
 	entry, err := sess.AppendMessage(protocol.UserMessage{
 		Content:   protocol.ContentList{protocol.NewTextContent(text)},
 		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveEntry(sess.ID(), entry); err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func appendRuntimeAssistantToolCall(t *testing.T, repo *runtimesession.Repository, sess *runtimesession.Session, callID, name, args string) runtimesession.Entry {
+	t.Helper()
+	entry, err := sess.AppendMessage(protocol.AssistantMessage{
+		Content: protocol.ContentList{
+			protocol.NewToolCallContent(callID, name, json.RawMessage(args)),
+		},
+		StopReason: protocol.StopReasonToolUse,
+		Timestamp:  time.Now().UnixMilli(),
 	})
 	if err != nil {
 		t.Fatal(err)
