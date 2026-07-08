@@ -1,0 +1,29 @@
+{
+  "systemPrompt": "You are helpful.",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "timestamp": 1700000000000
+    }
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "Lookup data",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}
