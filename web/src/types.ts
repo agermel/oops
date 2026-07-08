@@ -383,6 +383,7 @@ export type SessionEntry = {
   summary?: string;
   firstKeptEntryId?: string;
   tokensBefore?: number;
+  details?: unknown;
   customType?: string;
   payload?: unknown;
   label?: string;

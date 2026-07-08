@@ -67,70 +67,53 @@ graph TB
 
 ```mermaid
 graph TB
-    User["用户输入"] -->|"POST /api/chat (SSE)"| ChatHandler["Chat Handler<br/>会话获取/创建 + 编排"]
+    React["React Chat UI"] -->|"POST /api/runs"| RunAPI["Run API"]
+    React -->|"GET /api/runs/{id}/events"| SSE["SSE Stream"]
 
-    ChatHandler --> ContextBuilder["Context Builder<br/>上下文构建器"]
+    RunAPI --> AgentSession["AgentSession / Harness"]
+    AgentSession --> Agent["Agent State Machine"]
+    Agent --> Loop["runAgentLoop"]
+    Loop --> Provider["Provider Adapter"]
+    Provider --> Eino["CloudWeGo Eino Model"]
 
-    ContextBuilder -->|"组装"| FinalMessages["最终消息列表"]
+    Loop --> ToolRunner["Tool Runtime"]
+    ToolRunner --> WorkspaceTools["Workspace Tools<br/>read / ls / grep / find<br/>bash / write / edit"]
+    ToolRunner --> OpsTools["Ops Tools<br/>nodelets / containers / logs"]
+    ToolRunner --> MCPTools["MCP Tools"]
 
-    subgraph ContextBuilding["上下文构建"]
-        SysPrompt["System Prompt<br/>BasePrompt + 项目元数据<br/>+ 可用 Skills 列表"]
-        DAG["Session DAG<br/>消息节点 → 压缩节点"]
-        Compaction["自动压缩<br/>>48K token → LLM 摘要<br/>回退: 确定性拼接"]
-        DAG --> Compaction
-    end
+    AgentSession --> RuntimeSession["Runtime Session<br/>JSONL v3 tree"]
+    RuntimeSession --> Context["Leaf Context<br/>messages + model + tools<br/>compaction + branch summary"]
+    Context --> AgentSession
 
-    ContextBuilder --> ContextBuilding
-
-    ChatHandler --> LLMClient["LLM Client<br/>工具管理 + 模型调用"]
-
-    FinalMessages --> LLMClient
-
-    LLMClient --> ReAct["ReAct Agent<br/>CloudWeGo Eino 框架<br/>推理 ↔ 行动，≤15 步"]
-
-    ReAct -->|"思考 → 调用工具 → 观察结果"| ToolSystem["工具系统"]
-
-    subgraph Tools["可用工具 (9+ 个原生 + MCP 动态)"]
-        OpsTools["运维工具<br/>list_nodelets<br/>list_containers<br/>get_logs<br/>check_connections"]
-        RepoTools["仓库工具<br/>repo_sync / repo_list_dir<br/>repo_read_file / repo_fetch"]
-        SkillTool["skill 元工具<br/>LLM 自主加载技能<br/>fsnotify 热加载"]
-        MCPTools["MCP 工具<br/>动态注册 / 按工具启停<br/>每连接独立生命周期"]
-    end
-
-    ToolSystem --> Tools
-
-    MCPManager["MCP Manager<br/>连接生命周期<br/>5min 保活 Ping<br/>3次自动重连"] -.->|"注册工具"| MCPTools
-
-    MCPManager -->|"stdio"| MCPServers["MCP Servers<br/>本地子进程"]
-    MCPManager -->|"SSE"| MCPServers
-
-    ReAct -->|"每步事件"| Events["SSE 事件流<br/>thinking → tool_call<br/>→ tool_result → answer"]
-    Events --> User
-
-    ChatHandler --> SessionPersist["Session Store<br/>data/sessions/*.jsonl<br/>DAG 持久化，重启不丢失"]
+    Agent -->|"AgentEvent"| SSE
+    SSE --> React
 ```
 
 **请求处理流程：**
 
-1. **会话管理** — Chat Handler 根据 `session_id` 获取或创建会话，关联项目上下文（名称、仓库、关联服务器）。
-2. **上下文构建** — Context Builder 从 Session DAG 重建历史消息，检查 token 用量。超过 48K 阈值时触发 compaction：调用 LLM 生成对话摘要，将早期消息替换为压缩节点；LLM 不可用时回退到确定性拼接（保留最近 8 条消息）。最终拼接 `System Prompt + 摘要 + 近期消息 + 当前问题`。
-3. **ReAct Agent 循环** — 基于 Eino 框架的推理-行动循环。每步由模型决定：直接回答，或调用工具获取更多信息。工具结果注入对话后继续推理，直到模型产生最终答案或达到 15 步上限。
-4. **工具执行** — Agent 可调用 9 个原生工具（4 个运维 + 4 个仓库 + 1 个 skill），以及 MCP Manager 动态注册的 MCP 工具。每个工具支持独立启停，禁用后即时从 Agent 可见工具列表中移除。
-5. **流式响应** — 每步执行过程（思考、工具调用、工具结果、最终答案）通过 SSE 实时推送至浏览器，用户可观察 Agent 的完整推理链。
-6. **持久化** — 每条消息和压缩节点写入 Session DAG，以 JSONL 格式持久化到 `data/sessions/`，重启后完整恢复对话上下文。
+1. **Run 创建** — React 通过 `POST /api/runs` 创建一次运行，后端恢复或新建 `AgentSession`。
+2. **上下文构建** — `AgentSession` 从当前 JSONL leaf 回溯出消息、模型、thinking level、启用工具、compaction summary 和 branch summary。
+3. **Agent Loop** — `runAgentLoop` 追加用户消息，请求 Provider，流式接收 assistant message，执行工具，再把 tool result message 按原始 tool call 顺序写回上下文。
+4. **Provider 与工具** — Provider 通过 Eino 绑定模型工具 schema；本地执行走 `toolruntime`，覆盖 workspace 工具、运维工具和 MCP 工具。
+5. **事件投影** — `AgentEvent` 通过 SSE 推给前端；消息是会话事实来源，事件是运行过程投影。`run_done` 返回完整 session snapshot 覆盖前端增量状态。
+6. **持久化** — `message_end` 写入消息，`turn_end` flush pending session writes，`agent_end` 标记 settled。JSONL v3 保留原始 tree、compaction details 和 branch summary details。
 
 **核心组件：**
 
 | 组件 | 源文件 | 职责 |
 |---|---|---|
-| Chat Handler | [`internal/api/chat_handlers.go`](internal/api/chat_handlers.go) | HTTP 入口，会话编排，SSE 推送 |
-| Context Builder | [`internal/llm/context_builder.go`](internal/llm/context_builder.go) | 上下文组装、Token 预算、自动压缩 |
-| ReAct Agent | [`internal/llm/agent.go`](internal/llm/agent.go) | Eino ReAct 推理-行动循环，MessageFuture 流式迭代 |
-| LLM Client | [`internal/llm/client.go`](internal/llm/client.go) | 模型封装、工具注册、运行时启停 |
-| 原生工具 | [`internal/llm/tools.go`](internal/llm/tools.go) + [`internal/llm/tools_repo.go`](internal/llm/tools_repo.go) | 运维查询（4）+ 仓库操作（4）+ skill 元工具 |
+| AI Protocol | [`internal/llm/ai/protocol`](internal/llm/ai/protocol) | Agent message、content、tool definition、AgentEvent 协议 |
+| Provider | [`internal/llm/ai/provider`](internal/llm/ai/provider) | Eino 模型创建与流式事件 adapter |
+| Agent Core | [`internal/llm/core/agent`](internal/llm/core/agent) | Agent 状态机、队列、abort、`runAgentLoop` |
+| Tool Runtime | [`internal/llm/core/toolruntime`](internal/llm/core/toolruntime) | tool registry、schema 校验、顺序/并行执行、hook |
+| Runtime Session | [`internal/llm/runtime/session`](internal/llm/runtime/session) | JSONL v3 tree、leaf context、compaction、branch summary |
+| Harness | [`internal/llm/runtime/harness`](internal/llm/runtime/harness) | AgentSession、资源加载、消息持久化、settled lifecycle |
+| Run API | [`internal/api/run_handlers.go`](internal/api/run_handlers.go) | `/api/runs`、事件订阅、abort |
+| Session API | [`internal/api/runtime_session_handlers.go`](internal/api/runtime_session_handlers.go) | runtime session list/detail/delete/branch |
+| Workspace Tools | [`internal/llm/runtime/tools`](internal/llm/runtime/tools) | read、ls、grep、find、bash、write、edit |
+| Ops Tools | [`internal/llm/tools`](internal/llm/tools) | 运维查询、仓库读取、skill 元工具 |
 | MCP Manager | [`internal/mcp/manager.go`](internal/mcp/manager.go) | MCP 连接生命周期、工具动态注册、保活 |
-| Session Store | [`internal/llm/session.go`](internal/llm/session.go) + [`internal/llm/session_persist.go`](internal/llm/session_persist.go) | DAG 结构、JSONL 持久化、压缩节点管理 |
-| Skills | [`internal/llm/skill.go`](internal/llm/skill.go) + [`config/skills/`](config/skills/) | Skill 定义加载、fsnotify 热更新、可用列表渲染 |
+| Skills | [`internal/llm/skills`](internal/llm/skills) + [`config/skills/`](config/skills/) | Skill 定义加载、可用列表渲染 |
 
 ---
 
@@ -145,8 +128,8 @@ graph TB
 ### AI 排查
 
 - 用自然语言查询容器状态、日志和外部连接，例如“Redis 为什么慢？”。
-- ReAct Agent 基于 CloudWeGo Eino 执行最多 15 步工具调用。
-- Skills、原生工具和 MCP 工具按任务动态加载，过程通过 SSE 实时展示。
+- Agent Runtime 基于 CloudWeGo Eino provider 执行多轮工具调用，支持 abort、分支和完整事件时间线。
+- Workspace 工具、运维工具、Skills 和 MCP 工具按任务进入模型可见工具列表，过程通过 SSE 实时展示。
 
 ### MCP 与连接
 
@@ -158,7 +141,7 @@ graph TB
 
 - 按项目隔离服务器、容器视图和会话。
 - 会话使用 DAG 结构和 JSONL 持久化，重启后可恢复。
-- 超过 48K token 自动压缩早期上下文。
+- 会话支持 compaction entry 与 branch summary，运行时按 leaf context 恢复上下文。
 
 ### 执行与安全
 
@@ -253,7 +236,7 @@ oops/
 │   ├── console/               # 集中化日志控制台（SSE 推送至浏览器）
 │   ├── docker/                # Docker 客户端、22 种服务检测、DSN 提取
 │   ├── exec/                  # 沙盒命令执行：超时 + 输出截断 + 结构化结果（Nodelet 侧）
-│   ├── llm/                   # LLM Agent（ReAct via Eino）、工具、Skills、会话、上下文构建、重试
+│   ├── llm/                   # AI Protocol、Agent Core、Runtime Session、Provider、工具、Skills
 │   ├── logutil/               # 结构化日志（zap + lumberjack 轮转）
 │   ├── mcp/                   # MCP 管理器、客户端、工具注册、保活
 │   ├── nodelet/               # Nodelet HTTP 服务端、客户端、管理器、探活
@@ -297,6 +280,33 @@ color: blue
 2. 在 Web UI 的 MCP 管理面板中添加连接，配置会写入 `data/runtime.db`
 3. MCP 连接支持 `stdio`（本地子进程）和 `sse`（远程）两种传输模式
 
+## 质量门禁
+
+常用分层检查：
+
+`OOPS_SENSITIVE_PATTERN` 使用 `AGENTS.md` 中 Naming Rule 的本地敏感词清单。
+
+```bash
+go test -count=1 ./internal/llm/ai/protocol ./internal/llm/core/agent ./internal/llm/core/toolruntime ./internal/llm/runtime/session ./internal/llm/runtime/harness ./internal/api
+go test -race -count=1 ./internal/llm/core/agent ./internal/llm/runtime/harness
+go test -count=1 ./...
+(cd web && npm run build)
+(cd web && npm test)
+git diff --check -- internal web README.md
+rg -n -i "$OOPS_SENSITIVE_PATTERN" --hidden --glob '!.omx/**' --glob '!AGENTS.md' --glob '!.git/**' .
+```
+
+边界检查：
+
+| 区域 | 重点 |
+|---|---|
+| Protocol | JSON snapshot 覆盖 message、content、tool、AgentEvent |
+| Agent Core | mock stream 覆盖 tool call、tool error、parallel order、max turns、abort |
+| Tool Runtime | schema 校验、hook、顺序/并行、workspace path guard |
+| Session | JSONL v3、leaf context、compaction details、branch summary、文件读取 |
+| Harness | message persistence、pending writes、settled lifecycle、session resume/fork |
+| API | `/api/runs` SSE 顺序、runtime session API、abort |
+| Frontend | AgentEvent reducer、Session Tree、工具列表、构建产物 |
 
 ## License
 
