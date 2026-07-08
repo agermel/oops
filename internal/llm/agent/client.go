@@ -69,6 +69,16 @@ func (c *Client) DisabledTools() map[string]bool {
 	return out
 }
 
+func (c *Client) Model() model.ToolCallingChatModel {
+	return c.model
+}
+
+func (c *Client) EnabledTools(tools []tool.InvokableTool) []tool.InvokableTool {
+	c.toolsMu.RLock()
+	defer c.toolsMu.RUnlock()
+	return c.filterEnabledLocked(tools)
+}
+
 // rebuildLocked 根据 disabled 过滤 allTools 并赋值给 c.tools。
 // 调用方必须持有 c.toolsMu。
 func (c *Client) rebuildLocked() {

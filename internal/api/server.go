@@ -12,6 +12,7 @@ import (
 	"oops/internal/llm/agent"
 	"oops/internal/llm/ctxbuilder"
 	"oops/internal/llm/events"
+	runtimesession "oops/internal/llm/runtime/session"
 	"oops/internal/llm/session"
 	"oops/internal/llm/skills"
 	llmtools "oops/internal/llm/tools"
@@ -61,6 +62,7 @@ type Server struct {
 	nodeletProber  *nodelet.NodeletProber
 	nodeletClient  NodeletClient
 	llmClient      *agent.Client
+	llmConfig      config.LLMConfig
 	skillStore     *skills.SkillStore
 	contextBuilder *ctxbuilder.ContextBuilder
 	eventStore     *events.EventStore
@@ -69,6 +71,8 @@ type Server struct {
 	dsnStore       *config.ContainerDSNStore
 	runtimeStore   *runtimestore.Store
 	sessionStore   *session.SessionStore
+	agentRepo      *runtimesession.Repository
+	runManager     *runManager
 	UserStore      *auth.Store
 	TokenService   *auth.TokenService
 	tokenTTL       time.Duration
@@ -161,11 +165,19 @@ func New(options Options) *Server {
 	s := &Server{
 		nodeletManager: options.NodeletManager,
 		nodeletClient:  options.NodeletClient,
+		llmConfig:      options.LLMConfig,
 		sessionStore:   sessionStore,
 		UserStore:      options.UserStore,
 		TokenService:   options.TokenService,
 		tokenTTL:       options.TokenTTL,
 	}
+	if storage, err := runtimesession.NewFileStorage("data/agent-sessions"); err != nil {
+		logutil.Warn("agent session: open store, falling back to memory-only", zap.Error(err))
+		s.agentRepo = runtimesession.NewRepository(nil)
+	} else {
+		s.agentRepo = runtimesession.NewRepository(storage)
+	}
+	s.runManager = newRunManager()
 
 	if options.LLMEnabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -255,6 +267,9 @@ func (s *Server) Mount(mux *http.ServeMux) {
 
 	// ---- Chat & Sessions ----
 	mux.HandleFunc("POST /api/chat", authedChat(s.handleChat))
+	mux.HandleFunc("POST /api/runs", authedChat(s.handleRunCreate))
+	mux.HandleFunc("GET /api/runs/{id}/events", authed(s.handleRunEvents))
+	mux.HandleFunc("POST /api/runs/{id}/abort", authed(s.handleRunAbort))
 	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
 	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
 	mux.HandleFunc("DELETE /api/sessions/{id}", authed(s.handleSessionDelete))

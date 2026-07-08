@@ -324,6 +324,44 @@ func TestIdleConfigWritesRebuildAgentForNextPrompt(t *testing.T) {
 	}
 }
 
+func TestSessionSnapshotAndListenExposeRunState(t *testing.T) {
+	as := newHarnessSession(t, coreagent.AgentLoopConfig{Stream: streamSequence(textStream("done"))}, []toolruntime.Tool{
+		fakeTool{name: "known", text: "ok"},
+	})
+	var observed []protocol.AgentEvent
+	unsubscribe := as.Listen(func(_ context.Context, event protocol.AgentEvent, _ coreagent.AgentState) error {
+		observed = append(observed, event)
+		return nil
+	})
+	if _, err := as.Prompt(context.Background(), protocol.MessageList{userMessage("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	unsubscribe()
+	if len(observed) == 0 || observed[0].Type != protocol.AgentEventAgentStart {
+		t.Fatalf("observed events = %#v", observed)
+	}
+	snapshot := as.Snapshot()
+	if snapshot.SessionID != "s1" {
+		t.Fatalf("snapshot session id = %q", snapshot.SessionID)
+	}
+	if len(snapshot.Messages) != 2 {
+		t.Fatalf("snapshot messages = %d, want 2", len(snapshot.Messages))
+	}
+	if len(snapshot.Events) != len(observed) {
+		t.Fatalf("snapshot events = %d, observed %d", len(snapshot.Events), len(observed))
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Name != "known" {
+		t.Fatalf("snapshot tools = %#v", snapshot.Tools)
+	}
+	if len(snapshot.Entries) < 2 {
+		t.Fatalf("snapshot entries = %d, want at least 2", len(snapshot.Entries))
+	}
+	snapshot.Events[0].Type = protocol.AgentEventAgentEnd
+	if as.Events()[0].Type == protocol.AgentEventAgentEnd {
+		t.Fatal("snapshot events alias session events")
+	}
+}
+
 func newHarnessSession(t *testing.T, config coreagent.AgentLoopConfig, tools []toolruntime.Tool) *AgentSession {
 	t.Helper()
 	as, err := NewAgentSession(AgentSessionOptions{

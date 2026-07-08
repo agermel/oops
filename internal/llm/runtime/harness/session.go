@@ -45,6 +45,15 @@ type AgentSession struct {
 	settled bool
 }
 
+type SessionSnapshot struct {
+	SessionID string                    `json:"sessionId"`
+	LeafID    string                    `json:"leafId,omitempty"`
+	Messages  protocol.MessageList      `json:"messages"`
+	Events    []protocol.AgentEvent     `json:"events"`
+	Tools     []protocol.ToolDefinition `json:"tools"`
+	Entries   []session.Entry           `json:"entries"`
+}
+
 type pendingWrite struct {
 	kind      session.EntryType
 	provider  string
@@ -95,9 +104,35 @@ func (s *AgentSession) Events() []protocol.AgentEvent {
 	if len(s.events) == 0 {
 		return nil
 	}
-	out := make([]protocol.AgentEvent, len(s.events))
-	copy(out, s.events)
-	return out
+	return cloneAgentEvents(s.events)
+}
+
+func (s *AgentSession) Listen(listener coreagent.AgentListener) coreagent.Unsubscribe {
+	s.mu.Lock()
+	agent := s.agent
+	s.mu.Unlock()
+	return agent.Listen(listener)
+}
+
+func (s *AgentSession) Snapshot() SessionSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	context := s.session.BuildContext()
+	tools := make([]protocol.ToolDefinition, 0, len(s.resources.Tools))
+	for _, item := range s.resources.Tools {
+		if item == nil {
+			continue
+		}
+		tools = append(tools, item.Definition())
+	}
+	return SessionSnapshot{
+		SessionID: s.session.ID(),
+		LeafID:    context.LeafID,
+		Messages:  protocol.CloneMessageList(context.Messages),
+		Events:    cloneAgentEvents(s.events),
+		Tools:     protocol.CloneTools(tools),
+		Entries:   s.session.Entries(),
+	}
 }
 
 func (s *AgentSession) Prompt(ctx context.Context, messages protocol.MessageList) (protocol.MessageList, error) {
@@ -488,6 +523,51 @@ func (s *AgentSession) toolsByNameLocked(names []string) []toolruntime.Tool {
 		}
 	}
 	return tools
+}
+
+func cloneAgentEvents(events []protocol.AgentEvent) []protocol.AgentEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]protocol.AgentEvent, len(events))
+	for i, event := range events {
+		event.Message = protocol.CloneMessage(event.Message)
+		event.Messages = protocol.CloneMessageList(event.Messages)
+		event.ToolResults = protocol.CloneToolResultMessages(event.ToolResults)
+		if event.AssistantMessageEvent != nil {
+			assistantEvent := *event.AssistantMessageEvent
+			if assistantEvent.ToolCall != nil {
+				toolCall := protocol.CloneToolCallContent(*assistantEvent.ToolCall)
+				assistantEvent.ToolCall = &toolCall
+			}
+			if assistantEvent.Partial != nil {
+				assistantEvent.Partial = protocol.CloneAssistantMessagePtr(assistantEvent.Partial)
+			}
+			if assistantEvent.Message != nil {
+				assistantEvent.Message = protocol.CloneAssistantMessagePtr(assistantEvent.Message)
+			}
+			if assistantEvent.Error != nil {
+				assistantEvent.Error = protocol.CloneAssistantMessagePtr(assistantEvent.Error)
+			}
+			event.AssistantMessageEvent = &assistantEvent
+		}
+		event.Args = cloneRaw(event.Args)
+		if event.Result != nil {
+			result := protocol.CloneToolResult(*event.Result)
+			event.Result = &result
+		}
+		out[i] = event
+	}
+	return out
+}
+
+func cloneRaw(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out
 }
 
 func firstNonEmpty(values ...string) string {
