@@ -433,9 +433,11 @@ func TestBeforeToolCallErrorRejectsExecutionAndClosesPendingToolCall(t *testing.
 		LifecycleMessageEnd,
 		LifecycleToolResult,
 		LifecycleError,
+		LifecycleMessageEnd,
+		LifecycleAnswer,
 		LifecycleAgentEnd,
 	})
-	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error"})
+	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error", "answer"})
 	if publicEvents[0] != (agentevents.StepEvent{Type: "thinking", Content: "need lookup"}) {
 		t.Fatalf("thinking event = %#v", publicEvents[0])
 	}
@@ -448,13 +450,14 @@ func TestBeforeToolCallErrorRejectsExecutionAndClosesPendingToolCall(t *testing.
 	if !strings.Contains(publicEvents[3].Content, "before rejected") {
 		t.Fatalf("error event = %#v, want before rejected", publicEvents[3])
 	}
-	if len(persisted) != 2 ||
+	if len(persisted) != 3 ||
 		persisted[0].Role != schema.Assistant ||
 		persisted[1].Role != schema.Tool ||
 		persisted[1].ToolName != "lookup" ||
 		persisted[1].ToolCallID != "call-1" ||
-		!strings.Contains(persisted[1].Content, "before rejected") {
-		t.Fatalf("persisted messages = %#v, want assistant plus pending tool error", persisted)
+		!strings.Contains(persisted[1].Content, "before rejected") ||
+		persisted[2].Role != schema.Assistant {
+		t.Fatalf("persisted messages = %#v, want assistant, tool error, final assistant", persisted)
 	}
 }
 
@@ -498,9 +501,11 @@ func TestSemanticAfterToolCallErrorEmitsError(t *testing.T) {
 		LifecycleMessageEnd,
 		LifecycleToolResult,
 		LifecycleError,
+		LifecycleMessageEnd,
+		LifecycleAnswer,
 		LifecycleAgentEnd,
 	})
-	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error"})
+	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error", "answer"})
 	if hasStepEvent(publicEvents, "tool_result", "raw result") {
 		t.Fatalf("events = %#v, raw result should not be public after semantic error", publicEvents)
 	}
@@ -510,13 +515,14 @@ func TestSemanticAfterToolCallErrorEmitsError(t *testing.T) {
 	if !strings.Contains(publicEvents[3].Content, "semantic failed") {
 		t.Fatalf("error event = %#v, want semantic failed", publicEvents[3])
 	}
-	if len(persisted) != 2 ||
+	if len(persisted) != 3 ||
 		persisted[0].Role != schema.Assistant ||
 		persisted[1].Role != schema.Tool ||
 		persisted[1].ToolName != "lookup" ||
 		persisted[1].ToolCallID != "call-1" ||
-		!strings.Contains(persisted[1].Content, "semantic failed") {
-		t.Fatalf("persisted messages = %#v, want assistant plus pending tool error", persisted)
+		!strings.Contains(persisted[1].Content, "semantic failed") ||
+		persisted[2].Role != schema.Assistant {
+		t.Fatalf("persisted messages = %#v, want assistant, semantic tool error, final assistant", persisted)
 	}
 }
 
@@ -552,9 +558,11 @@ func TestRunnerRunUnknownToolClosesPendingToolCall(t *testing.T) {
 		LifecycleMessageEnd,
 		LifecycleToolResult,
 		LifecycleError,
+		LifecycleMessageEnd,
+		LifecycleAnswer,
 		LifecycleAgentEnd,
 	})
-	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error"})
+	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error", "answer"})
 	if publicEvents[1] != (agentevents.StepEvent{Type: "tool_call", Content: "missing_tool", ToolName: "missing_tool", ToolArgs: `{"id":99}`, ToolCallID: "call-missing"}) {
 		t.Fatalf("tool call event = %#v", publicEvents[1])
 	}
@@ -564,13 +572,14 @@ func TestRunnerRunUnknownToolClosesPendingToolCall(t *testing.T) {
 	if !strings.Contains(publicEvents[3].Content, "missing_tool") {
 		t.Fatalf("error event = %#v, want missing_tool", publicEvents[3])
 	}
-	if len(persisted) != 2 ||
+	if len(persisted) != 3 ||
 		persisted[0].Role != schema.Assistant ||
 		persisted[1].Role != schema.Tool ||
 		persisted[1].ToolName != "missing_tool" ||
 		persisted[1].ToolCallID != "call-missing" ||
-		!strings.Contains(persisted[1].Content, "missing_tool") {
-		t.Fatalf("persisted messages = %#v, want assistant plus missing tool result", persisted)
+		!strings.Contains(persisted[1].Content, "missing_tool") ||
+		persisted[2].Role != schema.Assistant {
+		t.Fatalf("persisted messages = %#v, want assistant, missing tool result, final assistant", persisted)
 	}
 }
 
@@ -611,26 +620,29 @@ func TestRunnerRunToolExecutionErrorClosesPendingToolCall(t *testing.T) {
 		LifecycleMessageEnd,
 		LifecycleToolResult,
 		LifecycleError,
+		LifecycleMessageEnd,
+		LifecycleAnswer,
 		LifecycleAgentEnd,
 	})
-	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error"})
+	assertStepEventTypes(t, publicEvents, []string{"thinking", "tool_call", "tool_result", "error", "answer"})
 	if publicEvents[2].ToolName != "lookup" || publicEvents[2].ToolCallID != "call-1" || !strings.Contains(publicEvents[2].Content, "tool failed") {
 		t.Fatalf("tool result event = %#v, want tool failed", publicEvents[2])
 	}
 	if !strings.Contains(publicEvents[3].Content, "tool failed") {
 		t.Fatalf("error event = %#v, want tool failed", publicEvents[3])
 	}
-	if len(persisted) != 2 ||
+	if len(persisted) != 3 ||
 		persisted[0].Role != schema.Assistant ||
 		persisted[1].Role != schema.Tool ||
 		persisted[1].ToolName != "lookup" ||
 		persisted[1].ToolCallID != "call-1" ||
-		!strings.Contains(persisted[1].Content, "tool failed") {
-		t.Fatalf("persisted messages = %#v, want assistant plus failed tool result", persisted)
+		!strings.Contains(persisted[1].Content, "tool failed") ||
+		persisted[2].Role != schema.Assistant {
+		t.Fatalf("persisted messages = %#v, want assistant, failed tool result, final assistant", persisted)
 	}
 }
 
-func TestDisplayAfterToolResultModifyAndDropCompatibility(t *testing.T) {
+func TestDisplayAfterToolResultModifyAndDropProjection(t *testing.T) {
 	t.Run("modify is display and persistence only", func(t *testing.T) {
 		lookupTool := &captureInvokableTool{name: "lookup", result: "raw result"}
 		var persisted []*schema.Message
@@ -843,7 +855,11 @@ func (m *scriptedToolModel) Generate(ctx context.Context, input []*schema.Messag
 }
 
 func (m *scriptedToolModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	return schema.StreamReaderFromArray([]*schema.Message{schema.AssistantMessage("lookup done", nil)}), nil
+	msg, err := m.Generate(ctx, input, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
 }
 
 func (m *scriptedToolModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
@@ -866,7 +882,11 @@ func (m *blockingToolModel) Generate(ctx context.Context, input []*schema.Messag
 }
 
 func (m *blockingToolModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	return schema.StreamReaderFromArray([]*schema.Message{}), nil
+	msg, err := m.Generate(ctx, input, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
 }
 
 func (m *blockingToolModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {

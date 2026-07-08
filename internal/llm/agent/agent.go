@@ -14,8 +14,6 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -51,7 +49,7 @@ type ToolCallOutput struct {
 type BeforeToolCallHook func(ctx context.Context, input ToolCallInput) (string, error)
 
 // SemanticToolResultHook 在工具执行后处理语义结果。
-// 返回值会进入 ReAct 后续上下文、MessageFuture 和下游回调。
+// 返回值会进入后续模型上下文和下游回调。
 type SemanticToolResultHook func(ctx context.Context, input ToolCallInput, output ToolCallOutput) (string, error)
 
 // ToolResultHook 是工具结果后处理回调。
@@ -100,70 +98,6 @@ func newModel(ctx context.Context, cfg config.LLMConfig) (model.ToolCallingChatM
 		return nil, fmt.Errorf("create chat model: %w", err)
 	}
 	return chatModel, nil
-}
-
-func toolsConfigForRun(tools []tool.InvokableTool, hooks RunHooks) compose.ToolsNodeConfig {
-	baseTools := make([]tool.BaseTool, len(tools))
-	for i, t := range tools {
-		baseTools[i] = t
-	}
-
-	config := compose.ToolsNodeConfig{Tools: baseTools}
-	if hooks.BeforeToolCall != nil {
-		config.ToolArgumentsHandler = func(ctx context.Context, name, arguments string) (string, error) {
-			return hooks.BeforeToolCall(ctx, ToolCallInput{
-				Name:      name,
-				Arguments: arguments,
-			})
-		}
-	}
-	if hooks.SemanticAfterToolCall != nil {
-		config.ToolCallMiddlewares = []compose.ToolMiddleware{{
-			Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
-				return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-					output, err := next(ctx, input)
-					if err != nil {
-						return nil, err
-					}
-					if output == nil {
-						output = &compose.ToolOutput{}
-					}
-					result, err := hooks.SemanticAfterToolCall(ctx, ToolCallInput{
-						Name:      input.Name,
-						Arguments: input.Arguments,
-						CallID:    input.CallID,
-					}, ToolCallOutput{Result: output.Result})
-					if err != nil {
-						return nil, err
-					}
-					output.Result = result
-					return output, nil
-				}
-			},
-		}}
-	}
-	return config
-}
-
-// newAgent 创建 ReAct Agent（不含 MessageFuture option）。
-func newAgent(ctx context.Context, chatModel model.ToolCallingChatModel, tools []tool.InvokableTool, maxStep int) (*react.Agent, error) {
-	return newAgentWithToolsConfig(ctx, chatModel, toolsConfigForRun(tools, RunHooks{}), maxStep)
-}
-
-func newAgentWithToolsConfig(ctx context.Context, chatModel model.ToolCallingChatModel, toolsConfig compose.ToolsNodeConfig, maxStep int) (*react.Agent, error) {
-	if maxStep <= 0 {
-		maxStep = 15
-	}
-
-	agent, err := react.NewAgent(ctx, &react.AgentConfig{
-		ToolCallingModel: chatModel,
-		ToolsConfig:      toolsConfig,
-		MaxStep:          maxStep,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create agent: %w", err)
-	}
-	return agent, nil
 }
 
 // Ask 向 LLM Agent 提问，通过 channel 流式返回每一步执行过程。
