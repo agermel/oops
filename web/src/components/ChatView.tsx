@@ -2,6 +2,8 @@ import React from "react";
 import {
   AlertTriangle,
   Bot,
+  ChevronDown,
+  ChevronRight,
   GitBranch,
   Hammer,
   MessageSquare,
@@ -23,7 +25,10 @@ import type {
   ToolDefinition,
 } from "../types";
 import { CHAT_MAX_SESSION_BADGES } from "../types";
+import { getErrorMessage } from "../lib/api";
+import { useToolToggle, useTools, type ToolItem, type ToolsData } from "../hooks/useTools";
 import { messageKey, textFromContent, toolCallsFromMessage } from "../lib/session";
+import { ToggleSwitch } from "./ToggleSwitch";
 import { StreamingText } from "./StreamingText";
 import { FormInput } from "./ui/FormInput";
 import { Button } from "./ui/Button";
@@ -65,6 +70,50 @@ export function ChatView({
   const events = session.events || [];
   const tree = React.useMemo(() => buildSessionTree(session.entries || []), [session.entries]);
   const runningTools = React.useMemo(() => currentToolStates(events), [events]);
+  const { data: toolsData, isLoading: toolsLoading, error: toolsError } = useTools();
+  const toolCount = toolsData ? toolInventoryCount(toolsData) : session.tools?.length || 0;
+  const sidebarTabs = React.useMemo(
+    () => [
+      {
+        id: "tools",
+        label: "工具",
+        icon: <Wrench size={15} />,
+        badge: toolCount,
+        content: (
+          <RuntimeToolInventory
+            inventory={toolsData}
+            loading={toolsLoading}
+            error={toolsError}
+            fallbackTools={session.tools || []}
+          />
+        ),
+      },
+      {
+        id: "executions",
+        label: "执行",
+        icon: <Hammer size={15} />,
+        badge: runningTools.filter((state) => !state.done).length,
+        content: <ToolExecutionList states={runningTools} />,
+      },
+      {
+        id: "tree",
+        label: "会话树",
+        icon: <GitBranch size={15} />,
+        badge: countTreeNodes(tree),
+        content: <SessionTree nodes={tree} activeLeafId={session.leafId || ""} disabled={chatLoading} onSelectLeaf={onSelectLeaf} />,
+      },
+      {
+        id: "events",
+        label: "时间线",
+        icon: <MessageSquare size={15} />,
+        badge: events.length,
+        content: <EventTimeline events={events} />,
+      },
+    ],
+    [chatLoading, events, onSelectLeaf, runningTools, session.leafId, session.tools, toolCount, toolsData, toolsError, toolsLoading, tree],
+  );
+  const [activeSidebarTab, setActiveSidebarTab] = React.useState(sidebarTabs[0].id);
+  const activeSidebarPanel = sidebarTabs.find((tab) => tab.id === activeSidebarTab) || sidebarTabs[0];
   const otherSessions = sessions.filter((s) => s.id !== sessionId);
   const hasContent = messages.length > 0 || events.length > 0;
   const lastMessage = messages[messages.length - 1];
@@ -134,18 +183,36 @@ export function ChatView({
           {chatError && <div className="chat-error">{chatError}</div>}
         </div>
 
-        <aside className="agent-runtime-sidebar" aria-label="运行状态">
-          <RuntimePanel title="工具" icon={<Wrench size={15} />}>
-            <ToolList tools={session.tools || []} />
-          </RuntimePanel>
-          <RuntimePanel title="执行中" icon={<Hammer size={15} />}>
-            <ToolExecutionList states={runningTools} />
-          </RuntimePanel>
-          <RuntimePanel title="Session Tree" icon={<GitBranch size={15} />}>
-            <SessionTree nodes={tree} activeLeafId={session.leafId || ""} disabled={chatLoading} onSelectLeaf={onSelectLeaf} />
-          </RuntimePanel>
-          <RuntimePanel title="事件时间线" icon={<MessageSquare size={15} />}>
-            <EventTimeline events={events} />
+        <aside className="agent-runtime-sidebar" aria-label="运行状态侧边栏">
+          <div className="runtime-sidebar-tabs" role="tablist" aria-label="运行状态">
+            {sidebarTabs.map((tab) => {
+              const active = tab.id === activeSidebarPanel.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  className={`runtime-sidebar-tab ${active ? "active" : ""}`}
+                  aria-selected={active}
+                  aria-controls={`runtime-sidebar-panel-${tab.id}`}
+                  id={`runtime-sidebar-tab-${tab.id}`}
+                  title={tab.label}
+                  onClick={() => setActiveSidebarTab(tab.id)}
+                >
+                  {tab.icon}
+                  <span>{tab.label}</span>
+                  {tab.badge > 0 && <small>{tab.badge}</small>}
+                </button>
+              );
+            })}
+          </div>
+          <RuntimePanel
+            id={`runtime-sidebar-panel-${activeSidebarPanel.id}`}
+            labelledBy={`runtime-sidebar-tab-${activeSidebarPanel.id}`}
+            title={activeSidebarPanel.label}
+            icon={activeSidebarPanel.icon}
+          >
+            {activeSidebarPanel.content}
           </RuntimePanel>
         </aside>
       </div>
@@ -239,9 +306,21 @@ function ToolCallView({ call }: { call: ToolCallContent }) {
   );
 }
 
-function RuntimePanel({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function RuntimePanel({
+  id,
+  labelledBy,
+  title,
+  icon,
+  children,
+}: {
+  id: string;
+  labelledBy: string;
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="runtime-panel-section">
+    <section className="runtime-panel-section" role="tabpanel" id={id} aria-labelledby={labelledBy}>
       <h3>{icon}<span>{title}</span></h3>
       {children}
     </section>
@@ -258,6 +337,131 @@ function ToolList({ tools }: { tools: ToolDefinition[] }) {
           {tool.description && <small>{tool.description}</small>}
         </div>
       ))}
+    </div>
+  );
+}
+
+function RuntimeToolInventory({
+  inventory,
+  loading,
+  error,
+  fallbackTools,
+}: {
+  inventory?: ToolsData;
+  loading: boolean;
+  error: unknown;
+  fallbackTools: ToolDefinition[];
+}) {
+  const toggleMutation = useToolToggle();
+  const [expandedGroups, setExpandedGroups] = React.useState<Record<string, boolean>>({ native: true });
+  const groups = toolGroups(inventory);
+  const hasGroups = groups.length > 0;
+  const errorMessage = error ? getErrorMessage(error, "读取工具列表失败") : "";
+
+  function toggleGroup(id: string) {
+    setExpandedGroups((prev) => ({ ...prev, [id]: !(prev[id] ?? id === "native") }));
+  }
+
+  if (loading && !inventory) {
+    return <div className="runtime-empty">读取工具中…</div>;
+  }
+
+  if (!hasGroups) {
+    return (
+      <div className="runtime-tool-groups">
+        {errorMessage && <div className="runtime-tool-error">{errorMessage}</div>}
+        <ToolList tools={fallbackTools} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="runtime-tool-groups">
+      {errorMessage && <div className="runtime-tool-error">{errorMessage}</div>}
+      {groups.map((group) => {
+        const expanded = expandedGroups[group.id] ?? group.defaultExpanded;
+        const togglingToolName = toggleMutation.isPending ? toggleMutation.variables?.name : "";
+        return (
+          <ToolGroupSection
+            key={group.id}
+            id={group.id}
+            title={group.title}
+            tools={group.tools}
+            expanded={expanded}
+            onToggle={() => toggleGroup(group.id)}
+            togglingToolName={togglingToolName}
+            onToolToggle={(name, enabled) => toggleMutation.mutate({ name, enabled })}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function ToolGroupSection({
+  id,
+  title,
+  tools,
+  expanded,
+  onToggle,
+  togglingToolName,
+  onToolToggle,
+}: {
+  id: string;
+  title: string;
+  tools: ToolItem[];
+  expanded: boolean;
+  onToggle: () => void;
+  togglingToolName?: string;
+  onToolToggle: (name: string, enabled: boolean) => void;
+}) {
+  const panelID = `runtime-tool-group-${id}`;
+  const enabled = enabledToolCount(tools);
+  return (
+    <section className="runtime-tool-group">
+      <button
+        type="button"
+        className="runtime-tool-group-header"
+        aria-expanded={expanded}
+        aria-controls={panelID}
+        onClick={onToggle}
+      >
+        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span>{title}</span>
+        <small>{enabled}/{tools.length}</small>
+      </button>
+      {expanded && (
+        <div id={panelID} className="runtime-tool-group-body">
+          {tools.map((tool) => (
+            <RuntimeToolRow
+              key={tool.name}
+              tool={tool}
+              toggling={togglingToolName === tool.name}
+              onToggle={(enabled) => onToolToggle(tool.name, enabled)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RuntimeToolRow({
+  tool,
+  toggling,
+  onToggle,
+}: {
+  tool: ToolItem;
+  toggling: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div className={`runtime-tool-row ${!tool.enabled ? "tool-disabled" : ""}`}>
+      <div className="runtime-tool-info">
+        <code className="runtime-tool-name">{tool.name}</code>
+        {tool.description && <span className="runtime-tool-desc">{tool.description}</span>}
+      </div>
+      <ToggleSwitch checked={tool.enabled} disabled={toggling} onChange={onToggle} />
     </div>
   );
 }
@@ -398,6 +602,32 @@ function buildSessionTree(entries: SessionEntry[]): TreeNode[] {
     }
   }
   return roots;
+}
+
+function countTreeNodes(nodes: TreeNode[]): number {
+  return nodes.reduce((total, node) => total + 1 + countTreeNodes(node.children), 0);
+}
+
+function toolInventoryCount(inventory: ToolsData): number {
+  return inventory.native.length + Object.values(inventory.mcp).reduce((total, tools) => total + tools.length, 0);
+}
+
+function enabledToolCount(tools: ToolItem[]): number {
+  return tools.filter((tool) => tool.enabled).length;
+}
+
+function toolGroups(inventory?: ToolsData): Array<{ id: string; title: string; tools: ToolItem[]; defaultExpanded: boolean }> {
+  if (!inventory) return [];
+  const groups: Array<{ id: string; title: string; tools: ToolItem[]; defaultExpanded: boolean }> = [];
+  if (inventory.native.length > 0) {
+    groups.push({ id: "native", title: "内置工具", tools: inventory.native, defaultExpanded: true });
+  }
+  for (const [name, tools] of Object.entries(inventory.mcp)) {
+    if (tools.length > 0) {
+      groups.push({ id: `mcp-${encodeURIComponent(name)}`, title: `MCP: ${name}`, tools, defaultExpanded: false });
+    }
+  }
+  return groups;
 }
 
 function entryLabel(entry: SessionEntry): string {
