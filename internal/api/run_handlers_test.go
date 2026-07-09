@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	"oops/internal/llm/agent"
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/runtime/harness"
 	runtimestore "oops/internal/store/runtime"
@@ -154,6 +156,33 @@ func TestRunToolHelpersPreferReservedNames(t *testing.T) {
 	}
 	if info.Name != "repo_read_file" {
 		t.Fatalf("filtered tool = %q", info.Name)
+	}
+}
+
+func TestHandleRunCreateRejectsInvalidSkillCommandBeforeRun(t *testing.T) {
+	manager := newRunManager()
+	server := &Server{
+		llmClient:  &agent.Client{},
+		runManager: manager,
+		skillStore: newTestSkillStore(t),
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/runs",
+		strings.NewReader(`{"text":"/skill:missing"}`),
+	)
+	recorder := httptest.NewRecorder()
+
+	server.handleRunCreate(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "skill not found or disabled") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	if len(manager.runs) != 0 {
+		t.Fatalf("runs created = %d, want 0", len(manager.runs))
 	}
 }
 

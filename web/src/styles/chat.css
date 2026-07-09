@@ -534,6 +534,7 @@
 }
 
 .chat-footer-main {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 48px;
   align-items: end;
@@ -568,6 +569,76 @@
 .chat-footer-main button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.skill-command-menu {
+  position: absolute;
+  left: 0;
+  right: 58px;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-md);
+}
+
+.skill-command-item {
+  display: grid !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 38px;
+  place-items: initial !important;
+  gap: 2px;
+  padding: 7px 9px;
+  color: var(--text) !important;
+  border: 0;
+  border-radius: var(--radius-xs) !important;
+  background: transparent !important;
+  text-align: left;
+}
+
+.skill-command-item.active,
+.skill-command-item:hover {
+  background: var(--surface-subtle) !important;
+}
+
+.skill-command-item span {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.skill-command-item small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-invocation-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.skill-invocation-summary span {
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.skill-invocation-summary p {
+  margin: 0;
 }
 
 .chat-token-stats {

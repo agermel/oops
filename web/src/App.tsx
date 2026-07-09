@@ -33,6 +33,7 @@ import {
   applyAgentEventToSession,
   sessionFromAPI,
 } from "./lib/session";
+import { nextChatStateAfterCreateError } from "./lib/chatRequestState";
 import { shouldAutoExpandFirstServer } from "./lib/serverTreeState";
 import { Header } from "./components/Header";
 import { SideRail } from "./components/SideRail";
@@ -238,6 +239,7 @@ export function App() {
     setChatError("");
     setChatLoading(true);
 
+    let runCreated = false;
     try {
       const resp = await fetch(runPaths.create, {
         method: "POST",
@@ -253,6 +255,7 @@ export function App() {
         throw new Error(data.error || `HTTP ${resp.status}`);
       }
       const payload = await resp.json() as CreateRunResponse;
+      runCreated = true;
       activeRunIdRef.current = payload.runId;
       setSessionId(payload.sessionId);
       setSessionLoaded(true);
@@ -264,8 +267,10 @@ export function App() {
       openRunStream(payload.runId);
     } catch (err) {
       const errorMessage = getErrorMessage(err, "聊天请求失败");
+      const nextState = nextChatStateAfterCreateError({ input: "", loading: true }, q, runCreated);
+      setChatInput(nextState.input);
+      setChatLoading(nextState.loading);
       setChatError(errorMessage);
-      setChatLoading(false);
       chatLoadingRef.current = false;
     }
   }
@@ -775,6 +780,7 @@ export function App() {
               chatLoading={chatLoading}
               chatError={chatError}
               sessions={sessions}
+              skills={skills}
               onInputChange={setChatInput}
               onSend={() => sendChat()}
               onAbort={() => void abortRun()}

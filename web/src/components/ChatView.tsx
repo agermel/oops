@@ -26,6 +26,7 @@ import type {
   ToolCallContent,
   ToolDefinition,
   ToolResult,
+  Skill,
 } from "../types";
 import { CHAT_MAX_SESSION_TABS } from "../types";
 import { getErrorMessage } from "../lib/api";
@@ -41,6 +42,14 @@ import { ToggleSwitch } from "./ToggleSwitch";
 import { StreamingText } from "./StreamingText";
 import { FormInput } from "./ui/FormInput";
 import { Button } from "./ui/Button";
+import {
+  applySkillSuggestion,
+  handleSkillSuggestionKey,
+  parseSkillInvocationSummary,
+  skillInvocationDisplayText,
+  skillSuggestions,
+  type SkillSuggestion,
+} from "../lib/skillSlashCommand";
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD_PX = 48;
 
@@ -50,6 +59,7 @@ export function ChatView({
   chatLoading,
   chatError,
   sessions,
+  skills,
   onInputChange,
   onSend,
   onAbort,
@@ -65,6 +75,7 @@ export function ChatView({
   chatLoading: boolean;
   chatError: string;
   sessions: SessionInfo[];
+  skills: Skill[];
   onInputChange: (value: string) => void;
   onSend: () => void;
   onAbort: () => void;
@@ -81,6 +92,10 @@ export function ChatView({
   const messageListRef = React.useRef<HTMLDivElement>(null);
   const shouldFollowMessagesRef = React.useRef(true);
   const [collapsedTreeIds, setCollapsedTreeIds] = React.useState<Set<string>>(() => new Set());
+  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const [skillMenuOpen, setSkillMenuOpen] = React.useState(false);
+  const [activeSkillIndex, setActiveSkillIndex] = React.useState(0);
+  const activeSkillIndexRef = React.useRef(0);
   const tree = React.useMemo(
     () => buildSessionTreeDisplay(session.entries || [], session.leafId || "", {
       messages,
@@ -181,6 +196,10 @@ export function ChatView({
   const hasContent = messages.length > 0 || events.length > 0;
   const lastMessage = messages[messages.length - 1];
   const showAssistantThinking = chatLoading && lastMessage?.role !== "assistant";
+  const skillMenuItems = React.useMemo(() => {
+    if (!skillMenuOpen || chatLoading) return [];
+    return skillSuggestions(chatInput, skills);
+  }, [chatInput, chatLoading, skillMenuOpen, skills]);
 
   const scrollMessagesToBottom = React.useCallback(() => {
     const list = messageListRef.current;
@@ -201,6 +220,28 @@ export function ChatView({
 
   function handleMessageListScroll(event: React.UIEvent<HTMLDivElement>) {
     shouldFollowMessagesRef.current = isNearScrollBottom(event.currentTarget);
+  }
+
+  function handleInputChange(value: string) {
+    onInputChange(value);
+    const hasSuggestions = skillSuggestions(value, skills).length > 0;
+    setSkillMenuOpen(hasSuggestions);
+    setSkillSelection(0);
+  }
+
+  function applySuggestion(suggestion: SkillSuggestion) {
+    const applied = applySkillSuggestion(chatInput, suggestion);
+    onInputChange(applied.value);
+    setSkillMenuOpen(false);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(applied.cursor, applied.cursor);
+    });
+  }
+
+  function setSkillSelection(index: number) {
+    activeSkillIndexRef.current = index;
+    setActiveSkillIndex(index);
   }
 
   return (
@@ -295,12 +336,31 @@ export function ChatView({
       <div className="chat-footer">
         <div className="chat-footer-main">
           <FormInput
+            ref={inputRef}
             multiline
             className="chat-input"
             placeholder="输入问题，Enter 发送，Shift+Enter 换行"
             value={chatInput}
-            onChange={(e) => onInputChange(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={(e: React.KeyboardEvent) => {
+              if (skillMenuItems.length > 0) {
+                const result = handleSkillSuggestionKey(e.key, activeSkillIndexRef.current, skillMenuItems.length, e.nativeEvent.isComposing);
+                if (result.action === "select") {
+                  e.preventDefault();
+                  applySuggestion(skillMenuItems[result.nextIndex]);
+                  return;
+                }
+                if (result.action === "close") {
+                  e.preventDefault();
+                  setSkillMenuOpen(false);
+                  return;
+                }
+                if (result.action === "move") {
+                  e.preventDefault();
+                  setSkillSelection(result.nextIndex);
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 onSend();
@@ -308,6 +368,26 @@ export function ChatView({
             }}
             disabled={chatLoading}
           />
+          {skillMenuItems.length > 0 && (
+            <div className="skill-command-menu" role="listbox" aria-label="Skill suggestions">
+              {skillMenuItems.map((item, index) => (
+                <button
+                  key={item.name}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeSkillIndex}
+                  className={`skill-command-item ${index === activeSkillIndex ? "active" : ""}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applySuggestion(item);
+                  }}
+                >
+                  <span>{item.command}</span>
+                  {item.description && <small>{item.description}</small>}
+                </button>
+              ))}
+            </div>
+          )}
           <Button
             onClick={() => onSend()}
             disabled={chatLoading || !chatInput.trim()}
@@ -324,10 +404,19 @@ export function ChatView({
 
 function AgentMessageView({ message, animate }: { message: AgentMessage; animate: boolean }) {
   if (message.role === "user") {
+    const text = textFromContent(message.content);
+    const skillSummary = parseSkillInvocationSummary(text);
     return (
       <div className="chat-msg user">
         <div className="chat-avatar"><User size={16} /></div>
-        <div className="chat-content">{textFromContent(message.content)}</div>
+        <div className="chat-content">
+          {skillSummary ? (
+            <div className="skill-invocation-summary">
+              <span>skill:{skillSummary.name}</span>
+              {skillSummary.instructions && <p>{skillSummary.instructions}</p>}
+            </div>
+          ) : text}
+        </div>
       </div>
     );
   }
@@ -977,7 +1066,7 @@ function sessionTabFromInfo(session: SessionInfo, activeSessionId: string, activ
 
 function firstUserMessageSummary(messages: AgentMessage[]): string {
   const user = messages.find((message) => message.role === "user");
-  return user ? textFromContent(user.content) : "";
+  return user ? skillInvocationDisplayText(textFromContent(user.content)) : "";
 }
 
 function shortSessionTitle(value: string | undefined, fallbackID: string): string {

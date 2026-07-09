@@ -223,19 +223,8 @@ func NewSkillTool(store *skills.SkillStore) (tool.InvokableTool, error) {
 			if !skill.Enabled {
 				return fmt.Sprintf("Skill %q is disabled.", input.Name), nil
 			}
-			return formatSkillContent(skill), nil
+			return skills.FormatSkillContent(skill), nil
 		})
-}
-
-// formatSkillContent 将 Skill 内容格式化为 XML。
-func formatSkillContent(skill *skills.Skill) string {
-	return strings.Join([]string{
-		"<skill_content name=\"" + skill.Name + "\">",
-		"# Skill: " + skill.Name,
-		"",
-		skill.Content,
-		"</skill_content>",
-	}, "\n")
 }
 
 // ---------- 组合入口 ----------

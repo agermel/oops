@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -203,6 +204,17 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "text is required", http.StatusBadRequest)
 		return
 	}
+	expanded, err := s.expandSkillCommand(req.Text)
+	if err != nil {
+		var commandErr skillCommandError
+		if errors.As(err, &commandErr) {
+			writeJSONError(w, commandErr.message, commandErr.status)
+			return
+		}
+		sanitizedError(w, "run create", err, http.StatusInternalServerError)
+		return
+	}
+	req.Text = expanded
 
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	agentSession, err := s.newRunAgentSession(ctx, req)
