@@ -103,9 +103,94 @@ func TestEinoStreamFnEmitsErrorEventForStreamError(t *testing.T) {
 	}
 }
 
+func TestEinoStreamFnReplaysAssistantThinkingWithoutOutputParts(t *testing.T) {
+	chatModel := &chunkedStreamModel{
+		chunks: []*schema.Message{{Role: schema.Assistant, Content: "ok"}},
+	}
+	streamFn, err := NewEinoStreamFn(context.Background(), chatModel, nil)
+	if err != nil {
+		t.Fatalf("NewEinoStreamFn() error = %v", err)
+	}
+
+	stream, err := streamFn(context.Background(), coreagent.StreamRequest{
+		Context: protocol.Context{Messages: protocol.MessageList{
+			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("hello")}},
+			protocol.AssistantMessage{
+				Content: protocol.ContentList{
+					protocol.NewThinkingContent("private reasoning"),
+					protocol.NewTextContent("visible answer"),
+				},
+				StopReason: protocol.StopReasonStop,
+			},
+			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("next")}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+	drainStream(t, stream)
+
+	if len(chatModel.messages) != 3 {
+		t.Fatalf("messages = %#v, want 3", chatModel.messages)
+	}
+	assistant := chatModel.messages[1]
+	if assistant.Role != schema.Assistant {
+		t.Fatalf("assistant role = %q", assistant.Role)
+	}
+	if assistant.Content != "visible answer" {
+		t.Fatalf("assistant content = %q, want visible answer", assistant.Content)
+	}
+	if assistant.ReasoningContent != "private reasoning" {
+		t.Fatalf("ReasoningContent = %q, want private reasoning", assistant.ReasoningContent)
+	}
+	if len(assistant.AssistantGenMultiContent) != 0 {
+		t.Fatalf("AssistantGenMultiContent = %#v, want empty", assistant.AssistantGenMultiContent)
+	}
+}
+
+func TestEinoStreamFnSkipsUnreplayableAssistantHistory(t *testing.T) {
+	chatModel := &chunkedStreamModel{
+		chunks: []*schema.Message{{Role: schema.Assistant, Content: "ok"}},
+	}
+	streamFn, err := NewEinoStreamFn(context.Background(), chatModel, nil)
+	if err != nil {
+		t.Fatalf("NewEinoStreamFn() error = %v", err)
+	}
+
+	stream, err := streamFn(context.Background(), coreagent.StreamRequest{
+		Context: protocol.Context{Messages: protocol.MessageList{
+			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("hello")}},
+			protocol.AssistantMessage{
+				Content:      protocol.ContentList{protocol.NewTextContent("failed")},
+				StopReason:   protocol.StopReasonError,
+				ErrorMessage: "failed",
+			},
+			protocol.AssistantMessage{
+				Content:    protocol.ContentList{protocol.NewThinkingContent("only reasoning")},
+				StopReason: protocol.StopReasonStop,
+			},
+			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("next")}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+	drainStream(t, stream)
+
+	if len(chatModel.messages) != 2 {
+		t.Fatalf("messages = %#v, want 2", chatModel.messages)
+	}
+	for _, message := range chatModel.messages {
+		if message.Role == schema.Assistant {
+			t.Fatalf("unexpected assistant message replayed: %#v", message)
+		}
+	}
+}
+
 type chunkedStreamModel struct {
-	chunks []*schema.Message
-	err    error
+	chunks   []*schema.Message
+	err      error
+	messages []*schema.Message
 }
 
 func (m *chunkedStreamModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
@@ -115,7 +200,8 @@ func (m *chunkedStreamModel) Generate(context.Context, []*schema.Message, ...mod
 	return schema.ConcatMessages(m.chunks)
 }
 
-func (m *chunkedStreamModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+func (m *chunkedStreamModel) Stream(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	m.messages = messages
 	if m.err != nil {
 		reader, writer := schema.Pipe[*schema.Message](1)
 		writer.Send(nil, m.err)
@@ -127,4 +213,13 @@ func (m *chunkedStreamModel) Stream(context.Context, []*schema.Message, ...model
 
 func (m *chunkedStreamModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
 	return m, nil
+}
+
+func drainStream(t *testing.T, stream *protocol.AssistantMessageEventStream) {
+	t.Helper()
+	for range stream.Events() {
+	}
+	if _, err := stream.Result(context.Background()); err != nil {
+		t.Fatalf("stream.Result() error = %v", err)
+	}
 }

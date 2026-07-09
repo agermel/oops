@@ -190,20 +190,10 @@ func toEinoAssistantMessage(msg protocol.AssistantMessage) (*schema.Message, err
 			if out.ReasoningContent == "" {
 				out.ReasoningContent = c.Thinking
 			}
-			outputParts = append(outputParts, schema.MessageOutputPart{
-				Type:      schema.ChatMessagePartTypeReasoning,
-				Reasoning: &schema.MessageOutputReasoning{Text: c.Thinking, Signature: c.ThinkingSignature},
-			})
-			hasOutputParts = true
 		case *protocol.ThinkingContent:
 			if out.ReasoningContent == "" {
 				out.ReasoningContent = c.Thinking
 			}
-			outputParts = append(outputParts, schema.MessageOutputPart{
-				Type:      schema.ChatMessagePartTypeReasoning,
-				Reasoning: &schema.MessageOutputReasoning{Text: c.Thinking, Signature: c.ThinkingSignature},
-			})
-			hasOutputParts = true
 		case protocol.ImageContent:
 			outputParts = append(outputParts, schema.MessageOutputPart{Type: schema.ChatMessagePartTypeImageURL, Image: toEinoOutputImage(c)})
 			hasOutputParts = true

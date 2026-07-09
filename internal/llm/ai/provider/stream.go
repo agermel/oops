@@ -54,12 +54,44 @@ func einoMessagesFromContext(ctx protocol.Context) ([]*schema.Message, error) {
 	if ctx.SystemPrompt != "" {
 		messages = append(messages, schema.SystemMessage(ctx.SystemPrompt))
 	}
-	converted, err := protoeino.ToEinoMessages(ctx.Messages)
-	if err != nil {
-		return nil, err
+	for _, message := range ctx.Messages {
+		if !shouldReplayMessage(message) {
+			continue
+		}
+		converted, err := protoeino.ToEinoMessage(message)
+		if err != nil {
+			return nil, err
+		}
+		if isEmptyAssistantForProvider(converted) {
+			continue
+		}
+		messages = append(messages, converted)
 	}
-	messages = append(messages, converted...)
 	return messages, nil
+}
+
+func shouldReplayMessage(message protocol.AgentMessage) bool {
+	switch value := message.(type) {
+	case protocol.AssistantMessage:
+		return value.StopReason != protocol.StopReasonError && value.StopReason != protocol.StopReasonAborted
+	case *protocol.AssistantMessage:
+		if value == nil {
+			return true
+		}
+		return value.StopReason != protocol.StopReasonError && value.StopReason != protocol.StopReasonAborted
+	default:
+		return true
+	}
+}
+
+func isEmptyAssistantForProvider(message *schema.Message) bool {
+	if message == nil || message.Role != schema.Assistant {
+		return false
+	}
+	return message.Content == "" &&
+		len(message.ToolCalls) == 0 &&
+		len(message.AssistantGenMultiContent) == 0 &&
+		len(message.MultiContent) == 0
 }
 
 func drainEinoMessageStream(ctx context.Context, reader *schema.StreamReader[*schema.Message], out *protocol.AssistantMessageEventStream) {

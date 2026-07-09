@@ -102,6 +102,12 @@ func TestEinoAssistantRoundTripPreservesToolUsageAndReasoning(t *testing.T) {
 	if len(einoMsg.ToolCalls) != 1 || einoMsg.ToolCalls[0].Function.Arguments != `{"query":"pods"}` {
 		t.Fatalf("ToolCalls = %#v", einoMsg.ToolCalls)
 	}
+	if len(einoMsg.AssistantGenMultiContent) != 0 {
+		t.Fatalf("AssistantGenMultiContent = %#v, want empty", einoMsg.AssistantGenMultiContent)
+	}
+	if einoMsg.ReasoningContent != "considering" {
+		t.Fatalf("ReasoningContent = %q, want considering", einoMsg.ReasoningContent)
+	}
 
 	converted, err := FromEinoMessage(einoMsg)
 	if err != nil {
