@@ -107,6 +107,28 @@ func (q *Queries) DeleteAllProjects(ctx context.Context) error {
 	return err
 }
 
+const getAgentSettings = `-- name: GetAgentSettings :one
+SELECT id, max_turns, updated_at FROM agent_settings WHERE id = 'default'
+`
+
+func (q *Queries) GetAgentSettings(ctx context.Context) (AgentSetting, error) {
+	row := q.db.QueryRowContext(ctx, getAgentSettings)
+	var i AgentSetting
+	err := row.Scan(&i.ID, &i.MaxTurns, &i.UpdatedAt)
+	return i, err
+}
+
+const getUser = `-- name: GetUser :one
+SELECT username, name, password FROM users LIMIT 1
+`
+
+func (q *Queries) GetUser(ctx context.Context) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUser)
+	var i User
+	err := row.Scan(&i.Username, &i.Name, &i.Password)
+	return i, err
+}
+
 const insertDSNEntry = `-- name: InsertDSNEntry :exec
 INSERT INTO container_dsn_entries (nodelet_id, container_id, key, value)
 VALUES (?, ?, ?, ?)
@@ -467,16 +489,22 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	return items, nil
 }
 
-
-const getUser = `-- name: GetUser :one
-SELECT username, name, password FROM users LIMIT 1
+const upsertAgentSettings = `-- name: UpsertAgentSettings :exec
+INSERT INTO agent_settings (id, max_turns, updated_at)
+VALUES ('default', ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  max_turns = excluded.max_turns,
+  updated_at = excluded.updated_at
 `
 
-func (q *Queries) GetUser(ctx context.Context) (User, error) {
-	row := q.db.QueryRowContext(ctx, getUser)
-	var i User
-	err := row.Scan(&i.Username, &i.Name, &i.Password)
-	return i, err
+type UpsertAgentSettingsParams struct {
+	MaxTurns  int64 `json:"max_turns"`
+	UpdatedAt int64 `json:"updated_at"`
+}
+
+func (q *Queries) UpsertAgentSettings(ctx context.Context, arg UpsertAgentSettingsParams) error {
+	_, err := q.db.ExecContext(ctx, upsertAgentSettings, arg.MaxTurns, arg.UpdatedAt)
+	return err
 }
 
 const upsertUser = `-- name: UpsertUser :exec

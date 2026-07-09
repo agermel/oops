@@ -91,6 +91,12 @@ export const toolPaths = {
   detail: (name: string) => `/api/tools/${enc(name)}`,
 } as const;
 
+// ---- Agent Settings ----
+
+export const agentSettingsPaths = {
+  detail: "/api/agent-settings",
+} as const;
+
 // ---- Skills ----
 
 export const skillPaths = {

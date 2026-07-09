@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/runtime/harness"
+	runtimestore "oops/internal/store/runtime"
 )
 
 type namedRunTool struct {
@@ -152,5 +154,33 @@ func TestRunToolHelpersPreferReservedNames(t *testing.T) {
 	}
 	if info.Name != "repo_read_file" {
 		t.Fatalf("filtered tool = %q", info.Name)
+	}
+}
+
+func TestRunAgentLoopConfigUsesRuntimeSettings(t *testing.T) {
+	ctx := context.Background()
+	store, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer store.Close()
+	if err := store.UpdateAgentSettings(ctx, runtimestore.AgentSettingsRecord{MaxTurns: 9}); err != nil {
+		t.Fatalf("UpdateAgentSettings: %v", err)
+	}
+
+	server := &Server{runtimeStore: store}
+	config, err := server.runAgentLoopConfig(ctx, nil)
+	if err != nil {
+		t.Fatalf("runAgentLoopConfig: %v", err)
+	}
+	if config.MaxTurns != 9 {
+		t.Fatalf("MaxTurns = %d, want 9", config.MaxTurns)
+	}
+}
+
+func TestRunAgentLoopConfigRequiresRuntimeStore(t *testing.T) {
+	_, err := (&Server{}).runAgentLoopConfig(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected runtime store error")
 	}
 }

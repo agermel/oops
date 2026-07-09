@@ -227,7 +227,7 @@ func NewSkillTool(store *skills.SkillStore) (tool.InvokableTool, error) {
 		})
 }
 
-// formatSkillContent 按 OpenCode 风格将 Skill 内容格式化为 XML。
+// formatSkillContent 将 Skill 内容格式化为 XML。
 func formatSkillContent(skill *skills.Skill) string {
 	return strings.Join([]string{
 		"<skill_content name=\"" + skill.Name + "\">",

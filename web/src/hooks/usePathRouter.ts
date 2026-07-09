@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 export type Route =
   | { view: "projects" }
   | { view: "servers" }
+  | { view: "settings" }
   | { view: "console" }
   | { view: "project-overview"; projectId: string }
   | { view: "project-mcp"; projectId: string }
@@ -22,6 +23,11 @@ export function parsePathRoute(pathname: string): Route {
   // /servers
   if (segs[0] === "servers") {
     return { view: "servers" };
+  }
+
+  // /settings
+  if (segs[0] === "settings") {
+    return { view: "settings" };
   }
 
   // /console
@@ -88,6 +94,8 @@ export function routeToPath(route: Route): string {
       return "/";
     case "servers":
       return "/servers";
+    case "settings":
+      return "/settings";
     case "console":
       return "/console";
     case "project-overview":

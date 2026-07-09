@@ -18,6 +18,10 @@ import (
 const (
 	EnvPath     = "OOPS_RUNTIME_DB"
 	DefaultPath = "data/runtime.db"
+
+	DefaultAgentMaxTurns = 15
+	AgentMaxTurnsMin     = 1
+	AgentMaxTurnsMax     = 100
 )
 
 //go:embed migrations/*.sql
@@ -74,6 +78,11 @@ type UserRecord struct {
 	Password string // bcrypt hash
 }
 
+type AgentSettingsRecord struct {
+	MaxTurns  int
+	UpdatedAt time.Time
+}
+
 func OpenRuntime() (*Store, error) {
 	path := os.Getenv(EnvPath)
 	if path == "" {
@@ -125,6 +134,33 @@ func (s *Store) Close() error {
 
 func (s *Store) CountNodelets(ctx context.Context) (int64, error) {
 	return s.q.CountNodelets(ctx)
+}
+
+func (s *Store) GetAgentSettings(ctx context.Context) (AgentSettingsRecord, error) {
+	row, err := s.q.GetAgentSettings(ctx)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return AgentSettingsRecord{MaxTurns: DefaultAgentMaxTurns}, nil
+		}
+		return AgentSettingsRecord{}, err
+	}
+	return AgentSettingsRecord{
+		MaxTurns:  int(row.MaxTurns),
+		UpdatedAt: timeFromUnixMilli(row.UpdatedAt),
+	}, nil
+}
+
+func (s *Store) UpdateAgentSettings(ctx context.Context, row AgentSettingsRecord) error {
+	if row.MaxTurns < AgentMaxTurnsMin || row.MaxTurns > AgentMaxTurnsMax {
+		return fmt.Errorf("max turns must be between %d and %d", AgentMaxTurnsMin, AgentMaxTurnsMax)
+	}
+	if row.UpdatedAt.IsZero() {
+		row.UpdatedAt = time.Now()
+	}
+	return s.q.UpsertAgentSettings(ctx, UpsertAgentSettingsParams{
+		MaxTurns:  int64(row.MaxTurns),
+		UpdatedAt: timeToUnixMilli(row.UpdatedAt),
+	})
 }
 
 func (s *Store) ListNodelets(ctx context.Context) ([]NodeletRecord, error) {

@@ -43,6 +43,7 @@ import { ChatView } from "./components/ChatView";
 import { MCPFormModal } from "./components/MCPFormModal";
 import { ToolsView } from "./components/ToolsView";
 import { SkillsView } from "./components/SkillsView";
+import { AgentSettingsView } from "./components/AgentSettingsView";
 import { ConsolePanel } from "./components/ConsolePanel";
 import { LoginPage } from "./components/LoginPage";
 import { SetupPage } from "./components/SetupPage";
@@ -88,11 +89,19 @@ export function App() {
   const routeViewRef = React.useRef(route.view);
   routeViewRef.current = route.view;
 
-  const activeNav = route.view === "servers" ? "servers" : route.view === "console" ? "console" : "projects";
+  const activeNav =
+    route.view === "servers" || route.view === "settings" || route.view === "console"
+      ? route.view
+      : "projects";
   const selectedProjectID =
-    route.view === "projects" || route.view === "servers" || route.view === "console"
-      ? ""
-      : route.projectId || "";
+    route.view === "project-overview" ||
+    route.view === "project-mcp" ||
+    route.view === "project-chat" ||
+    route.view === "project-console" ||
+    route.view === "project-tools" ||
+    route.view === "project-skills"
+      ? route.projectId
+      : "";
   const projectSection: string =
     route.view === "project-chat" ? "chat" :
     route.view === "project-console" ? "console" :
@@ -629,6 +638,7 @@ export function App() {
       </a>
       <Header activeNav={activeNav} onNavChange={(id: string) => {
         if (id === "servers") navigate({ view: "servers" });
+        else if (id === "settings") navigate({ view: "settings" });
         else if (id === "console") navigate({ view: "console" });
         else if (id === "chat") {
           if (selectedProjectID) navigate({ view: "project-chat", projectId: selectedProjectID });
@@ -646,23 +656,35 @@ export function App() {
             ? goToProjectSection
             : (id: string) => {
                 if (id === "servers") navigate({ view: "servers" });
-        else if (id === "console") navigate({ view: "console" });
+                else if (id === "settings") navigate({ view: "settings" });
+                else if (id === "console") navigate({ view: "console" });
                 else if (id === "projects") navigate({ view: "projects" });
               }
         }
       />
 
       <main id="main-content" className="content">
-		{route.view === "servers" && (
-		  <section className="workspace-card">
-		    <NodeletManagementView />
-		  </section>
-		)}
-
+        {route.view === "servers" && (
+          <section className="workspace-card">
+            <NodeletManagementView />
+          </section>
+        )}
 
         {activeNav === "console" && !selectedProject && (
           <section className="workspace-card">
             <ConsolePanel />
+          </section>
+        )}
+
+        {activeNav === "settings" && !selectedProject && (
+          <section className="workspace-card">
+            <div className="workspace-head">
+              <div>
+                <h1>设置</h1>
+                <p>管理 Agent Runtime 参数。</p>
+              </div>
+            </div>
+            <AgentSettingsView />
           </section>
         )}
 

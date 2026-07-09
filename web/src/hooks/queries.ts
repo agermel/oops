@@ -25,6 +25,9 @@ export const queryKeys = {
   tools: {
     all: ["tools"] as const,
   },
+  agentSettings: {
+    detail: ["agent-settings"] as const,
+  },
   nodelets: {
     all: ["nodelets"] as const,
     status: ["nodelets", "status"] as const,

@@ -47,6 +47,7 @@ type NodeletClient interface {
 type Options struct {
 	NodeletManager *nodelet.NodeletManager
 	NodeletClient  NodeletClient
+	RuntimeStore   *runtimestore.Store
 	LLMEnabled     bool
 	LLMConfig      config.LLMConfig
 	UserStore      *auth.Store
@@ -93,11 +94,11 @@ func NewFromConfig(cfg config.Config) *Server {
 	s := New(Options{
 		NodeletManager: nm,
 		NodeletClient:  nodelet.NewClient(nil),
+		RuntimeStore:   runtimeStore,
 		LLMEnabled:     cfg.LLM.Enabled,
 		LLMConfig:      cfg.LLM,
 	})
 	s.nodeletProber = prober
-	s.runtimeStore = runtimeStore
 
 	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
 	mgr, err := mcp.NewManagerWithRuntime(runtimeStore, func(mcpTools []mcp.ConnectionTool) {
@@ -161,6 +162,7 @@ func New(options Options) *Server {
 	s := &Server{
 		nodeletManager: options.NodeletManager,
 		nodeletClient:  options.NodeletClient,
+		runtimeStore:   options.RuntimeStore,
 		llmConfig:      options.LLMConfig,
 		sessionStore:   sessionStore,
 		UserStore:      options.UserStore,
@@ -251,6 +253,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/runs", authedRun(s.handleRunCreate))
 	mux.HandleFunc("GET /api/runs/{id}/events", authed(s.handleRunEvents))
 	mux.HandleFunc("POST /api/runs/{id}/abort", authed(s.handleRunAbort))
+	mux.HandleFunc("GET /api/agent-settings", authed(s.handleAgentSettingsGet))
+	mux.HandleFunc("PUT /api/agent-settings", authed(s.handleAgentSettingsUpdate))
 	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
 	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
 	mux.HandleFunc("PATCH /api/sessions/{id}", authed(s.handleSessionUpdate))

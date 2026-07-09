@@ -108,3 +108,13 @@ SELECT username, name, password FROM users LIMIT 1;
 -- name: UpsertUser :exec
 INSERT INTO users (username, name, password) VALUES (?, ?, ?)
 ON CONFLICT(username) DO UPDATE SET name = excluded.name, password = excluded.password;
+
+-- name: GetAgentSettings :one
+SELECT id, max_turns, updated_at FROM agent_settings WHERE id = 'default';
+
+-- name: UpsertAgentSettings :exec
+INSERT INTO agent_settings (id, max_turns, updated_at)
+VALUES ('default', ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  max_turns = excluded.max_turns,
+  updated_at = excluded.updated_at;

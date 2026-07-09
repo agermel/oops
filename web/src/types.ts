@@ -11,6 +11,7 @@ import {
   Terminal,
   Cog,
   BookOpen,
+  Settings,
 } from "lucide-react";
 
 // ---- 项目 ----
@@ -441,6 +442,10 @@ export type SessionDetail = SessionInfo & {
   messages: SessionMessage[];
 };
 
+export type AgentSettings = {
+  maxTurns: number;
+};
+
 // ---- Skills ----
 
 export type Skill = {
@@ -462,6 +467,7 @@ export type NodeletItem = ServerWithNodelet;
 export const navigation = [
   { id: "projects", label: "项目", icon: FolderKanban },
   { id: "servers", label: "服务器", icon: Server },
+  { id: "settings", label: "设置", icon: Settings },
   { id: "console", label: "控制台", icon: Terminal },
 ] as const;
 

@@ -91,3 +91,60 @@ func TestRuntimeStoreMCPContainerBindingUnique(t *testing.T) {
 		t.Fatal("expected unique binding error")
 	}
 }
+
+func TestRuntimeStoreAgentSettingsDefaultAndPersist(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	got, err := store.GetAgentSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetAgentSettings default: %v", err)
+	}
+	if got.MaxTurns != DefaultAgentMaxTurns {
+		t.Fatalf("default max turns = %d, want %d", got.MaxTurns, DefaultAgentMaxTurns)
+	}
+
+	updatedAt := time.UnixMilli(3000)
+	if err := store.UpdateAgentSettings(ctx, AgentSettingsRecord{MaxTurns: 7, UpdatedAt: updatedAt}); err != nil {
+		t.Fatalf("UpdateAgentSettings: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	got, err = reopened.GetAgentSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetAgentSettings persisted: %v", err)
+	}
+	if got.MaxTurns != 7 {
+		t.Fatalf("max turns = %d, want 7", got.MaxTurns)
+	}
+	if !got.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("updated at = %s, want %s", got.UpdatedAt, updatedAt)
+	}
+}
+
+func TestRuntimeStoreAgentSettingsRejectsInvalidMaxTurns(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	for _, maxTurns := range []int{0, -1, AgentMaxTurnsMax + 1} {
+		if err := store.UpdateAgentSettings(ctx, AgentSettingsRecord{MaxTurns: maxTurns}); err == nil {
+			t.Fatalf("UpdateAgentSettings(%d) succeeded, want error", maxTurns)
+		}
+	}
+}

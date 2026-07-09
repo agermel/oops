@@ -4,6 +4,12 @@
 
 package runtime
 
+type AgentSetting struct {
+	ID        string `json:"id"`
+	MaxTurns  int64  `json:"max_turns"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
 type ContainerDsnEntry struct {
 	NodeletID   string `json:"nodelet_id"`
 	ContainerID string `json:"container_id"`

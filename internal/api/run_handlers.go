@@ -25,7 +25,6 @@ import (
 
 const (
 	runTimeout       = 120 * time.Second
-	runMaxTurns      = 15
 	runProviderLabel = "openai-compatible"
 )
 
@@ -310,16 +309,17 @@ func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (
 		return nil, err
 	}
 	systemPrompt := s.runSystemPrompt(req.ProjectID, inventory)
+	loopConfig, err := s.runAgentLoopConfig(ctx, streamFn)
+	if err != nil {
+		return nil, err
+	}
 	runtime := harness.NewRuntime(harness.RuntimeOptions{
 		Repo: s.agentRepo,
 		Loader: harness.StaticResourceLoader{Snapshot: harness.ResourceSnapshot{
 			SystemPrompt: systemPrompt,
 			Tools:        runtimeTools,
 		}},
-		Config: coreagent.AgentLoopConfig{
-			MaxTurns: runMaxTurns,
-			Stream:   streamFn,
-		},
+		Config:   loopConfig,
 		Model:    s.llmConfig.Model,
 		Provider: runProviderLabel,
 	})
@@ -331,6 +331,20 @@ func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (
 		Provider:  runProviderLabel,
 		ProjectID: req.ProjectID,
 	})
+}
+
+func (s *Server) runAgentLoopConfig(ctx context.Context, streamFn coreagent.StreamFn) (coreagent.AgentLoopConfig, error) {
+	if s.runtimeStore == nil {
+		return coreagent.AgentLoopConfig{}, fmt.Errorf("runtime store not available")
+	}
+	settings, err := s.runtimeStore.GetAgentSettings(ctx)
+	if err != nil {
+		return coreagent.AgentLoopConfig{}, fmt.Errorf("read agent settings: %w", err)
+	}
+	return coreagent.AgentLoopConfig{
+		MaxTurns: settings.MaxTurns,
+		Stream:   streamFn,
+	}, nil
 }
 
 func (s *Server) runToolSets(ctx context.Context, platformTools []einotool.InvokableTool) ([]toolruntime.Tool, []einotool.InvokableTool, error) {
