@@ -27,6 +27,9 @@ func NewEinoStreamFn(ctx context.Context, chatModel model.ToolCallingChatModel, 
 		return nil, err
 	}
 	return func(runCtx context.Context, req coreagent.StreamRequest) (*protocol.AssistantMessageEventStream, error) {
+		if err := protocol.ValidateProviderMessageSequence(req.Context.Messages); err != nil {
+			return nil, err
+		}
 		messages, err := einoMessagesFromContext(req.Context)
 		if err != nil {
 			return nil, err
@@ -54,10 +57,7 @@ func einoMessagesFromContext(ctx protocol.Context) ([]*schema.Message, error) {
 	if ctx.SystemPrompt != "" {
 		messages = append(messages, schema.SystemMessage(ctx.SystemPrompt))
 	}
-	for _, message := range ctx.Messages {
-		if !shouldReplayMessage(message) {
-			continue
-		}
+	for _, message := range protocol.ProviderReplayMessages(ctx.Messages) {
 		converted, err := protoeino.ToEinoMessage(message)
 		if err != nil {
 			return nil, err
@@ -68,20 +68,6 @@ func einoMessagesFromContext(ctx protocol.Context) ([]*schema.Message, error) {
 		messages = append(messages, converted)
 	}
 	return messages, nil
-}
-
-func shouldReplayMessage(message protocol.AgentMessage) bool {
-	switch value := message.(type) {
-	case protocol.AssistantMessage:
-		return value.StopReason != protocol.StopReasonError && value.StopReason != protocol.StopReasonAborted
-	case *protocol.AssistantMessage:
-		if value == nil {
-			return true
-		}
-		return value.StopReason != protocol.StopReasonError && value.StopReason != protocol.StopReasonAborted
-	default:
-		return true
-	}
 }
 
 func isEmptyAssistantForProvider(message *schema.Message) bool {

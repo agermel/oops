@@ -406,6 +406,9 @@ export function App() {
       setAgentSession(nextSession);
       setSessionId(nextSession.sessionId);
       localStorage.setItem(SESSION_STORAGE_KEY, nextSession.sessionId);
+      if (nextSession.editorText && !chatInput.trim()) {
+        setChatInput(nextSession.editorText);
+      }
       setSessionLoaded(true);
     } catch (err) {
       setChatError(getErrorMessage(err, "切换分支失败"));
@@ -415,6 +418,50 @@ export function App() {
     }
   }
 
+  async function renameSession(id: string, title: string) {
+    const nextTitle = title.trim();
+    if (!id || !nextTitle) return;
+    setChatError("");
+    try {
+      await apiRequest(sessionPaths(id).update, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextTitle }),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
+    } catch (err) {
+      setChatError(getErrorMessage(err, "修改会话标题失败"));
+      throw err;
+    }
+  }
+
+  async function deleteSession(id: string) {
+    if (!id) return;
+    const deletingActiveSession = id === sessionIdRef.current;
+    if (deletingActiveSession) {
+      await abortRun();
+    }
+    try {
+      const resp = await fetch(sessionPaths(id).delete, { method: "DELETE" });
+      if (!resp.ok && resp.status !== 404) {
+        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      if (deletingActiveSession) {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        setAgentSession(EMPTY_AGENT_SESSION);
+        setChatError("");
+        setSessionId("");
+        setSessionLoaded(false);
+        setChatLoading(false);
+        chatLoadingRef.current = false;
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
+    } catch (err) {
+      setChatError(getErrorMessage(err, "删除会话失败"));
+      throw err;
+    }
+  }
 
   async function clearChat() {
     await abortRun();
@@ -712,6 +759,8 @@ export function App() {
               onClear={clearChat}
               onNewChat={startNewChat}
               onSelectSession={switchSession}
+              onRenameSession={renameSession}
+              onDeleteSession={deleteSession}
               onSelectLeaf={(leafId) => void switchBranch(leafId)}
             />
           </section>

@@ -394,6 +394,7 @@ export type SessionEntry = {
 export type SessionResponse = {
   sessionId: string;
   leafId?: string;
+  editorText?: string;
   messages: AgentMessage[];
   events: AgentEvent[];
   tools: ToolDefinition[];
@@ -421,6 +422,8 @@ export type RunStreamEvent = AgentEvent | RunDoneEvent | RunErrorEvent;
 export type SessionInfo = {
   id: string;
   projectId?: string;
+  title?: string;
+  summary?: string;
   messageCount: number;
   createdAt: number;
   updatedAt: number;
@@ -566,8 +569,8 @@ export const CHAT_MAX_TOKENS = 64_000;
 /** ConsolePanel max displayed entries. */
 export const CONSOLE_MAX_ENTRIES = 500;
 
-/** Max historical session badges in chat bar. */
-export const CHAT_MAX_SESSION_BADGES = 8;
+/** Max session tabs in chat bar. */
+export const CHAT_MAX_SESSION_TABS = 8;
 
 /** Default nodelet address placeholder. */
 export const DEFAULT_NODELET_ADDRESS = "http://:8686";

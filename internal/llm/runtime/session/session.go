@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,7 @@ type Session struct {
 	cwd       string
 	projectID string
 	name      string
+	title     string
 	entries   map[string]Entry
 	order     []string
 	leafID    string
@@ -57,6 +59,8 @@ func (s *Session) Info() Info {
 		CWD:       s.cwd,
 		ProjectID: s.projectID,
 		Name:      s.name,
+		Title:     s.title,
+		Summary:   s.summaryLocked(),
 		LeafID:    s.leafID,
 		CreatedAt: s.createdAt,
 		UpdatedAt: s.updatedAt,
@@ -73,6 +77,54 @@ func (s *Session) Entries() []Entry {
 		entries = append(entries, cloneEntry(s.entries[id]))
 	}
 	return entries
+}
+
+func (s *Session) summaryLocked() string {
+	for _, id := range s.order {
+		entry := s.entries[id]
+		if entry.Type != EntryMessage || entry.Message == nil {
+			continue
+		}
+		if entry.Message.MessageRole() != protocol.RoleUser {
+			continue
+		}
+		if text := strings.Join(contentText(entry.Message), " "); text != "" {
+			return strings.Join(strings.Fields(text), " ")
+		}
+	}
+	return ""
+}
+
+func contentText(message protocol.AgentMessage) []string {
+	var content protocol.ContentList
+	switch typed := message.(type) {
+	case protocol.UserMessage:
+		content = typed.Content
+	case *protocol.UserMessage:
+		content = typed.Content
+	case protocol.AssistantMessage:
+		content = typed.Content
+	case *protocol.AssistantMessage:
+		content = typed.Content
+	case protocol.ToolResultMessage:
+		content = typed.Content
+	case *protocol.ToolResultMessage:
+		content = typed.Content
+	}
+	out := make([]string, 0, len(content))
+	for _, item := range content {
+		switch typed := item.(type) {
+		case protocol.TextContent:
+			if typed.Text != "" {
+				out = append(out, typed.Text)
+			}
+		case *protocol.TextContent:
+			if typed != nil && typed.Text != "" {
+				out = append(out, typed.Text)
+			}
+		}
+	}
+	return out
 }
 
 func (s *Session) Entry(id string) (Entry, bool) {
@@ -152,6 +204,10 @@ func (s *Session) AppendSessionName(name string) (Entry, error) {
 	return s.append(Entry{Type: EntrySessionInfo, Name: name})
 }
 
+func (s *Session) AppendSessionTitle(title string) (Entry, error) {
+	return s.append(Entry{Type: EntrySessionInfo, Title: title})
+}
+
 func (s *Session) AppendLeaf(leafID string) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,6 +252,7 @@ func (s *Session) Fork(newID, leafID string) (*Session, error) {
 	fork.cwd = s.cwd
 	fork.projectID = s.projectID
 	fork.name = s.name
+	fork.title = s.title
 	fork.createdAt = s.createdAt
 	fork.updatedAt = time.Now()
 	for _, id := range s.order {
@@ -281,6 +338,9 @@ func (s *Session) storeEntryLocked(entry Entry) {
 		if entry.Name != "" {
 			s.name = entry.Name
 		}
+		if entry.Title != "" {
+			s.title = entry.Title
+		}
 	} else if entry.Type == EntryLeaf {
 		s.leafID = entry.LeafID
 	} else {
@@ -327,8 +387,12 @@ func (s *Session) loadEntryLocked(entry Entry) error {
 }
 
 func (s *Session) buildContextLocked() Context {
-	path := s.pathToLeafLocked(s.leafID)
-	ctx := Context{LeafID: s.leafID}
+	return s.buildContextForLeafLocked(s.leafID)
+}
+
+func (s *Session) buildContextForLeafLocked(leafID string) Context {
+	path := s.pathToLeafLocked(leafID)
+	ctx := Context{LeafID: leafID}
 	for _, entry := range path {
 		applyStateEntry(&ctx, entry)
 	}

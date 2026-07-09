@@ -212,6 +212,11 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		sanitizedError(w, "run create", err, http.StatusInternalServerError)
 		return
 	}
+	if err := agentSession.ValidateProviderContext(); err != nil {
+		cancel()
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	snapshot := agentSession.Snapshot()
 	runID := newRunID()
 	run := s.runManager.create(runID, snapshot.SessionID, req.ProjectID, cancel)

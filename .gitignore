@@ -17,3 +17,4 @@ bin/
 .DS_Store
 .omx
 AGENTS.md
+agent-sessions/

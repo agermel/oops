@@ -56,6 +56,8 @@ type Session struct {
 type SessionInfo struct {
 	ID           string `json:"id"`
 	ProjectID    string `json:"projectId,omitempty"`
+	Title        string `json:"title,omitempty"`
+	Summary      string `json:"summary,omitempty"`
 	MessageCount int    `json:"messageCount"`
 	CreatedAt    int64  `json:"createdAt"` // unix milli
 	UpdatedAt    int64  `json:"updatedAt"` // unix milli

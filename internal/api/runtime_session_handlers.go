@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	coreagent "oops/internal/llm/core/agent"
@@ -17,6 +18,10 @@ import (
 type runtimeBranchRequest struct {
 	LeafID  string `json:"leafId"`
 	Summary string `json:"summary,omitempty"`
+}
+
+type runtimeSessionUpdateRequest struct {
+	Title string `json:"title"`
 }
 
 func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
@@ -39,11 +44,12 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
+	var snapshot harness.SessionSnapshot
 	var navErr error
 	if req.Summary != "" {
-		navErr = agentSession.NavigateTreeWithSummary(req.LeafID, req.Summary)
+		snapshot, navErr = agentSession.NavigateTreeWithSummarySnapshot(req.LeafID, req.Summary)
 	} else {
-		navErr = agentSession.NavigateTree(req.LeafID)
+		snapshot, navErr = agentSession.NavigateTreeSnapshot(req.LeafID)
 	}
 	if navErr != nil {
 		if errors.Is(navErr, coreagent.ErrAgentBusy) {
@@ -53,7 +59,7 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, navErr.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, agentSession.Snapshot())
+	writeJSON(w, snapshot)
 }
 
 func (s *Server) runtimeSessionInfos(projectID string) ([]oldsession.SessionInfo, error) {
@@ -81,6 +87,8 @@ func runtimeSessionInfo(info runtimesession.Info) oldsession.SessionInfo {
 	return oldsession.SessionInfo{
 		ID:           info.ID,
 		ProjectID:    info.ProjectID,
+		Title:        info.Title,
+		Summary:      info.Summary,
 		MessageCount: info.Messages,
 		CreatedAt:    unixMilli(info.CreatedAt),
 		UpdatedAt:    unixMilli(info.UpdatedAt),
@@ -104,6 +112,48 @@ func (s *Server) runtimeSessionInfoByID(sessionID string) (runtimesession.Info, 
 		}
 	}
 	return runtimeSession.Info(), true, nil
+}
+
+func (s *Server) renameRuntimeSession(sessionID, projectID, title string) (oldsession.SessionInfo, bool, error) {
+	if s.agentRepo == nil || sessionID == "" {
+		return oldsession.SessionInfo{}, false, nil
+	}
+	runtimeSession, ok := s.agentRepo.Get(sessionID)
+	if !ok {
+		var err error
+		runtimeSession, err = s.agentRepo.Load(sessionID)
+		if err != nil {
+			return oldsession.SessionInfo{}, false, err
+		}
+		if len(runtimeSession.Entries()) == 0 {
+			_, _ = s.agentRepo.Delete(sessionID)
+			return oldsession.SessionInfo{}, false, nil
+		}
+	}
+	info := runtimeSession.Info()
+	if projectID != "" && info.ProjectID != projectID {
+		return oldsession.SessionInfo{}, false, nil
+	}
+	entry, err := runtimeSession.AppendSessionTitle(title)
+	if err != nil {
+		return oldsession.SessionInfo{}, false, err
+	}
+	if err := s.agentRepo.SaveEntry(runtimeSession.ID(), entry); err != nil {
+		return oldsession.SessionInfo{}, false, err
+	}
+	return runtimeSessionInfo(runtimeSession.Info()), true, nil
+}
+
+func decodeRuntimeSessionTitle(r *http.Request) (string, bool) {
+	var req runtimeSessionUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return "", false
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" || len([]rune(title)) > 120 {
+		return "", false
+	}
+	return title, true
 }
 
 func unixMilli(t time.Time) int64 {

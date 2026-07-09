@@ -27,6 +27,7 @@ export function sessionPaths(sessionId: string) {
   const sid = enc(sessionId);
   return {
     get: `/api/sessions/${sid}`,
+    update: `/api/sessions/${sid}`,
     delete: `/api/sessions/${sid}`,
     branch: `/api/sessions/${sid}/branch`,
   };

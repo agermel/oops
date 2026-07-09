@@ -169,6 +169,176 @@ func TestBranchSummaryDetailsCollectAbandonedBranch(t *testing.T) {
 	}
 }
 
+func TestResolveNavigationTargetForUserMessageReturnsParentAndEditorText(t *testing.T) {
+	s := New("s1")
+	root := mustAppendMessage(t, s, "root")
+	user := mustAppendMessage(t, s, "edit me")
+
+	target, err := s.ResolveNavigationTarget(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != root.ID || target.EditorText != "edit me" {
+		t.Fatalf("target = %+v, want leaf %q editor text", target, root.ID)
+	}
+}
+
+func TestResolveNavigationTargetForRootUserAllowsEmptyLeaf(t *testing.T) {
+	s := New("s1")
+	root := mustAppendMessage(t, s, "root")
+
+	target, err := s.ResolveNavigationTarget(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != "" || target.EditorText != "root" {
+		t.Fatalf("target = %+v, want empty leaf and root text", target)
+	}
+	if _, err := s.AppendLeaf(target.LeafID); err != nil {
+		t.Fatal(err)
+	}
+	if ctx := s.BuildContext(); len(ctx.Messages) != 0 || ctx.LeafID != "" {
+		t.Fatalf("context = %+v, want empty root context", ctx)
+	}
+}
+
+func TestResolveNavigationTargetForAssistantToolCallUsesCompleteResultBoundary(t *testing.T) {
+	s := New("s1")
+	mustAppendMessage(t, s, "start")
+	assistant := mustAppendAssistantToolCall(t, s, "call_read", "read", `{"path":"README.md"}`)
+	result := mustAppendToolResult(t, s, "call_read", "read", "ok", nil)
+	mustAppendMessage(t, s, "after")
+
+	target, err := s.ResolveNavigationTarget(assistant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != result.ID {
+		t.Fatalf("leaf = %q, want result %q", target.LeafID, result.ID)
+	}
+}
+
+func TestResolveNavigationTargetForDanglingAssistantToolCallReturnsParent(t *testing.T) {
+	s := New("s1")
+	root := mustAppendMessage(t, s, "start")
+	assistant := mustAppendAssistantToolCall(t, s, "call_read", "read", `{"path":"README.md"}`)
+
+	target, err := s.ResolveNavigationTarget(assistant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != root.ID {
+		t.Fatalf("leaf = %q, want parent %q", target.LeafID, root.ID)
+	}
+}
+
+func TestResolveNavigationTargetForMultiToolMiddleResultUsesLastResult(t *testing.T) {
+	s := New("s1")
+	mustAppendMessage(t, s, "start")
+	assistant := mustAppendAssistantToolCalls(t, s,
+		protocol.NewToolCallContent("call_1", "read", json.RawMessage(`{"path":"a.md"}`)),
+		protocol.NewToolCallContent("call_2", "read", json.RawMessage(`{"path":"b.md"}`)),
+	)
+	first := mustAppendToolResult(t, s, "call_1", "read", "a", nil)
+	second := mustAppendToolResult(t, s, "call_2", "read", "b", nil)
+
+	target, err := s.ResolveNavigationTarget(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != second.ID {
+		t.Fatalf("leaf = %q, want final result %q", target.LeafID, second.ID)
+	}
+	target, err = s.ResolveNavigationTarget(assistant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != second.ID {
+		t.Fatalf("assistant leaf = %q, want final result %q", target.LeafID, second.ID)
+	}
+}
+
+func TestValidateContextRejectsProviderOrphanToolResult(t *testing.T) {
+	s := New("s1")
+	mustAppendMessage(t, s, "start")
+	mustAppendToolResult(t, s, "call_missing", "read", "orphan", nil)
+
+	if err := s.ValidateContext(); err == nil {
+		t.Fatal("ValidateContext() nil, want orphan tool result error")
+	}
+}
+
+func TestValidateContextFiltersAbortedAssistantBeforeCheckingToolResults(t *testing.T) {
+	s := New("s1")
+	mustAppendMessage(t, s, "start")
+	if _, err := s.AppendMessage(protocol.AssistantMessage{
+		Content: protocol.ContentList{
+			protocol.NewToolCallContent("call_read", "read", json.RawMessage(`{"path":"README.md"}`)),
+		},
+		StopReason: protocol.StopReasonAborted,
+		Timestamp:  time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppendToolResult(t, s, "call_read", "read", "late", nil)
+
+	if err := s.ValidateContext(); err == nil {
+		t.Fatal("ValidateContext() nil, want orphan after aborted assistant is filtered")
+	}
+}
+
+func TestResolveNavigationTargetAmbiguousToolCallBranchesReturnsParent(t *testing.T) {
+	s := New("s1")
+	root := mustAppendMessage(t, s, "start")
+	assistant := mustAppendAssistantToolCall(t, s, "call_read", "read", `{"path":"README.md"}`)
+	first := mustAppendToolResult(t, s, "call_read", "read", "first", nil)
+	if err := s.MoveTo(assistant.ID); err != nil {
+		t.Fatal(err)
+	}
+	second := mustAppendToolResult(t, s, "call_read", "read", "second", nil)
+	if err := s.MoveTo(root.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := s.ResolveNavigationTarget(assistant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.LeafID != root.ID {
+		t.Fatalf("leaf = %q, want parent %q for ambiguous results %q/%q", target.LeafID, root.ID, first.ID, second.ID)
+	}
+}
+
+func TestEmptyLeafRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(storage)
+	s := repo.Create("s1")
+	root := mustAppendMessage(t, s, "root")
+	if err := repo.SaveEntry(s.ID(), root); err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := s.AppendLeaf("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveEntry(s.ID(), leaf); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := repo.Load("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := reloaded.BuildContext()
+	if ctx.LeafID != "" || len(ctx.Messages) != 0 {
+		t.Fatalf("context = %+v, want empty leaf context", ctx)
+	}
+}
+
 func TestEntryDetailsRoundTrip(t *testing.T) {
 	s := New("s1")
 	entry, err := s.AppendBranchSummaryWithDetails("branch facts", SummaryDetails{ModifiedFiles: []string{"app.go"}})
@@ -216,7 +386,7 @@ func TestFileStorageLoadsOldJSONL(t *testing.T) {
 	}
 	ctx := s.BuildContext()
 	assertTexts(t, ctx.Messages, []string{"hello", "world"})
-	if info := s.Info(); info.CWD != "/tmp/project" {
+	if info := s.Info(); info.CWD != "/tmp/project" || info.Summary != "hello" {
 		t.Fatalf("cwd = %q", info.CWD)
 	}
 }
@@ -300,6 +470,23 @@ func mustAppendAssistantToolCall(t *testing.T, s *Session, callID, name, args st
 		Content: protocol.ContentList{
 			protocol.NewToolCallContent(callID, name, json.RawMessage(args)),
 		},
+		StopReason: protocol.StopReasonToolUse,
+		Timestamp:  time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func mustAppendAssistantToolCalls(t *testing.T, s *Session, calls ...protocol.ToolCallContent) Entry {
+	t.Helper()
+	content := make(protocol.ContentList, 0, len(calls))
+	for _, call := range calls {
+		content = append(content, call)
+	}
+	entry, err := s.AppendMessage(protocol.AssistantMessage{
+		Content:    content,
 		StopReason: protocol.StopReasonToolUse,
 		Timestamp:  time.Now().UnixMilli(),
 	})

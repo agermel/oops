@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -184,6 +185,35 @@ func TestEinoStreamFnSkipsUnreplayableAssistantHistory(t *testing.T) {
 		if message.Role == schema.Assistant {
 			t.Fatalf("unexpected assistant message replayed: %#v", message)
 		}
+	}
+}
+
+func TestEinoStreamFnRejectsDanglingAssistantToolCallHistory(t *testing.T) {
+	chatModel := &chunkedStreamModel{
+		chunks: []*schema.Message{{Role: schema.Assistant, Content: "ok"}},
+	}
+	streamFn, err := NewEinoStreamFn(context.Background(), chatModel, nil)
+	if err != nil {
+		t.Fatalf("NewEinoStreamFn() error = %v", err)
+	}
+
+	_, err = streamFn(context.Background(), coreagent.StreamRequest{
+		Context: protocol.Context{Messages: protocol.MessageList{
+			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("hello")}},
+			protocol.AssistantMessage{
+				Content: protocol.ContentList{
+					protocol.NewToolCallContent("call_1", "read", json.RawMessage(`{"path":"README.md"}`)),
+				},
+				StopReason: protocol.StopReasonToolUse,
+			},
+			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("next")}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("streamFn() nil error, want dangling tool call error")
+	}
+	if len(chatModel.messages) != 0 {
+		t.Fatalf("model received messages = %#v, want none", chatModel.messages)
 	}
 }
 

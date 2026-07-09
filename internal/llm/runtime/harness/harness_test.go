@@ -218,12 +218,15 @@ func TestNavigateTreeWithSummaryAppendsBranchSummary(t *testing.T) {
 	ctx := as.SessionContext()
 	assertMessageTexts(t, ctx.Messages, []string{
 		"root",
-		"right",
 		"Branch summary:\n\nleft branch read left.md",
 	})
 	leaf, ok := as.session.Entry(as.session.LeafID())
-	if !ok || leaf.Type != session.EntryBranchSummary || leaf.ParentID != right.ID {
+	if !ok || leaf.Type != session.EntryBranchSummary || leaf.ParentID != root.ID {
 		t.Fatalf("leaf = %#v ok=%v", leaf, ok)
+	}
+	snapshot := as.Snapshot()
+	if snapshot.EditorText != "" {
+		t.Fatalf("snapshot editor text = %q, want empty outside branch response", snapshot.EditorText)
 	}
 	var details session.SummaryDetails
 	if err := json.Unmarshal(leaf.Details, &details); err != nil {
@@ -231,6 +234,37 @@ func TestNavigateTreeWithSummaryAppendsBranchSummary(t *testing.T) {
 	}
 	if len(details.ReadFiles) != 1 || details.ReadFiles[0] != "left.md" {
 		t.Fatalf("read files = %#v", details.ReadFiles)
+	}
+}
+
+func TestNavigateTreeWithSummarySnapshotReturnsEditorTextForUserTarget(t *testing.T) {
+	as := newHarnessSession(t, coreagent.AgentLoopConfig{Stream: streamSequence(textStream("done"))}, nil)
+	root, err := as.session.AppendMessage(userMessage("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := as.session.AppendMessage(userMessage("right"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := as.session.MoveTo(root.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := as.NavigateTreeWithSummarySnapshot(right.ID, "abandoned branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.EditorText != "right" {
+		t.Fatalf("snapshot editor text = %q, want right", snapshot.EditorText)
+	}
+	assertMessageTexts(t, snapshot.Messages, []string{
+		"root",
+		"Branch summary:\n\nabandoned branch",
+	})
+	leaf, ok := as.session.Entry(snapshot.LeafID)
+	if !ok || leaf.Type != session.EntryBranchSummary || leaf.ParentID != root.ID {
+		t.Fatalf("leaf = %#v ok=%v, want branch summary under %q", leaf, ok, root.ID)
 	}
 }
 

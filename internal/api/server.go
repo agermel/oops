@@ -253,6 +253,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/runs/{id}/abort", authed(s.handleRunAbort))
 	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
 	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
+	mux.HandleFunc("PATCH /api/sessions/{id}", authed(s.handleSessionUpdate))
 	mux.HandleFunc("DELETE /api/sessions/{id}", authed(s.handleSessionDelete))
 	mux.HandleFunc("POST /api/sessions/{id}/branch", authed(s.handleSessionBranch))
 
@@ -292,6 +293,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	// ---- Project Sessions ----
 	mux.HandleFunc("GET /api/projects/{pid}/sessions", authed(s.handleProjectSessions))
 	mux.HandleFunc("GET /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionGet))
+	mux.HandleFunc("PATCH /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionUpdate))
 	mux.HandleFunc("DELETE /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionDelete))
 
 	// ---- Project Servers ----

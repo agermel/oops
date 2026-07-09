@@ -53,6 +53,7 @@ type Entry struct {
 	Payload    json.RawMessage `json:"payload,omitempty"`
 	Label      string          `json:"label,omitempty"`
 	Name       string          `json:"name,omitempty"`
+	Title      string          `json:"title,omitempty"`
 	LeafID     string          `json:"leafId,omitempty"`
 }
 
@@ -77,6 +78,7 @@ type entryWire struct {
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	Label            string          `json:"label,omitempty"`
 	Name             string          `json:"name,omitempty"`
+	Title            string          `json:"title,omitempty"`
 	LeafID           string          `json:"leafId,omitempty"`
 }
 
@@ -113,6 +115,7 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 		Payload:          cloneRaw(e.Payload),
 		Label:            e.Label,
 		Name:             e.Name,
+		Title:            e.Title,
 		LeafID:           e.LeafID,
 	})
 }
@@ -151,6 +154,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 		Payload:          cloneRaw(wire.Payload),
 		Label:            wire.Label,
 		Name:             wire.Name,
+		Title:            wire.Title,
 		LeafID:           wire.LeafID,
 	}
 	return e.Validate()
@@ -186,9 +190,6 @@ func (e Entry) Validate() error {
 	if e.Type == EntryBranchSummary && e.Summary == "" {
 		return errors.New("branch summary entry requires summary")
 	}
-	if e.Type == EntryLeaf && e.LeafID == "" {
-		return errors.New("leaf entry requires leafId")
-	}
 	return nil
 }
 
@@ -206,6 +207,8 @@ type Info struct {
 	CWD       string
 	ProjectID string
 	Name      string
+	Title     string
+	Summary   string
 	LeafID    string
 	CreatedAt time.Time
 	UpdatedAt time.Time

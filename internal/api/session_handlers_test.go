@@ -94,7 +94,7 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	if err := json.NewDecoder(listResp.Body).Decode(&infos); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 {
+	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 || infos[0].Summary != "hello" {
 		t.Fatalf("infos = %+v", infos)
 	}
 
@@ -106,7 +106,7 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	if err := json.NewDecoder(projectListResp.Body).Decode(&infos); err != nil {
 		t.Fatalf("decode project list: %v", err)
 	}
-	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 {
+	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 || infos[0].Summary != "hello" {
 		t.Fatalf("project infos = %+v", infos)
 	}
 
@@ -141,6 +141,46 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	}
 }
 
+func TestRuntimeSessionHandlersRename(t *testing.T) {
+	storage, err := runtimesession.NewFileStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := runtimesession.NewRepository(storage)
+	server, jwtToken := newRuntimeSessionTestServer(t, repo)
+	sess := createRuntimeSession(t, repo, "rt-title", "proj-1", "hello")
+	createRuntimeSession(t, repo, "rt-other-title", "proj-2", "other")
+
+	wrongProjectResp := serveAuthed(t, server, jwtToken, http.MethodPatch, "/api/projects/proj-2/sessions/rt-title", `{"title":"wrong"}`)
+	if wrongProjectResp.Code != http.StatusNotFound {
+		t.Fatalf("wrong project rename status = %d, want %d, body = %s", wrongProjectResp.Code, http.StatusNotFound, wrongProjectResp.Body.String())
+	}
+
+	resp := serveAuthed(t, server, jwtToken, http.MethodPatch, "/api/projects/proj-1/sessions/rt-title", `{"title":" Deploy checklist "}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("rename status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
+	}
+	var info oldsession.SessionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		t.Fatalf("decode rename: %v", err)
+	}
+	if info.ID != sess.ID() || info.Title != "Deploy checklist" || info.Summary != "hello" {
+		t.Fatalf("rename info = %+v", info)
+	}
+
+	listResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/projects/proj-1/sessions", "")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body = %s", listResp.Code, http.StatusOK, listResp.Body.String())
+	}
+	var infos []oldsession.SessionInfo
+	if err := json.NewDecoder(listResp.Body).Decode(&infos); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Title != "Deploy checklist" {
+		t.Fatalf("infos = %+v", infos)
+	}
+}
+
 func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
 	repo := runtimesession.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
@@ -160,14 +200,37 @@ func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode branch: %v", err)
 	}
-	if snapshot.LeafID != left.ID {
-		t.Fatalf("leaf = %q, want %q", snapshot.LeafID, left.ID)
+	if snapshot.LeafID != root {
+		t.Fatalf("leaf = %q, want %q", snapshot.LeafID, root)
 	}
-	if len(snapshot.Messages) != 2 {
-		t.Fatalf("messages = %d, want 2", len(snapshot.Messages))
+	if snapshot.EditorText != "left" {
+		t.Fatalf("editor text = %q, want left", snapshot.EditorText)
 	}
-	if runtimeMessageText(t, snapshot.Messages[0]) != "root" || runtimeMessageText(t, snapshot.Messages[1]) != "left" {
-		t.Fatalf("message path = %q, %q", runtimeMessageText(t, snapshot.Messages[0]), runtimeMessageText(t, snapshot.Messages[1]))
+	if len(snapshot.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(snapshot.Messages))
+	}
+	if runtimeMessageText(t, snapshot.Messages[0]) != "root" {
+		t.Fatalf("message path = %q", runtimeMessageText(t, snapshot.Messages[0]))
+	}
+}
+
+func TestRuntimeSessionBranchUserTargetReturnsEditorText(t *testing.T) {
+	repo := runtimesession.NewRepository(nil)
+	server, jwtToken := newRuntimeSessionTestServer(t, repo)
+	sess := createRuntimeSession(t, repo, "rt-edit-user", "proj-1", "root")
+	root := sess.LeafID()
+	user := appendRuntimeMessage(t, repo, sess, "edit this")
+
+	resp := serveAuthed(t, server, jwtToken, http.MethodPost, "/api/sessions/rt-edit-user/branch", `{"leafId":"`+user.ID+`"}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
+	}
+	var snapshot harness.SessionSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode branch: %v", err)
+	}
+	if snapshot.LeafID != root || snapshot.EditorText != "edit this" {
+		t.Fatalf("snapshot leaf/editor = %q/%q, want %q/edit this", snapshot.LeafID, snapshot.EditorText, root)
 	}
 }
 
@@ -193,15 +256,40 @@ func TestRuntimeSessionBranchCanAppendSummary(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode branch: %v", err)
 	}
-	if len(snapshot.Messages) != 3 {
-		t.Fatalf("messages = %d, want 3", len(snapshot.Messages))
+	if len(snapshot.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(snapshot.Messages))
 	}
-	if runtimeMessageText(t, snapshot.Messages[2]) != "Branch summary:\n\nleft branch read left.md" {
-		t.Fatalf("summary message = %q", runtimeMessageText(t, snapshot.Messages[2]))
+	if snapshot.EditorText != "right" {
+		t.Fatalf("editor text = %q, want right", snapshot.EditorText)
+	}
+	if runtimeMessageText(t, snapshot.Messages[1]) != "Branch summary:\n\nleft branch read left.md" {
+		t.Fatalf("summary message = %q", runtimeMessageText(t, snapshot.Messages[1]))
 	}
 	last := snapshot.Entries[len(snapshot.Entries)-1]
-	if last.Type != runtimesession.EntryBranchSummary || last.ParentID != right.ID {
+	if last.Type != runtimesession.EntryBranchSummary || last.ParentID != root {
 		t.Fatalf("last entry = %#v", last)
+	}
+}
+
+func TestRuntimeSessionBranchSummaryUsesResolvedToolCallLeaf(t *testing.T) {
+	repo := runtimesession.NewRepository(nil)
+	server, jwtToken := newRuntimeSessionTestServer(t, repo)
+	sess := createRuntimeSession(t, repo, "rt-summary-tool", "proj-1", "root")
+	assistant := appendRuntimeAssistantToolCall(t, repo, sess, "call_read", "read", `{"path":"left.md"}`)
+	result := appendRuntimeToolResult(t, repo, sess, "call_read", "read", "file")
+	appendRuntimeMessage(t, repo, sess, "after")
+
+	resp := serveAuthed(t, server, jwtToken, http.MethodPost, "/api/sessions/rt-summary-tool/branch", `{"leafId":"`+assistant.ID+`","summary":"tool branch"}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
+	}
+	var snapshot harness.SessionSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode branch: %v", err)
+	}
+	last := snapshot.Entries[len(snapshot.Entries)-1]
+	if last.Type != runtimesession.EntryBranchSummary || last.ParentID != result.ID {
+		t.Fatalf("last entry = %#v, want branch summary under result %q", last, result.ID)
 	}
 }
 
@@ -253,6 +341,23 @@ func appendRuntimeAssistantToolCall(t *testing.T, repo *runtimesession.Repositor
 			protocol.NewToolCallContent(callID, name, json.RawMessage(args)),
 		},
 		StopReason: protocol.StopReasonToolUse,
+		Timestamp:  time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveEntry(sess.ID(), entry); err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func appendRuntimeToolResult(t *testing.T, repo *runtimesession.Repository, sess *runtimesession.Session, callID, name, text string) runtimesession.Entry {
+	t.Helper()
+	entry, err := sess.AppendMessage(protocol.ToolResultMessage{
+		ToolCallID: callID,
+		ToolName:   name,
+		Content:    protocol.ContentList{protocol.NewTextContent(text)},
 		Timestamp:  time.Now().UnixMilli(),
 	})
 	if err != nil {

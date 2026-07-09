@@ -46,12 +46,13 @@ type AgentSession struct {
 }
 
 type SessionSnapshot struct {
-	SessionID string                    `json:"sessionId"`
-	LeafID    string                    `json:"leafId,omitempty"`
-	Messages  protocol.MessageList      `json:"messages"`
-	Events    []protocol.AgentEvent     `json:"events"`
-	Tools     []protocol.ToolDefinition `json:"tools"`
-	Entries   []session.Entry           `json:"entries"`
+	SessionID  string                    `json:"sessionId"`
+	LeafID     string                    `json:"leafId,omitempty"`
+	EditorText string                    `json:"editorText,omitempty"`
+	Messages   protocol.MessageList      `json:"messages"`
+	Events     []protocol.AgentEvent     `json:"events"`
+	Tools      []protocol.ToolDefinition `json:"tools"`
+	Entries    []session.Entry           `json:"entries"`
 }
 
 type pendingWrite struct {
@@ -98,6 +99,10 @@ func (s *AgentSession) SessionContext() session.Context {
 	return s.session.BuildContext()
 }
 
+func (s *AgentSession) ValidateProviderContext() error {
+	return s.session.ValidateContext()
+}
+
 func (s *AgentSession) Events() []protocol.AgentEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,6 +122,10 @@ func (s *AgentSession) Listen(listener coreagent.AgentListener) coreagent.Unsubs
 func (s *AgentSession) Snapshot() SessionSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshotLocked("")
+}
+
+func (s *AgentSession) snapshotLocked(editorText string) SessionSnapshot {
 	context := s.session.BuildContext()
 	tools := make([]protocol.ToolDefinition, 0, len(s.resources.Tools))
 	for _, item := range s.resources.Tools {
@@ -126,12 +135,13 @@ func (s *AgentSession) Snapshot() SessionSnapshot {
 		tools = append(tools, item.Definition())
 	}
 	return SessionSnapshot{
-		SessionID: s.session.ID(),
-		LeafID:    context.LeafID,
-		Messages:  protocol.CloneMessageList(context.Messages),
-		Events:    cloneAgentEvents(s.events),
-		Tools:     protocol.CloneTools(tools),
-		Entries:   s.session.Entries(),
+		SessionID:  s.session.ID(),
+		LeafID:     context.LeafID,
+		EditorText: editorText,
+		Messages:   protocol.CloneMessageList(context.Messages),
+		Events:     cloneAgentEvents(s.events),
+		Tools:      protocol.CloneTools(tools),
+		Entries:    s.session.Entries(),
 	}
 }
 
@@ -289,44 +299,64 @@ func (s *AgentSession) Compact(summary string, firstKeptEntryID string, tokensBe
 }
 
 func (s *AgentSession) NavigateTree(leafID string) error {
-	return s.navigateTree(leafID, "")
+	_, err := s.navigateTree(leafID, "")
+	return err
 }
 
 func (s *AgentSession) NavigateTreeWithSummary(leafID, summary string) error {
+	_, err := s.navigateTree(leafID, summary)
+	return err
+}
+
+func (s *AgentSession) NavigateTreeSnapshot(leafID string) (SessionSnapshot, error) {
+	return s.navigateTree(leafID, "")
+}
+
+func (s *AgentSession) NavigateTreeWithSummarySnapshot(leafID, summary string) (SessionSnapshot, error) {
 	return s.navigateTree(leafID, summary)
 }
 
-func (s *AgentSession) navigateTree(leafID, summary string) error {
+func (s *AgentSession) navigateTree(leafID, summary string) (SessionSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.agent.State().IsStreaming {
-		return coreagent.ErrAgentBusy
+		return SessionSnapshot{}, coreagent.ErrAgentBusy
+	}
+	target, err := s.session.ResolveNavigationTarget(leafID)
+	if err != nil {
+		return SessionSnapshot{}, err
 	}
 	if summary != "" {
-		details, err := s.session.BranchSummaryDetails(leafID)
+		details, err := s.session.BranchSummaryDetails(target.LeafID)
 		if err != nil {
-			return err
+			return SessionSnapshot{}, err
 		}
-		if err := s.session.MoveTo(leafID); err != nil {
-			return err
+		if err := s.session.MoveTo(target.LeafID); err != nil {
+			return SessionSnapshot{}, err
 		}
 		entry, err := s.session.AppendBranchSummaryWithDetails(summary, details)
 		if err != nil {
-			return err
+			return SessionSnapshot{}, err
 		}
 		if err := s.saveEntryLocked(entry); err != nil {
-			return err
+			return SessionSnapshot{}, err
 		}
-		return s.rebuildAgentLocked()
+		if err := s.rebuildAgentLocked(); err != nil {
+			return SessionSnapshot{}, err
+		}
+		return s.snapshotLocked(target.EditorText), nil
 	}
-	entry, err := s.session.AppendLeaf(leafID)
+	entry, err := s.session.AppendLeaf(target.LeafID)
 	if err != nil {
-		return err
+		return SessionSnapshot{}, err
 	}
 	if err := s.saveEntryLocked(entry); err != nil {
-		return err
+		return SessionSnapshot{}, err
 	}
-	return s.rebuildAgentLocked()
+	if err := s.rebuildAgentLocked(); err != nil {
+		return SessionSnapshot{}, err
+	}
+	return s.snapshotLocked(target.EditorText), nil
 }
 
 func (s *AgentSession) handleEvent(ctx context.Context, event protocol.AgentEvent, _ coreagent.AgentState) error {
