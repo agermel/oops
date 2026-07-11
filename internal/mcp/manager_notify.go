@@ -16,31 +16,27 @@ func (m *Manager) startNotificationDispatcher() {
 	go func() {
 		defer close(m.notificationDone)
 		for range m.notificationCh {
-			for {
-				m.notificationMu.Lock()
-				if len(m.pendingChanges) == 0 {
-					m.notificationMu.Unlock()
-					break
-				}
-				change := m.pendingChanges[0]
-				m.pendingChanges[0] = toolChange{}
-				m.pendingChanges = m.pendingChanges[1:]
-				m.notificationMu.Unlock()
-
-				m.mu.Lock()
-				closed := m.closed
-				m.mu.Unlock()
-				if closed {
-					continue
-				}
-				m.onChange(slices.Clone(change.tools))
+			m.notificationMu.Lock()
+			change := m.pendingChange
+			m.pendingChange = nil
+			m.notificationMu.Unlock()
+			if change == nil {
+				continue
 			}
+
+			m.mu.Lock()
+			closed := m.closed
+			m.mu.Unlock()
+			if closed {
+				continue
+			}
+			m.onChange(slices.Clone(change.tools))
 		}
 	}()
 }
 
-// enqueueToolChange retains every committed immutable snapshot in revision
-// order. Callers hold mutationMu, which orders revisions with Close.
+// enqueueToolChange retains the latest committed immutable snapshot. Callers
+// hold mutationMu, which orders revisions with Close.
 func (m *Manager) enqueueToolChange(change *toolChange) {
 	if change == nil {
 		return
@@ -51,7 +47,7 @@ func (m *Manager) enqueueToolChange(change *toolChange) {
 		return
 	}
 	copied := toolChange{revision: change.revision, tools: slices.Clone(change.tools)}
-	m.pendingChanges = append(m.pendingChanges, copied)
+	m.pendingChange = &copied
 	select {
 	case m.notificationCh <- struct{}{}:
 	default:
@@ -64,7 +60,7 @@ func (m *Manager) closeNotificationDispatcher() {
 	}
 	m.notificationMu.Lock()
 	m.notificationStop = true
-	m.pendingChanges = nil
+	m.pendingChange = nil
 	close(m.notificationCh)
 	m.notificationMu.Unlock()
 	<-m.notificationDone

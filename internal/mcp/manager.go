@@ -160,7 +160,7 @@ type Manager struct {
 	notificationCh   chan struct{}
 	notificationDone chan struct{}
 	notificationMu   sync.Mutex
-	pendingChanges   []toolChange
+	pendingChange    *toolChange
 	notificationStop bool
 	closeOnce        sync.Once
 	closed           bool

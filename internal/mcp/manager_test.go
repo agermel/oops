@@ -440,12 +440,15 @@ func (e statusCodeError) StatusCode() int {
 	return e.status
 }
 
-func TestManagerNotificationDeliversEveryCommittedSnapshot(t *testing.T) {
+func TestManagerNotificationCoalescesBlockedCallbacks(t *testing.T) {
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
+	secondEntered := make(chan struct{})
+	releaseSecond := make(chan struct{})
 	var releaseOnce sync.Once
 	defer func() {
 		releaseOnce.Do(func() { close(releaseFirst) })
+		close(releaseSecond)
 	}()
 
 	var callsMu sync.Mutex
@@ -458,6 +461,10 @@ func TestManagerNotificationDeliversEveryCommittedSnapshot(t *testing.T) {
 		if callCount == 1 {
 			close(firstEntered)
 			<-releaseFirst
+		}
+		if callCount == 2 {
+			close(secondEntered)
+			<-releaseSecond
 		}
 	})
 	manager.startProc = func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error) {
@@ -490,18 +497,31 @@ func TestManagerNotificationDeliversEveryCommittedSnapshot(t *testing.T) {
 		defer manager.mu.Unlock()
 		return manager.toolRevision == 3
 	})
+	manager.notificationMu.Lock()
+	pending := manager.pendingChange
+	if pending == nil || pending.revision != 3 || len(pending.tools) != 1 {
+		manager.notificationMu.Unlock()
+		t.Fatalf("pending change = %#v, want revision 3 with one tool", pending)
+	}
+	manager.notificationMu.Unlock()
 
 	releaseOnce.Do(func() { close(releaseFirst) })
 	waitForMCP(t, func() bool {
 		callsMu.Lock()
 		defer callsMu.Unlock()
-		return len(calls) == 3
+		return len(calls) == 2
 	})
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("coalesced tool notification did not arrive")
+	}
 
 	callsMu.Lock()
-	defer callsMu.Unlock()
-	if got := []int{len(calls[0]), len(calls[1]), len(calls[2])}; !slices.Equal(got, []int{1, 0, 1}) {
-		t.Fatalf("notification snapshot sizes = %v, want [1 0 1]", got)
+	got := []int{len(calls[0]), len(calls[1])}
+	callsMu.Unlock()
+	if !slices.Equal(got, []int{1, 1}) {
+		t.Fatalf("notification snapshot sizes = %v, want [1 1]", got)
 	}
 }
 
