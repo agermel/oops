@@ -82,6 +82,7 @@ type Server struct {
 	httpRateLimiter *httprate.Limiter
 	loginLimiter    *loginLimiter
 	consoleHub      *console.Hub
+	ownsConsoleHub  bool
 
 	lifecycleMu     sync.Mutex
 	lifecycle       context.Context
@@ -187,8 +188,10 @@ func New(options Options) *Server {
 	}
 	lifecycle, cancelLifecycle := context.WithCancel(context.Background())
 	consoleHub := options.ConsoleHub
+	ownsConsoleHub := false
 	if consoleHub == nil {
 		consoleHub = console.NewHub()
+		ownsConsoleHub = true
 	}
 	httpRateLimiter := options.HTTPRateLimiter
 	if httpRateLimiter == nil {
@@ -214,6 +217,7 @@ func New(options Options) *Server {
 		httpRateLimiter: httpRateLimiter,
 		loginLimiter:    newLoginLimiter(nil),
 		consoleHub:      consoleHub,
+		ownsConsoleHub:  ownsConsoleHub,
 	}
 	if storage, err := runtimesession.NewFileStorage("data/agent-sessions"); err != nil {
 		logutil.Warn("agent session: open store, falling back to memory-only", zap.Error(err))
@@ -316,6 +320,9 @@ func (s *Server) closeResources() {
 		if err := s.runManager.close(context.Background()); err != nil {
 			closeErr = errors.Join(closeErr, err)
 		}
+	}
+	if s.ownsConsoleHub && s.consoleHub != nil {
+		s.consoleHub.Close()
 	}
 	if s.mcpManager != nil {
 		s.mcpManager.Close()

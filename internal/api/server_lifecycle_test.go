@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"oops/internal/console"
+	"oops/internal/loghub"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
 	runtimestore "oops/internal/store/runtime"
@@ -228,4 +230,30 @@ func TestServerCloseCanResumeWaitingAfterCallerDeadline(t *testing.T) {
 	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
 	run.finishExecution()
 	closeServerForTest(t, server)
+}
+
+func TestServerCloseClosesOwnedConsoleHub(t *testing.T) {
+	server := New(Options{})
+	hub := server.consoleHub
+
+	closeServerForTest(t, server)
+	if _, _, err := hub.Subscribe(); !errors.Is(err, loghub.ErrClosed) {
+		t.Fatalf("owned console hub subscribe after close = %v, want ErrClosed", err)
+	}
+}
+
+func TestServerCloseRetainsInjectedConsoleHub(t *testing.T) {
+	hub := console.NewHub()
+	server := New(Options{ConsoleHub: hub})
+
+	closeServerForTest(t, server)
+	entries, cancel, err := hub.Subscribe()
+	if err != nil {
+		t.Fatalf("injected console hub subscribe after server close: %v", err)
+	}
+	cancel()
+	if entries == nil {
+		t.Fatal("injected console hub returned nil subscriber")
+	}
+	hub.Close()
 }
