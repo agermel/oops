@@ -229,7 +229,7 @@ OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./scripts/sync-mcp-wrapper.sh redis
 OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./mcp-servers/redis/redis-mcp-server --help
 ```
 
-`mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。`scripts/verify-artifacts.sh` 校验清单结构并拒绝 Git 索引中的架构二进制。
+`mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。`scripts/verify-artifacts.sh` 校验清单结构、wrapper 与 lockfile 的哈希关联、uv 获取脚本的哈希关联，并拒绝 Git 索引中的架构二进制；CI 的锁定同步校验实际下载内容。
 
 ---
 
