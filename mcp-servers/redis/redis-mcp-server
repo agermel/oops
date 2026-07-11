@@ -6,4 +6,4 @@ if [[ -n "${OOPS_MCP_VENV_ROOT:-}" ]]; then
 	export UV_PROJECT_ENVIRONMENT="$OOPS_MCP_VENV_ROOT/redis"
 fi
 
-exec uv run --directory "$root" --locked python "$root/entrypoint.py" "$@"
+exec uv run --directory "$root" --locked --no-sync --offline --no-python-downloads python "$root/entrypoint.py" "$@"

@@ -6,4 +6,4 @@ if [[ -n "${OOPS_MCP_VENV_ROOT:-}" ]]; then
 	export UV_PROJECT_ENVIRONMENT="$OOPS_MCP_VENV_ROOT/elasticsearch"
 fi
 
-exec uv run --directory "$root" --locked elasticsearch-mcp-server "$@"
+exec uv run --directory "$root" --locked --no-sync --offline --no-python-downloads elasticsearch-mcp-server "$@"

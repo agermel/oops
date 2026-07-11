@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go server
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine AS builder
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /oops ./cmd/oops/
 
 # Stage 3: Build Go-based MCP servers from pinned source.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS mcp-go-builder
+FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine AS mcp-go-builder
 ARG TARGETOS TARGETARCH
 WORKDIR /src/mcp-servers/etcd
 COPY mcp-servers/etcd/go.mod mcp-servers/etcd/go.sum ./
@@ -44,15 +44,25 @@ RUN apt-get update && \
     rm /usr/local/lib/oops/fetch-uv.sh && \
     apt-get purge -y --auto-remove curl && \
     rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /var/log/oops /var/lib/oops/mcp-venvs /var/lib/oops/uv-cache /opt/oops/config /opt/oops/mcp-servers
+    mkdir -p /var/log/oops /opt/oops/config /opt/oops/mcp-servers /opt/oops/mcp-venvs /opt/oops/uv-python
 COPY --from=builder /oops /usr/local/bin/oops
 COPY --from=frontend /src/web/dist /opt/oops/web/dist
 COPY --from=mcp-node /opt/oops/mcp-confluent /opt/oops/mcp-confluent
 COPY mcp-servers/ /opt/oops/mcp-servers/
 COPY --from=mcp-go-builder /out/etcd-mcp-server /opt/oops/mcp-servers/etcd/etcd-mcp-server
 COPY --from=mcp-go-builder /out/mysql-mcp-server /opt/oops/mcp-servers/mysql/mysql-mcp-server
-ENV OOPS_MCP_VENV_ROOT=/var/lib/oops/mcp-venvs \
-    UV_CACHE_DIR=/var/lib/oops/uv-cache
+RUN for wrapper in nacos redis elasticsearch; do \
+      UV_PROJECT_ENVIRONMENT="/opt/oops/mcp-venvs/$wrapper" \
+      UV_CACHE_DIR=/tmp/uv-cache \
+      UV_PYTHON_INSTALL_DIR=/opt/oops/uv-python \
+      uv sync --directory "/opt/oops/mcp-servers/$wrapper" --locked --link-mode=copy; \
+    done && \
+    rm -rf /tmp/uv-cache
+ENV OOPS_MCP_VENV_ROOT=/opt/oops/mcp-venvs \
+    UV_PYTHON_INSTALL_DIR=/opt/oops/uv-python \
+    UV_NO_SYNC=1 \
+    UV_OFFLINE=1 \
+    UV_PYTHON_DOWNLOADS=never
 WORKDIR /opt/oops
 EXPOSE 8081
 ENTRYPOINT ["oops"]

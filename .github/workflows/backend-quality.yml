@@ -132,3 +132,24 @@ jobs:
           ./mcp-servers/nacos/nacos-mcp-server --help
           ./mcp-servers/redis/redis-mcp-server --help
           ./mcp-servers/elasticsearch/elasticsearch-mcp-server --help
+
+  container:
+    needs: artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build locked runtime image
+        run: |
+          docker build \
+            --build-arg TARGETOS=linux \
+            --build-arg TARGETARCH=amd64 \
+            --file deployment/Dockerfile \
+            --tag oops:ci \
+            .
+      - name: Smoke prebuilt MCP wrappers
+        run: |
+          for wrapper in nacos redis elasticsearch; do
+            docker run --rm \
+              --entrypoint "/opt/oops/mcp-servers/$wrapper/$wrapper-mcp-server" \
+              oops:ci --help
+          done

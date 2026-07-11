@@ -204,7 +204,7 @@ docker compose -f docker-compose.nodelet.yml up -d
 
 在 `deployment/docker-compose.yml` 的 `oops.environment` 中取消 `OOPS_MCP_ALLOWED_COMMANDS` 一行的注释，填入允许执行的 MCP 命令白名单（逗号分隔）。同时取消 `OOPS_LLM_API_KEY` 的注释并填入 API Key。
 
-在 Web UI 的 MCP 管理面板中添加连接即可使用。`mcp-servers/<name>/` 保存源码、固定依赖和启动脚本；Docker 会挂载该目录到 Ops Plane 容器内。
+在 Web UI 的 MCP 管理面板中添加连接即可使用。镜像内置 `mcp-servers/<name>/` 的固定依赖和启动脚本；Compose 仅将 `mcp-servers/local/` 映射到同名容器子目录，供自定义脚本使用。
 
 Kafka 使用 Confluent 官方 MCP Server（`@confluentinc/mcp-confluent`）。默认 Docker 镜像会在构建阶段预装并编译 Kafka MCP 依赖，运行时直接使用 `/opt/oops/mcp-confluent/node_modules/.bin/mcp-confluent`。裸机 Linux 部署时请安装 Node.js 22 LTS 和 npm，或通过 `OOPS_MCP_NODE_BIN` / `OOPS_MCP_NPX_BIN` 指向 Node 22 的二进制。
 
@@ -225,6 +225,7 @@ sasl_mechanism: PLAIN
 ```bash
 ./mcp-servers/etcd/build.sh
 ./mcp-servers/mysql/build.sh
+OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./scripts/sync-mcp-wrapper.sh redis
 OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./mcp-servers/redis/redis-mcp-server --help
 ```
 
@@ -288,7 +289,7 @@ color: blue
 
 ### 添加新 MCP Server
 
-1. 将源码、固定版本的 wrapper 或构建脚本放入 `mcp-servers/<name>/`，不要提交架构相关二进制。
+1. 将源码、固定版本的 wrapper 或构建脚本放入 `mcp-servers/<name>/`；Compose 部署的自定义脚本放入 `mcp-servers/local/<name>/`，不要提交架构相关二进制。
 2. 在 `mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。
 3. 在 Web UI 的 MCP 管理面板中添加连接，配置会写入 `data/runtime.db`；连接支持 `stdio`（本地子进程）和 `sse`（远程）两种传输模式。
 

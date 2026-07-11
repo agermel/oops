@@ -24,4 +24,4 @@ EOF
 		;;
 esac
 
-exec uv run --directory "$root" --locked nacos-mcp-router "$@"
+exec uv run --directory "$root" --locked --no-sync --offline --no-python-downloads nacos-mcp-router "$@"

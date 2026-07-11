@@ -11,4 +11,7 @@ case "$name" in
 esac
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+if [[ -n "${OOPS_MCP_VENV_ROOT:-}" ]]; then
+	export UV_PROJECT_ENVIRONMENT="$OOPS_MCP_VENV_ROOT/$name"
+fi
 exec uv sync --directory "$root/mcp-servers/$name" --locked
