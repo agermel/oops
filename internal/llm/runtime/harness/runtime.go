@@ -190,12 +190,6 @@ func (r *AgentSessionRuntime) SwitchCWD(_ context.Context, cwd string) error {
 	return nil
 }
 
-func (r *AgentSessionRuntime) SetCWD(cwd string) {
-	r.mu.Lock()
-	r.cwd = cwd
-	r.mu.Unlock()
-}
-
 func (r *AgentSessionRuntime) attach(ctx context.Context, sess *session.Session, resources ResourceSnapshot, model, provider, reasoning string, activeTools []string) (*AgentSession, error) {
 	sessionID := sess.ID()
 	r.mu.Lock()

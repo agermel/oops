@@ -1,12 +1,16 @@
 package nodelet
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	runtimestore "oops/internal/store/runtime"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 func newTestNodeletManager(t *testing.T) *NodeletManager {
@@ -257,7 +261,7 @@ func TestNodeletManager_Test_Success(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestNodeletManager(t)
-	err := m.Test(NodeletConfig{Address: srv.URL, Token: "secret"})
+	err := m.Test(context.Background(), NodeletConfig{Address: srv.URL, Token: "secret"})
 	if err != nil {
 		t.Fatalf("Test: expected nil, got %v", err)
 	}
@@ -271,7 +275,7 @@ func TestNodeletManager_Test_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestNodeletManager(t)
-	err := m.Test(NodeletConfig{Address: srv.URL, Token: "wrong"})
+	err := m.Test(context.Background(), NodeletConfig{Address: srv.URL, Token: "wrong"})
 	if err == nil {
 		t.Fatal("expected error for unauthorized")
 	}
@@ -282,30 +286,76 @@ func TestNodeletManager_Test_Unauthorized(t *testing.T) {
 
 // TestNodeletManager_Test_Non200 测试 /host 返回非 200/401 且有重试。
 func TestNodeletManager_Test_Non200(t *testing.T) {
+	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
 
 	m := newTestNodeletManager(t)
-	err := m.Test(NodeletConfig{Address: srv.URL, Token: "t"})
+	err := m.testWithBackoff(context.Background(), NodeletConfig{Address: srv.URL, Token: "t"}, backoff.NewConstantBackOff(0))
 	if err == nil {
 		t.Fatal("expected error for non-200 host")
 	}
 	if !containsStr(err.Error(), "503") {
 		t.Errorf("error %q should contain status code 503", err.Error())
 	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3", calls)
+	}
 }
 
 // TestNodeletManager_Test_BadAddress 测试非法地址立即失败。
 func TestNodeletManager_Test_BadAddress(t *testing.T) {
 	m := newTestNodeletManager(t)
-	err := m.Test(NodeletConfig{Address: "://invalid", Token: "t"})
+	err := m.testWithBackoff(context.Background(), NodeletConfig{Address: "://invalid", Token: "t"}, backoff.NewConstantBackOff(0))
 	if err == nil {
 		t.Fatal("expected error for bad address")
 	}
 	if !containsStr(err.Error(), "bad address") {
 		t.Errorf("error %q should contain 'bad address'", err.Error())
+	}
+}
+
+func TestNodeletManager_Test_PermanentClientError(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	m := newTestNodeletManager(t)
+	err := m.testWithBackoff(context.Background(), NodeletConfig{Address: srv.URL, Token: "t"}, backoff.NewConstantBackOff(0))
+	if err == nil || !containsStr(err.Error(), "403") {
+		t.Fatalf("error = %v, want 403", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+func TestNodeletManager_Test_ContextCanceled(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newTestNodeletManager(t)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- m.testWithBackoff(ctx, NodeletConfig{Address: srv.URL, Token: "t"}, backoff.NewConstantBackOff(0))
+	}()
+	<-started
+	cancel()
+
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
 	}
 }
 

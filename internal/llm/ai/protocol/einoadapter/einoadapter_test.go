@@ -163,6 +163,53 @@ func TestEinoToolResultRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEinoToolResultMultimodalUsesInputParts(t *testing.T) {
+	msg := protocol.ToolResultMessage{
+		ToolCallID: "call_1",
+		ToolName:   "lookup",
+		Content: protocol.ContentList{
+			protocol.NewTextContent("found"),
+			protocol.ImageContent{
+				Type:     protocol.ContentTypeImage,
+				Data:     "aW1hZ2U=",
+				MIMEType: "image/png",
+				Detail:   "high",
+			},
+		},
+	}
+
+	einoMsg, err := ToEinoMessage(msg)
+	if err != nil {
+		t.Fatalf("ToEinoMessage() error = %v", err)
+	}
+	if len(einoMsg.MultiContent) != 0 {
+		t.Fatalf("MultiContent = %#v", einoMsg.MultiContent)
+	}
+	if len(einoMsg.UserInputMultiContent) != 2 {
+		t.Fatalf("UserInputMultiContent = %#v", einoMsg.UserInputMultiContent)
+	}
+	imagePart := einoMsg.UserInputMultiContent[1]
+	if imagePart.Image == nil || imagePart.Image.Base64Data == nil || *imagePart.Image.Base64Data != "aW1hZ2U=" {
+		t.Fatalf("image input part = %#v", imagePart)
+	}
+
+	converted, err := FromEinoMessage(einoMsg)
+	if err != nil {
+		t.Fatalf("FromEinoMessage() error = %v", err)
+	}
+	toolResult, ok := converted.(protocol.ToolResultMessage)
+	if !ok {
+		t.Fatalf("converted = %T, want ToolResultMessage", converted)
+	}
+	if len(toolResult.Content) != 2 {
+		t.Fatalf("Content = %#v", toolResult.Content)
+	}
+	image, ok := toolResult.Content[1].(protocol.ImageContent)
+	if !ok || image.Data != "aW1hZ2U=" || image.MIMEType != "image/png" || image.Detail != "high" {
+		t.Fatalf("roundtrip image = %#v", toolResult.Content[1])
+	}
+}
+
 func TestToEinoContextAddsSystemMessage(t *testing.T) {
 	messages, err := ToEinoContext(protocol.Context{
 		SystemPrompt: "system",

@@ -62,7 +62,7 @@ func TestIsToolError(t *testing.T) {
 func TestRetryOpsCall_Success(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
-	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 3, Backoff: time.Millisecond}, func() error {
+	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 3, Backoff: 0}, func() error {
 		calls++
 		return nil
 	})
@@ -77,7 +77,7 @@ func TestRetryOpsCall_Success(t *testing.T) {
 func TestRetryOpsCall_RetryableThenSuccess(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
-	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 3, Backoff: time.Millisecond}, func() error {
+	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 3, Backoff: 0}, func() error {
 		calls++
 		if calls < 3 {
 			return errors.New("dial tcp: i/o timeout")
@@ -95,7 +95,7 @@ func TestRetryOpsCall_RetryableThenSuccess(t *testing.T) {
 func TestRetryOpsCall_AllFail(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
-	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 2, Backoff: time.Millisecond}, func() error {
+	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 2, Backoff: 0}, func() error {
 		calls++
 		return errors.New("connection refused")
 	})
@@ -110,7 +110,7 @@ func TestRetryOpsCall_AllFail(t *testing.T) {
 func TestRetryOpsCall_NonRetryable(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
-	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 3, Backoff: time.Millisecond}, func() error {
+	err := retryOpsCall(ctx, RetryPolicy{MaxRetries: 3, Backoff: 0}, func() error {
 		calls++
 		return errors.New("permission denied")
 	})
@@ -133,8 +133,28 @@ func TestRetryOpsCall_ContextCancel(t *testing.T) {
 		calls++
 		return errors.New("dial tcp: timeout")
 	})
-	if err == nil {
-		t.Error("expected error, got nil")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+func TestRetryOpsCall_CanceledBeforeFirstAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := 0
+	err := retryOpsCall(ctx, DefaultRetryPolicy, func() error {
+		calls++
+		return errors.New("dial tcp: timeout")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if calls != 0 {
+		t.Fatalf("calls = %d, want 0", calls)
 	}
 }
 

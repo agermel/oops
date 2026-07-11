@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"slices"
+
 	"oops/internal/llm/ai/protocol"
 )
 
@@ -44,9 +46,7 @@ func cloneAgentState(state AgentState) AgentState {
 	state.Messages = cloneMessages(state.Messages)
 	state.StreamingMessage = protocol.CloneMessage(state.StreamingMessage)
 	if len(state.PendingToolCalls) > 0 {
-		pending := make([]string, len(state.PendingToolCalls))
-		copy(pending, state.PendingToolCalls)
-		state.PendingToolCalls = pending
+		state.PendingToolCalls = slices.Clone(state.PendingToolCalls)
 	}
 	return state
 }

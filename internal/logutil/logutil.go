@@ -106,23 +106,8 @@ func Fatal(msg string, fields ...zap.Field) { L().Fatal(msg, fields...) }
 // Infof logs a formatted info message.
 func Infof(template string, args ...any) { S().Infof(template, args...) }
 
-// Warnf logs a formatted warning.
-func Warnf(template string, args ...any) { S().Warnf(template, args...) }
-
 // Errorf logs a formatted error.
 func Errorf(template string, args ...any) { S().Errorf(template, args...) }
 
-// Debugf logs a formatted debug message.
-func Debugf(template string, args ...any) { S().Debugf(template, args...) }
-
 // Fatalf logs a formatted fatal and calls os.Exit(1).
 func Fatalf(template string, args ...any) { S().Fatalf(template, args...) }
-
-// ---- helpers ----
-
-// Sync flushes the logger's buffers.
-func Sync() {
-	if logger != nil {
-		_ = logger.Sync()
-	}
-}

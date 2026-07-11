@@ -5,7 +5,24 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.uber.org/goleak"
 )
+
+func TestSkillStoreCloseWaitsForWatcher(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "skill.md"), []byte("---\nname: test\ndescription: test\n---\nbody\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewSkillStore(dir)
+	if err != nil {
+		t.Fatalf("NewSkillStore: %v", err)
+	}
+	store.Close()
+	store.Close()
+}
 
 func TestSkillStore_LoadFromDir(t *testing.T) {
 	dir := t.TempDir()
@@ -140,5 +157,81 @@ Default skill content.
 	}
 	if !s.Enabled {
 		t.Error("Enabled should default to true when not specified in frontmatter")
+	}
+}
+
+func TestLoadSkillFileFrontmatterCharacterization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		content     string
+		wantName    string
+		wantContent string
+		wantEnabled bool
+		wantErr     bool
+	}{
+		{
+			name:        "CRLF",
+			content:     "---\r\nname: crlf\r\n---\r\n第一行\r\n第二行\r\n",
+			wantName:    "crlf",
+			wantContent: "第一行\r\n第二行",
+			wantEnabled: true,
+		},
+		{
+			name:        "empty body",
+			content:     "---\nname: empty\n---\n",
+			wantName:    "empty",
+			wantContent: "",
+			wantEnabled: true,
+		},
+		{
+			name:        "missing closing delimiter",
+			content:     "---\nname: unfinished\ndescription: still metadata\n",
+			wantName:    "unfinished",
+			wantContent: "",
+			wantEnabled: true,
+		},
+		{
+			name:    "invalid YAML",
+			content: "---\nname: [\n---\nbody\n",
+			wantErr: true,
+		},
+		{
+			name:        "enabled default",
+			content:     "---\nname: default-enabled\n---\nbody\n",
+			wantName:    "default-enabled",
+			wantContent: "body",
+			wantEnabled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "skill.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write skill: %v", err)
+			}
+
+			skill, err := loadSkillFile(path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("loadSkillFile() error = nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadSkillFile() error = %v", err)
+			}
+			if skill.Name != tt.wantName {
+				t.Errorf("Name = %q, want %q", skill.Name, tt.wantName)
+			}
+			if skill.Content != tt.wantContent {
+				t.Errorf("Content = %q, want %q", skill.Content, tt.wantContent)
+			}
+			if skill.Enabled != tt.wantEnabled {
+				t.Errorf("Enabled = %t, want %t", skill.Enabled, tt.wantEnabled)
+			}
+		})
 	}
 }

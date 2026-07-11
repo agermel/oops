@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 // RetryPolicy 定义工具调用的重试策略。
@@ -77,37 +79,30 @@ func isRetryableError(err error) bool {
 // fn 返回 error 为 nil 时表示成功。
 // 返回 nil 表示成功（可能在重试后）；返回 error 表示所有尝试均失败或错误不可重试。
 func retryOpsCall(ctx context.Context, policy RetryPolicy, fn func() error) error {
-	var lastErr error
-	backoff := policy.Backoff
-
-	for attempt := 0; attempt <= policy.MaxRetries; attempt++ {
-		// 非首次尝试：等待退避时间。
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-			backoff *= 2
-		}
-
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-
-		// 不可重试的错误直接返回。
-		if !isRetryableError(lastErr) {
-			return lastErr
-		}
-
-		// 检查 context 是否已取消。
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	return lastErr
+	maxRetries := max(policy.MaxRetries, 0)
+	retryBackoff := backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(policy.Backoff),
+		backoff.WithRandomizationFactor(0),
+		backoff.WithMultiplier(2),
+		backoff.WithMaxInterval(time.Duration(1<<63-1)),
+		backoff.WithMaxElapsedTime(0),
+	)
+
+	return backoff.Retry(func() error {
+		if err := ctx.Err(); err != nil {
+			return backoff.Permanent(err)
+		}
+
+		err := fn()
+		if err == nil || isRetryableError(err) {
+			return err
+		}
+		return backoff.Permanent(err)
+	}, backoff.WithContext(backoff.WithMaxRetries(retryBackoff, uint64(maxRetries)), ctx))
 }
 
 // formatRetryError 生成带重试信息的工具错误消息。

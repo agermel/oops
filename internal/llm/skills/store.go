@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"bufio"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -11,6 +10,10 @@ import (
 	"oops/internal/logutil"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
+	"go.abhg.dev/goldmark/frontmatter"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -28,10 +31,12 @@ type Skill struct {
 
 // SkillStore 管理所有技能，从文件系统加载，支持热重载。
 type SkillStore struct {
-	mu      sync.RWMutex
-	dir     string
-	skills  map[string]*Skill // name → Skill
-	watcher *fsnotify.Watcher
+	mu        sync.RWMutex
+	dir       string
+	skills    map[string]*Skill // name → Skill
+	watcher   *fsnotify.Watcher
+	watchDone chan struct{}
+	closeOnce sync.Once
 }
 
 // NewSkillStore 从指定目录加载所有 .md 文件作为 Skill。
@@ -55,7 +60,11 @@ func NewSkillStore(dir string) (*SkillStore, error) {
 			watcher.Close()
 		} else {
 			ss.watcher = watcher
-			go ss.watchLoop()
+			ss.watchDone = make(chan struct{})
+			go func() {
+				defer close(ss.watchDone)
+				ss.watchLoop()
+			}()
 		}
 	}
 
@@ -126,9 +135,13 @@ func (ss *SkillStore) RenderAvailable() string {
 
 // Close 停止文件监听。
 func (ss *SkillStore) Close() {
-	if ss.watcher != nil {
-		ss.watcher.Close()
-	}
+	ss.closeOnce.Do(func() {
+		if ss.watcher == nil {
+			return
+		}
+		_ = ss.watcher.Close()
+		<-ss.watchDone
+	})
 }
 
 // loadAll 加载 dir 下所有 .md 文件。
@@ -171,93 +184,66 @@ func loadSkillFile(path string) (*Skill, error) {
 		return nil, err
 	}
 
-	fm, body, err := parseFrontmatter(data)
-	if err != nil {
-		return nil, err
+	return parseSkillDocument(data)
+}
+
+func parseSkillDocument(data []byte) (*Skill, error) {
+	var rawFrontmatter []byte
+	format := frontmatter.YAML
+	format.Unmarshal = func(raw []byte, target any) error {
+		rawFrontmatter = raw
+		return yaml.Unmarshal(raw, target)
+	}
+
+	markdown := goldmark.New(goldmark.WithExtensions(&frontmatter.Extender{
+		Formats: []frontmatter.Format{format},
+	}))
+	ctx := parser.NewContext()
+	markdown.Parser().Parse(text.NewReader(data), parser.WithContext(ctx))
+
+	fm := frontmatter.Get(ctx)
+	if fm == nil {
+		return nil, &yaml.TypeError{Errors: []string{"name is required"}}
 	}
 
 	var skill Skill
-	if err := yaml.Unmarshal(fm, &skill); err != nil {
+	if err := fm.Decode(&skill); err != nil {
 		return nil, err
 	}
 	if skill.Name == "" {
 		return nil, &yaml.TypeError{Errors: []string{"name is required"}}
 	}
-	if skill.Enabled && fm == nil {
-		// 新格式无 frontmatter → 不做特殊处理
-	}
+
 	// 默认启用。
-	if fm != nil {
-		// 如果 frontmatter 存在但没有 enabled 字段，yaml 默认为 false。
-		// 检查原始 YAML 中是否显式写了 enabled。
-		var raw map[string]any
-		yaml.Unmarshal(fm, &raw)
-		if raw != nil {
-			if _, hasEnabled := raw["enabled"]; !hasEnabled {
-				skill.Enabled = true // 缺失时默认启用
-			}
+	// 如果 frontmatter 存在但没有 enabled 字段，yaml 默认为 false。
+	// 检查原始 YAML 中是否显式写了 enabled。
+	var fields map[string]any
+	if err := fm.Decode(&fields); err == nil && fields != nil {
+		if _, hasEnabled := fields["enabled"]; !hasEnabled {
+			skill.Enabled = true
 		}
 	}
 
-	skill.Content = strings.TrimSpace(string(body))
+	skill.Content = strings.TrimSpace(string(skillBody(data, rawFrontmatter)))
 	return &skill, nil
 }
 
-// parseFrontmatter 解析 YAML frontmatter，返回 YAML 字节和正文内容。
-// Frontmatter 以 --- 开头和结尾。
-func parseFrontmatter(data []byte) ([]byte, []byte, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-
-	// 检查第一行是否为 ---
-	if !scanner.Scan() {
-		return nil, nil, nil // 空文件
-	}
-	if strings.TrimSpace(scanner.Text()) != "---" {
-		// 无 frontmatter，整个文件为正文。
-		return nil, data, nil
+// skillBody 根据 Goldmark 已解析的 frontmatter 位置截取原始 Markdown 正文。
+func skillBody(data, rawFrontmatter []byte) []byte {
+	openingLineEnd := bytes.IndexByte(data, '\n')
+	if openingLineEnd < 0 {
+		return nil
 	}
 
-	// 读取 frontmatter 直到下一个 ---
-	var fmLines []string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "---" {
-			break
-		}
-		fmLines = append(fmLines, line)
+	closingLineStart := openingLineEnd + 1 + len(rawFrontmatter)
+	if closingLineStart >= len(data) {
+		return nil
 	}
-
-	// 剩余部分为正文。
-	bodyStart := 0
-	for i, b := range data {
-		if b == '\n' {
-			bodyStart = i + 1
-		}
+	closingLineEnd := bytes.IndexByte(data[closingLineStart:], '\n')
+	if closingLineEnd < 0 {
+		return nil
 	}
-	// 跳过 frontmatter 部分。
-	dashesSeen := 0
-	bodyStart = 0
-	lines := bytes.Split(data, []byte{'\n'})
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(string(line))
-		if trimmed == "---" {
-			dashesSeen++
-			if dashesSeen == 2 {
-				if i+1 < len(lines) {
-					bodyStart = i + 1
-				}
-				break
-			}
-		}
-	}
-
-	var body []byte
-	if bodyStart > 0 && bodyStart < len(lines) {
-		body = bytes.Join(lines[bodyStart:], []byte{'\n'})
-	}
-
-	fm := []byte(strings.Join(fmLines, "\n"))
-	return fm, body, nil
+	return data[closingLineStart+closingLineEnd+1:]
 }
 
 // watchLoop 监听文件变更并自动重载。

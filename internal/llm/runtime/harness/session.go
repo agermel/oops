@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -61,7 +62,6 @@ type pendingWrite struct {
 	model     string
 	reasoning string
 	tools     []string
-	message   protocol.AgentMessage
 }
 
 func NewAgentSession(options AgentSessionOptions) (*AgentSession, error) {
@@ -153,35 +153,6 @@ func (s *AgentSession) Prompt(ctx context.Context, messages protocol.MessageList
 	return agent.Prompt(ctx, messages)
 }
 
-func (s *AgentSession) Continue(ctx context.Context) (protocol.MessageList, error) {
-	s.mu.Lock()
-	s.settled = false
-	agent := s.agent
-	s.mu.Unlock()
-	return agent.Continue(ctx)
-}
-
-func (s *AgentSession) Steer(messages protocol.MessageList) error {
-	s.mu.Lock()
-	agent := s.agent
-	s.mu.Unlock()
-	return agent.Steer(messages)
-}
-
-func (s *AgentSession) FollowUp(messages protocol.MessageList) error {
-	s.mu.Lock()
-	agent := s.agent
-	s.mu.Unlock()
-	return agent.FollowUp(messages)
-}
-
-func (s *AgentSession) Abort() bool {
-	s.mu.Lock()
-	agent := s.agent
-	s.mu.Unlock()
-	return agent.Abort()
-}
-
 func (s *AgentSession) WaitForIdle(ctx context.Context) error {
 	s.mu.Lock()
 	agent := s.agent
@@ -242,23 +213,6 @@ func (s *AgentSession) SetActiveTools(names []string) error {
 		return nil
 	}
 	entry, err := s.session.AppendActiveToolsChange(names)
-	if err != nil {
-		return err
-	}
-	if err := s.saveEntryLocked(entry); err != nil {
-		return err
-	}
-	return s.rebuildAgentLocked()
-}
-
-func (s *AgentSession) AppendCustomMessage(message protocol.AgentMessage) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.agent.State().IsStreaming {
-		s.pending = append(s.pending, pendingWrite{kind: session.EntryCustomMessage, message: protocol.CloneMessage(message)})
-		return nil
-	}
-	entry, err := s.session.AppendCustomMessageEntry(message)
 	if err != nil {
 		return err
 	}
@@ -402,8 +356,6 @@ func (s *AgentSession) flushPendingLocked() error {
 			entry, err = s.session.AppendThinkingLevelChange(item.reasoning)
 		case session.EntryActiveToolsChange:
 			entry, err = s.session.AppendActiveToolsChange(item.tools)
-		case session.EntryCustomMessage:
-			entry, err = s.session.AppendCustomMessageEntry(item.message)
 		default:
 			err = fmt.Errorf("unsupported pending write %q", item.kind)
 		}
@@ -628,9 +580,7 @@ func cloneRaw(data []byte) []byte {
 	if len(data) == 0 {
 		return nil
 	}
-	out := make([]byte, len(data))
-	copy(out, data)
-	return out
+	return bytes.Clone(data)
 }
 
 func firstNonEmpty(values ...string) string {

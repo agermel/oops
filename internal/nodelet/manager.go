@@ -11,6 +11,7 @@ import (
 	"oops/internal/logutil"
 	runtimestore "oops/internal/store/runtime"
 
+	"github.com/cenkalti/backoff/v4"
 	"go.uber.org/zap"
 )
 
@@ -201,40 +202,61 @@ func (m *NodeletManager) nextIDLocked() string {
 }
 
 // Test 尝试连接 nodelet 的 /host 端点验证 token 有效。
-// 最多重试 3 次，每次间隔递增（1s / 2s / 3s）。
-func (m *NodeletManager) Test(cfg NodeletConfig) error {
-	const maxRetries = 3
-	client := &http.Client{Timeout: 6 * time.Second}
+// 调用方 context 会取消请求和退避等待；认证与全部 4xx 响应立即结束重试。
+func (m *NodeletManager) Test(ctx context.Context, cfg NodeletConfig) error {
+	retryBackoff := backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(time.Second),
+		backoff.WithRandomizationFactor(0),
+		backoff.WithMultiplier(2),
+		backoff.WithMaxInterval(time.Duration(1<<63-1)),
+		backoff.WithMaxElapsedTime(0),
+	)
+	return m.testWithBackoff(ctx, cfg, retryBackoff)
+}
 
-	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * time.Second)
+func (m *NodeletManager) testWithBackoff(ctx context.Context, cfg NodeletConfig, retryBackoff backoff.BackOff) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	err := backoff.Retry(func() error {
+		if err := ctx.Err(); err != nil {
+			return backoff.Permanent(err)
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.Address+"/host", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Address+"/host", nil)
 		if err != nil {
-			return fmt.Errorf("bad address: %w", err)
+			return backoff.Permanent(fmt.Errorf("bad address: %w", err))
 		}
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
-			continue
+			if ctx.Err() != nil {
+				return backoff.Permanent(ctx.Err())
+			}
+			return err
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("unauthorized: token mismatch")
+			return backoff.Permanent(fmt.Errorf("unauthorized: token mismatch"))
 		}
-		lastErr = fmt.Errorf("host returned %d", resp.StatusCode)
-	}
 
-	return fmt.Errorf("connect (×%d): %w", maxRetries, lastErr)
+		err = fmt.Errorf("host returned %d", resp.StatusCode)
+		if resp.StatusCode >= http.StatusBadRequest && resp.StatusCode < http.StatusInternalServerError {
+			return backoff.Permanent(err)
+		}
+		return err
+	}, backoff.WithContext(backoff.WithMaxRetries(retryBackoff, 2), ctx))
+	if err != nil {
+		return fmt.Errorf("connect (×3): %w", err)
+	}
+	return nil
 }
 
 // --- internal ---

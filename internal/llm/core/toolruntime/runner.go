@@ -1,6 +1,7 @@
 package toolruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -467,9 +468,7 @@ func cloneRaw(raw json.RawMessage) json.RawMessage {
 	if raw == nil {
 		return nil
 	}
-	out := make(json.RawMessage, len(raw))
-	copy(out, raw)
-	return out
+	return bytes.Clone(raw)
 }
 
 func cloneArguments(args map[string]any) map[string]any {

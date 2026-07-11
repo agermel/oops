@@ -25,13 +25,6 @@ func newMessageQueue(mode QueueMode) messageQueue {
 	return messageQueue{mode: mode}
 }
 
-func validateQueueMode(mode QueueMode) error {
-	if mode == QueueModeOneAtATime || mode == QueueModeAll {
-		return nil
-	}
-	return fmt.Errorf("unknown queue mode %q", mode)
-}
-
 func (q *messageQueue) enqueue(messages protocol.MessageList) error {
 	cloned, err := cloneValidatedMessages(messages)
 	if err != nil {
@@ -59,23 +52,8 @@ func (q *messageQueue) clear() {
 	q.messages = nil
 }
 
-func (q *messageQueue) len() int {
-	return len(q.messages)
-}
-
 func (q *messageQueue) hasItems() bool {
 	return len(q.messages) > 0
-}
-
-func (q *messageQueue) setMode(mode QueueMode) error {
-	if mode == "" {
-		mode = QueueModeOneAtATime
-	}
-	if err := validateQueueMode(mode); err != nil {
-		return err
-	}
-	q.mode = mode
-	return nil
 }
 
 func cloneValidatedMessages(messages protocol.MessageList) (protocol.MessageList, error) {

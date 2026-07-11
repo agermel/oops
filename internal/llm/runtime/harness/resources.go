@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
-	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/core/toolruntime"
 )
 
@@ -45,22 +45,14 @@ func cloneTools(tools []toolruntime.Tool) []toolruntime.Tool {
 	if len(tools) == 0 {
 		return nil
 	}
-	out := make([]toolruntime.Tool, len(tools))
-	copy(out, tools)
-	return out
-}
-
-func cloneDefinitions(defs []protocol.ToolDefinition) []protocol.ToolDefinition {
-	return protocol.CloneTools(defs)
+	return slices.Clone(tools)
 }
 
 func cloneStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
+	return slices.Clone(values)
 }
 
 func validateResourceToolNames(tools []toolruntime.Tool, names []string) error {

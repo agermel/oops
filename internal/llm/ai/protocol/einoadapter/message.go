@@ -76,18 +76,6 @@ func ToEinoMessage(msg protocol.AgentMessage) (*schema.Message, error) {
 	}
 }
 
-func FromEinoMessages(messages []*schema.Message) (protocol.MessageList, error) {
-	out := make(protocol.MessageList, 0, len(messages))
-	for _, msg := range messages {
-		converted, err := FromEinoMessage(msg)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, converted)
-	}
-	return out, nil
-}
-
 func ToEinoMessages(messages protocol.MessageList) ([]*schema.Message, error) {
 	out := make([]*schema.Message, 0, len(messages))
 	for _, msg := range messages {
@@ -103,9 +91,6 @@ func ToEinoMessages(messages protocol.MessageList) ([]*schema.Message, error) {
 func fromEinoUserContent(msg *schema.Message) (protocol.ContentList, error) {
 	if len(msg.UserInputMultiContent) > 0 {
 		return fromEinoInputParts(msg.UserInputMultiContent)
-	}
-	if len(msg.MultiContent) > 0 {
-		return fromEinoMultiContentParts(msg.MultiContent)
 	}
 	return protocol.ContentList{protocol.NewTextContent(msg.Content)}, nil
 }
@@ -137,8 +122,8 @@ func fromEinoAssistantContent(msg *schema.Message) (protocol.ContentList, error)
 }
 
 func fromEinoToolContent(msg *schema.Message) protocol.ContentList {
-	if len(msg.MultiContent) > 0 {
-		content, err := fromEinoMultiContentParts(msg.MultiContent)
+	if len(msg.UserInputMultiContent) > 0 {
+		content, err := fromEinoInputParts(msg.UserInputMultiContent)
 		if err == nil {
 			return content
 		}
@@ -217,23 +202,23 @@ func toEinoAssistantMessage(msg protocol.AssistantMessage) (*schema.Message, err
 
 func toEinoToolMessage(msg protocol.ToolResultMessage) (*schema.Message, error) {
 	out := schema.ToolMessage(textFromContent(msg.Content), msg.ToolCallID, schema.WithToolName(msg.ToolName))
-	parts := make([]schema.ChatMessagePart, 0, len(msg.Content))
+	parts := make([]schema.MessageInputPart, 0, len(msg.Content))
 	for _, content := range msg.Content {
 		switch c := content.(type) {
 		case protocol.TextContent:
-			parts = append(parts, schema.ChatMessagePart{Type: schema.ChatMessagePartTypeText, Text: c.Text})
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: c.Text})
 		case *protocol.TextContent:
-			parts = append(parts, schema.ChatMessagePart{Type: schema.ChatMessagePartTypeText, Text: c.Text})
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: c.Text})
 		case protocol.ImageContent:
-			parts = append(parts, toEinoMultiContentImagePart(c))
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeImageURL, Image: toEinoInputImage(c)})
 		case *protocol.ImageContent:
-			parts = append(parts, toEinoMultiContentImagePart(*c))
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeImageURL, Image: toEinoInputImage(*c)})
 		default:
 			return nil, fmt.Errorf("tool result message cannot contain %T", content)
 		}
 	}
 	if len(parts) > 1 || (len(parts) == 1 && parts[0].Type != schema.ChatMessagePartTypeText) {
-		out.MultiContent = parts
+		out.UserInputMultiContent = parts
 	}
 	return out, nil
 }
@@ -283,30 +268,6 @@ func fromEinoOutputParts(parts []schema.MessageOutputPart) (protocol.ContentList
 	return out, nil
 }
 
-func fromEinoMultiContentParts(parts []schema.ChatMessagePart) (protocol.ContentList, error) {
-	out := make(protocol.ContentList, 0, len(parts))
-	for _, part := range parts {
-		switch part.Type {
-		case schema.ChatMessagePartTypeText:
-			out = append(out, protocol.NewTextContent(part.Text))
-		case schema.ChatMessagePartTypeImageURL:
-			if part.ImageURL == nil {
-				return nil, errors.New("image part missing image_url")
-			}
-			out = append(out, protocol.ImageContent{
-				Type:     protocol.ContentTypeImage,
-				Data:     part.ImageURL.URI,
-				URL:      part.ImageURL.URL,
-				MIMEType: part.ImageURL.MIMEType,
-				Detail:   string(part.ImageURL.Detail),
-			})
-		default:
-			return nil, fmt.Errorf("unsupported multi content part %q", part.Type)
-		}
-	}
-	return out, nil
-}
-
 func fromEinoInputImage(img *schema.MessageInputImage) protocol.ImageContent {
 	content := protocol.ImageContent{Type: protocol.ContentTypeImage, MIMEType: img.MIMEType, Detail: string(img.Detail)}
 	if img.URL != nil {
@@ -346,18 +307,6 @@ func toEinoOutputImage(content protocol.ImageContent) *schema.MessageOutputImage
 			URL:        ptrIfNotEmpty(content.URL),
 			Base64Data: ptrIfNotEmpty(content.Data),
 			MIMEType:   content.MIMEType,
-		},
-	}
-}
-
-func toEinoMultiContentImagePart(content protocol.ImageContent) schema.ChatMessagePart {
-	return schema.ChatMessagePart{
-		Type: schema.ChatMessagePartTypeImageURL,
-		ImageURL: &schema.ChatMessageImageURL{
-			URL:      content.URL,
-			URI:      content.Data,
-			MIMEType: content.MIMEType,
-			Detail:   schema.ImageURLDetail(content.Detail),
 		},
 	}
 }

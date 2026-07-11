@@ -147,18 +147,6 @@ func (a *Agent) FollowUp(messages protocol.MessageList) error {
 	return a.followUpQueue.enqueue(messages)
 }
 
-func (a *Agent) ClearSteeringQueue() {
-	a.mu.Lock()
-	a.steeringQueue.clear()
-	a.mu.Unlock()
-}
-
-func (a *Agent) ClearFollowUpQueue() {
-	a.mu.Lock()
-	a.followUpQueue.clear()
-	a.mu.Unlock()
-}
-
 func (a *Agent) ClearAllQueues() {
 	a.mu.Lock()
 	a.steeringQueue.clear()
@@ -170,18 +158,6 @@ func (a *Agent) HasQueuedMessages() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.steeringQueue.hasItems() || a.followUpQueue.hasItems()
-}
-
-func (a *Agent) SetSteeringMode(mode QueueMode) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.steeringQueue.setMode(mode)
-}
-
-func (a *Agent) SetFollowUpMode(mode QueueMode) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.followUpQueue.setMode(mode)
 }
 
 func (a *Agent) Abort() bool {
@@ -215,23 +191,6 @@ func (a *Agent) WaitForIdle(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func (a *Agent) Reset() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.active != nil {
-		return ErrAgentBusy
-	}
-	a.state.Messages = nil
-	a.state.IsStreaming = false
-	a.state.Phase = AgentPhaseIdle
-	a.state.StreamingMessage = nil
-	a.state.PendingToolCalls = nil
-	a.state.ErrorMessage = ""
-	a.steeringQueue.clear()
-	a.followUpQueue.clear()
-	return nil
 }
 
 func (a *Agent) runPrompt(ctx context.Context, messages protocol.MessageList, skipInitialSteeringPoll bool) (protocol.MessageList, error) {
