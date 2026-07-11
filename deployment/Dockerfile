@@ -1,5 +1,5 @@
 # Stage 1: Build frontend
-FROM node:22-alpine AS frontend
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS frontend
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go server
-FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS builder
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /oops ./cmd/oops/
 
 # Stage 3: Build Go-based MCP servers from pinned source.
-FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine AS mcp-go-builder
+FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS mcp-go-builder
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY scripts/verify-artifacts.sh scripts/verify-artifacts.sh
@@ -38,13 +38,13 @@ RUN mkdir -p /out && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/mysql-mcp-server ./cmd/mysql-mcp-server
 
 # Stage 4: Preinstall Node-based MCP servers
-FROM node:22-bookworm AS mcp-node
+FROM node:22-bookworm@sha256:a25c9934ff6382cd4f08b6bc26c82bf4ea69b1e6f8dabfb2ead457374127c365 AS mcp-node
 WORKDIR /opt/oops/mcp-confluent
 COPY deployment/mcp-confluent/package.json deployment/mcp-confluent/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Stage 5: Runtime
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf
 ARG TARGETOS TARGETARCH
 COPY scripts/fetch-uv.sh scripts/fetch-python.sh /usr/local/lib/oops/
 RUN apt-get update && \

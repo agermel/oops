@@ -21,7 +21,7 @@ jq -e '
   def nonempty_string: type == "string" and length > 0;
   def integrity_kind:
     type == "string"
-    and test("^(go-source-tree|go-module-zip|python-wheel|release-archive|python-standalone-archive)$");
+    and test("^(go-source-tree|go-module-zip|python-wheel|release-archive|python-standalone-archive|oci-image-index)$");
   .artifacts
   | type == "array" and length > 0
   and all(.[];
@@ -43,6 +43,8 @@ jq -e '
           (.build | type == "string" and test("^[0-9]{8}$"))
           and (.target | type == "string" and test("^cpython-[0-9]+\\.[0-9]+\\.[0-9]+-linux-(x86_64|aarch64)-gnu$"))
           and (.archive | type == "string" and endswith(".tar.gz"))
+        elif .integrity_kind == "oci-image-index" then
+          (.image | type == "string" and test("^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*$"))
         else
           true
         end
@@ -249,6 +251,52 @@ verify_cpython_runtime_lock() {
 	fi
 }
 
+verify_oci_image_lock() {
+	local artifact="$1"
+	shift
+	local image hash reference file_path
+
+	image="$(manifest_value "$artifact" image)"
+	hash="$(manifest_value "$artifact" sha256)"
+	reference="$image@sha256:$hash"
+	for file_path in "$@"; do
+		if ! rg -Fq "FROM $reference" "$root/$file_path" && \
+			! rg -Fq "FROM --platform=\$BUILDPLATFORM $reference" "$root/$file_path"; then
+			echo "$artifact digest is missing from $file_path" >&2
+			return 1
+		fi
+	done
+}
+
+verify_dockerfile_base_images() {
+	local file_path
+
+	for file_path in deployment/Dockerfile deployment/Dockerfile.nodelet; do
+		if ! awk '
+			/^FROM[[:space:]]/ {
+				image = ""
+				for (field_index = 2; field_index <= NF; field_index++) {
+					if ($field_index ~ /^--platform=/) {
+						continue
+					}
+					if ($field_index == "AS") {
+						break
+					}
+					image = $field_index
+					break
+				}
+				if (image == "" || image !~ /@sha256:[0-9a-f]+$/) {
+					print FILENAME ": unpinned Docker base image: " $0 > "/dev/stderr"
+					invalid = 1
+				}
+			}
+			END { exit invalid }
+		' "$root/$file_path"; then
+			return 1
+		fi
+	done
+}
+
 if should_verify etcd-mcp-server; then
 	verify_go_source_tree etcd-mcp-server
 fi
@@ -264,12 +312,28 @@ fi
 if should_verify elasticsearch-mcp-server-wheel; then
 	verify_wrapper_lock elasticsearch-mcp-server-wheel elasticsearch elasticsearch-mcp-server
 fi
+if should_verify node-22-alpine-image; then
+	verify_oci_image_lock node-22-alpine-image deployment/Dockerfile
+fi
+if should_verify golang-1.25.5-alpine-image; then
+	verify_oci_image_lock golang-1.25.5-alpine-image deployment/Dockerfile deployment/Dockerfile.nodelet
+fi
+if should_verify node-22-bookworm-image; then
+	verify_oci_image_lock node-22-bookworm-image deployment/Dockerfile
+fi
+if should_verify node-22-bookworm-slim-image; then
+	verify_oci_image_lock node-22-bookworm-slim-image deployment/Dockerfile
+fi
+if should_verify alpine-3.21-image; then
+	verify_oci_image_lock alpine-3.21-image deployment/Dockerfile.nodelet
+fi
 if [[ -z "$only_artifact" ]]; then
 	verify_uv_fetch_hash linux/amd64
 	verify_uv_fetch_hash linux/arm64
 	verify_uv_fetch_hash darwin/arm64
 	verify_cpython_runtime_lock linux/amd64
 	verify_cpython_runtime_lock linux/arm64
+	verify_dockerfile_base_images
 
 	found=0
 	while IFS= read -r -d '' file_path; do

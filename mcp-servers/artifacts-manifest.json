@@ -117,6 +117,66 @@
       "license": "PSF-2.0",
       "build_or_fetch": "./scripts/fetch-python.sh linux/arm64",
       "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "node-22-alpine-image",
+      "source": "https://github.com/docker-library/repo-info/blob/502d6b4603c87fa1563306abd1de4f02b1365cd0/repos/node/remote/22-alpine.md",
+      "image": "node:22-alpine",
+      "version": "22-alpine",
+      "platform": "any/any",
+      "integrity_kind": "oci-image-index",
+      "sha256": "16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2",
+      "license": "NOASSERTION",
+      "build_or_fetch": "docker pull node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "golang-1.25.5-alpine-image",
+      "source": "https://github.com/docker-library/repo-info/blob/16bdf1156a67c5e74c8354a3a82a7bc7a923e136/repos/golang/remote/1.25.5-alpine.md",
+      "image": "golang:1.25.5-alpine",
+      "version": "1.25.5-alpine",
+      "platform": "any/any",
+      "integrity_kind": "oci-image-index",
+      "sha256": "ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb",
+      "license": "NOASSERTION",
+      "build_or_fetch": "docker pull golang:1.25.5-alpine@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "node-22-bookworm-image",
+      "source": "https://github.com/docker-library/repo-info/blob/502d6b4603c87fa1563306abd1de4f02b1365cd0/repos/node/remote/22-bookworm.md",
+      "image": "node:22-bookworm",
+      "version": "22-bookworm",
+      "platform": "any/any",
+      "integrity_kind": "oci-image-index",
+      "sha256": "a25c9934ff6382cd4f08b6bc26c82bf4ea69b1e6f8dabfb2ead457374127c365",
+      "license": "NOASSERTION",
+      "build_or_fetch": "docker pull node:22-bookworm@sha256:a25c9934ff6382cd4f08b6bc26c82bf4ea69b1e6f8dabfb2ead457374127c365",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "node-22-bookworm-slim-image",
+      "source": "https://github.com/docker-library/repo-info/blob/502d6b4603c87fa1563306abd1de4f02b1365cd0/repos/node/remote/22-bookworm-slim.md",
+      "image": "node:22-bookworm-slim",
+      "version": "22-bookworm-slim",
+      "platform": "any/any",
+      "integrity_kind": "oci-image-index",
+      "sha256": "53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf",
+      "license": "NOASSERTION",
+      "build_or_fetch": "docker pull node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "alpine-3.21-image",
+      "source": "https://github.com/docker-library/repo-info/blob/502d6b4603c87fa1563306abd1de4f02b1365cd0/repos/alpine/remote/3.21.md",
+      "image": "alpine:3.21",
+      "version": "3.21",
+      "platform": "any/any",
+      "integrity_kind": "oci-image-index",
+      "sha256": "48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d",
+      "license": "NOASSERTION",
+      "build_or_fetch": "docker pull alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d",
+      "verify": "./scripts/verify-artifacts.sh"
     }
   ]
 }
