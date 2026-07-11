@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"oops/internal/logutil"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
+	"oops/internal/httprate"
+	"oops/internal/logutil"
 )
 
 // Provider 提供当前 Nodelet 管理的机器和容器信息。
@@ -39,21 +41,35 @@ type Provider interface {
 type Server struct {
 	provider Provider
 	token    string
-	limiter  *rateLimiter
+	limiter  *httprate.Limiter
 }
 
 // NewServer 创建不带鉴权的 Nodelet HTTP 服务（仅用于测试）。
 func NewServer(provider Provider) *Server {
-	rl := newRateLimiter()
-	go rl.cleanup(5 * time.Minute)
-	return &Server{provider: provider, limiter: rl}
+	server, err := NewServerWithTokenAndTrustedProxies(provider, "", nil)
+	if err != nil {
+		panic(err)
+	}
+	return server
 }
 
 // NewServerWithToken 创建带强制鉴权的 Nodelet HTTP 服务。token 为空时所有受保护接口返回 503。
 func NewServerWithToken(provider Provider, token string) *Server {
-	rl := newRateLimiter()
-	go rl.cleanup(5 * time.Minute)
-	return &Server{provider: provider, token: token, limiter: rl}
+	server, err := NewServerWithTokenAndTrustedProxies(provider, token, nil)
+	if err != nil {
+		panic(err)
+	}
+	return server
+}
+
+// NewServerWithTokenAndTrustedProxies creates a Nodelet server with an
+// explicit proxy trust boundary for rate limiting and request logs.
+func NewServerWithTokenAndTrustedProxies(provider Provider, token string, trustedProxyCIDRs []string) (*Server, error) {
+	limiter, err := httprate.New(httprate.Options{TrustedProxyCIDRs: trustedProxyCIDRs})
+	if err != nil {
+		return nil, err
+	}
+	return &Server{provider: provider, token: token, limiter: limiter}, nil
 }
 
 // Routes 返回 Nodelet 的 HTTP 路由。
@@ -61,9 +77,9 @@ func NewServerWithToken(provider Provider, token string) *Server {
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(HealthPath, securityHeaders(s.handleHealth))
-	mux.HandleFunc(HostPath, requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleHost)))))
-	mux.HandleFunc(ContainersPath, requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleContainers)))))
-	mux.HandleFunc("/containers/", requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleContainer)))))
+	mux.HandleFunc(HostPath, s.requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleHost)))))
+	mux.HandleFunc(ContainersPath, s.requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleContainers)))))
+	mux.HandleFunc("/containers/", s.requestLogger(securityHeaders(s.rateLimit(s.authorize(s.handleContainer)))))
 	return mux
 }
 
@@ -80,7 +96,7 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 		actual := r.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
 			logutil.Warn("nodelet: authorize failed",
-				zap.String("ip", extractIP(r)),
+				zap.String("ip", s.clientIP(r)),
 				zap.String("path", r.URL.Path),
 			)
 			w.Header().Set("WWW-Authenticate", "Bearer")
@@ -94,8 +110,8 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 // rateLimit Nodelet 接口限流（50 req/s，突发 100）。中心端是已知调用方，比 Web API 更严格。
 func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := extractIP(r)
-		if !s.limiter.allow(ip, 50, 100) {
+		ip := s.clientIP(r)
+		if s.limiter != nil && !s.limiter.Allow(r, httprate.Policy{Key: "nodelet", Rate: rate.Limit(50), Burst: 100}) {
 			logutil.Warn("nodelet: rate limited",
 				zap.String("ip", ip),
 				zap.String("path", r.URL.Path),
@@ -110,12 +126,14 @@ func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 
 // Shutdown 安全关闭后台 goroutine（限流器清理等）。
 func (s *Server) Shutdown() {
-	s.limiter.shutdown()
+	if s.limiter != nil {
+		s.limiter.Close()
+	}
 }
 
 // handleHealth 返回 Nodelet 存活状态。
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	logutil.Debug("nodelet: health check", zap.String("ip", extractIP(r)))
+	logutil.Debug("nodelet: health check", zap.String("ip", s.clientIP(r)))
 	writeJSON(w, http.StatusOK, Health{Status: "ok"})
 }
 

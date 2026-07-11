@@ -124,6 +124,13 @@ func (s *Server) handleContainerDetail(w http.ResponseWriter, r *http.Request) {
 
 // handleProjectLogsStream handles GET /api/projects/{pid}/servers/{sid}/containers/{cid}/logs/stream.
 func (s *Server) handleProjectLogsStream(w http.ResponseWriter, r *http.Request) {
+	streamCtx, finishStream, ok := s.beginStream(r.Context())
+	if !ok {
+		writeJSONError(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	defer finishStream()
+
 	nodeletID := r.PathValue("sid")
 	containerID := r.PathValue("cid")
 
@@ -133,12 +140,14 @@ func (s *Server) handleProjectLogsStream(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	stream, err := s.nodeletClient.ContainerLogsStream(r.Context(), item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
+	stream, err := s.nodeletClient.ContainerLogsStream(streamCtx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 	if err != nil {
 		writeJSONError(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer stream.Close()
+	stopClose := context.AfterFunc(streamCtx, func() { _ = stream.Close() })
+	defer stopClose()
 
 	flusher, err := requireFlusher(w)
 	if err != nil {

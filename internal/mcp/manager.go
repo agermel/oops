@@ -28,6 +28,9 @@ import (
 var (
 	// ErrConnectionNotRunning indicates the MCP connection process is not active.
 	ErrConnectionNotRunning = errors.New("connection not running")
+	// ErrConnectionDraining indicates that a lifecycle change has stopped new
+	// callers while existing callers finish.
+	ErrConnectionDraining = errors.New("connection is draining")
 	// ErrToolCallFailed indicates the transport-level call to the MCP tool failed.
 	ErrToolCallFailed = errors.New("tool call failed")
 	// ErrTestConnectFailed indicates the transport-level connection attempt failed
@@ -122,52 +125,78 @@ type managerState struct {
 	Connections []ConnectionConfig `json:"connections"`
 }
 
-type managedProcess struct {
-	cfg          ConnectionConfig
-	session      MCPSession // retained for per-tool testing
-	closer       func()
-	tools        []tool.BaseTool
-	healthCancel context.CancelFunc // cancel periodic health check on stop
-}
-
 type connectionStart struct {
 	cfg   ConnectionConfig
 	token int64
+	ctx   context.Context
+}
+
+type scheduledStart struct {
+	token  int64
+	cancel context.CancelFunc
 }
 
 // Manager manages MCP server subprocess lifecycles and persists configuration.
 type Manager struct {
-	mu        sync.Mutex
-	runtime   *runtimestore.Store
-	config    managerState
-	processes map[string]*managedProcess // id → running process
-	starting  map[string]int64           // id → active start token
-	nextStart int64
-	errors    map[string]string // id → last error
-	logs      map[string]*ConnectionLogHub
-	onChange  func([]ConnectionTool)
-	startProc func(ConnectionConfig, *ConnectionLogHub) (*managedProcess, error)
-	closed    bool
+	mu               sync.Mutex
+	mutationMu       sync.Mutex
+	runtime          *runtimestore.Store
+	config           managerState
+	configRevision   int64
+	toolRevision     int64
+	visibleTools     []ConnectionTool
+	processes        map[string]*managedProcess // id → running process
+	draining         map[*managedProcess]struct{}
+	starting         map[string]scheduledStart // id → active start token
+	nextStart        int64
+	workers          sync.WaitGroup
+	errors           map[string]string // id → last error
+	logs             map[string]*ConnectionLogHub
+	consoleHub       *console.Hub
+	onChange         func([]ConnectionTool)
+	startProc        func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error)
+	lifecycle        context.Context
+	cancel           context.CancelFunc
+	notificationCh   chan struct{}
+	notificationDone chan struct{}
+	notificationMu   sync.Mutex
+	pendingChanges   []toolChange
+	notificationStop bool
+	closeOnce        sync.Once
+	closed           bool
 }
 
 // NewManagerWithRuntime loads MCP connections from SQLite.
 func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]ConnectionTool)) (*Manager, error) {
+	return NewManagerWithRuntimeAndConsole(runtime, nil, onChange)
+}
+
+// NewManagerWithRuntimeAndConsole loads MCP connections and writes process-level
+// messages to the composition-root console hub.
+func NewManagerWithRuntimeAndConsole(runtime *runtimestore.Store, consoleHub *console.Hub, onChange func([]ConnectionTool)) (*Manager, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime store is required")
 	}
+	lifecycle, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		runtime:   runtime,
-		processes: make(map[string]*managedProcess),
-		starting:  make(map[string]int64),
-		errors:    make(map[string]string),
-		logs:      make(map[string]*ConnectionLogHub),
-		onChange:  onChange,
-		startProc: startProcess,
+		runtime:    runtime,
+		processes:  make(map[string]*managedProcess),
+		draining:   make(map[*managedProcess]struct{}),
+		starting:   make(map[string]scheduledStart),
+		errors:     make(map[string]string),
+		logs:       make(map[string]*ConnectionLogHub),
+		consoleHub: consoleHub,
+		onChange:   onChange,
+		startProc:  startProcess,
+		lifecycle:  lifecycle,
+		cancel:     cancel,
 	}
 
 	if err := m.load(); err != nil {
+		cancel()
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
+	m.startNotificationDispatcher()
 
 	var starts []connectionStart
 	m.mu.Lock()
@@ -176,15 +205,15 @@ func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]Connecti
 		if !cfg.Enabled {
 			continue
 		}
-		token := m.scheduleStartLocked(cfg.ID)
-		starts = append(starts, connectionStart{cfg: cfg, token: token})
+		start := m.scheduleStartLocked(cfg.ID)
+		start.cfg = cloneConnectionConfig(cfg)
+		starts = append(starts, start)
 	}
 	m.mu.Unlock()
 	for _, start := range starts {
-		go m.startAsync(start.cfg, start.token)
+		m.launchStart(start)
 	}
 
-	m.notifyChange()
 	return m, nil
 }
 
@@ -201,10 +230,10 @@ func (m *Manager) List() []ConnectionWithStatus {
 }
 
 func (m *Manager) connectionStatusLocked(cfg ConnectionConfig) ConnectionWithStatus {
-	item := ConnectionWithStatus{ConnectionConfig: cfg}
+	item := ConnectionWithStatus{ConnectionConfig: cloneConnectionConfig(cfg)}
 	if proc, ok := m.processes[cfg.ID]; ok {
 		item.Status = "running"
-		item.ToolCount = len(proc.tools)
+		item.ToolCount = len(proc.metadata)
 		item.Tools = m.toolInfosForConnectionLocked(cfg.ID)
 	} else if cfg.Enabled {
 		if _, ok := m.starting[cfg.ID]; ok {
@@ -230,12 +259,18 @@ func (m *Manager) ConnectionLogs(id string, tail int) ([]LogEntry, bool) {
 
 // SubscribeConnectionLogs replays recent logs, then streams live logs for a saved MCP connection.
 func (m *Manager) SubscribeConnectionLogs(id string, tail int) (<-chan LogEntry, func(), bool) {
+	ch, cancel, err := m.SubscribeConnectionLogsWithError(id, tail)
+	return ch, cancel, err == nil
+}
+
+// SubscribeConnectionLogsWithError exposes bounded-stream rejection details to
+// the HTTP adapter while retaining the established Manager method contract.
+func (m *Manager) SubscribeConnectionLogsWithError(id string, tail int) (<-chan LogEntry, func(), error) {
 	hub, ok := m.connectionLogHub(id)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, fmt.Errorf("connection %q not found", id)
 	}
-	ch, cancel := hub.Subscribe(tail)
-	return ch, cancel, true
+	return hub.Subscribe(tail)
 }
 
 func (m *Manager) connectionLogHub(id string) (*ConnectionLogHub, bool) {
@@ -246,12 +281,6 @@ func (m *Manager) connectionLogHub(id string) (*ConnectionLogHub, bool) {
 		return nil, false
 	}
 	return m.ensureLogHubLocked(id), true
-}
-
-func (m *Manager) ensureLogHub(id string) *ConnectionLogHub {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.ensureLogHubLocked(id)
 }
 
 func (m *Manager) ensureLogHubLocked(id string) *ConnectionLogHub {
@@ -270,14 +299,20 @@ func (m *Manager) appendConnectionLog(id, stream, level, format string, args ...
 	if id == "" {
 		return
 	}
-	m.ensureLogHub(id).Append(stream, level, fmt.Sprintf(format, args...))
-}
-
-func (m *Manager) appendConnectionLogLocked(id, stream, level, format string, args ...any) {
-	if id == "" {
+	m.mu.Lock()
+	if _, exists := m.connectionLocked(id); !exists {
+		m.mu.Unlock()
 		return
 	}
-	m.ensureLogHubLocked(id).Append(stream, level, fmt.Sprintf(format, args...))
+	hub := m.ensureLogHubLocked(id)
+	m.mu.Unlock()
+	hub.Append(stream, level, fmt.Sprintf(format, args...))
+}
+
+func (m *Manager) appendConsole(format string, args ...any) {
+	if m.consoleHub != nil {
+		m.consoleHub.Feed(format, args...)
+	}
 }
 
 // FindByContainer returns the connection bound to a specific container, or nil if none exists.
@@ -312,67 +347,49 @@ func (m *Manager) GetConnectionTools() map[string][]ToolInfo {
 func (m *Manager) GetConnectionToolEntries() []ConnectionTool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.collectToolsLocked()
+	return slices.Clone(m.visibleTools)
 }
 
 // Add persists a new connection and starts it asynchronously if enabled.
 func (m *Manager) Add(cfg ConnectionConfig) error {
-	m.mu.Lock()
 	cfg = normalizeConnectionConfig(cfg)
-
 	if cfg.ID == "" {
-		m.mu.Unlock()
 		return fmt.Errorf("id is required")
 	}
-	if err := validateServerBoundConnection(cfg); err != nil {
+
+	m.mutationMu.Lock()
+	defer m.mutationMu.Unlock()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return fmt.Errorf("mcp manager is closed")
+	}
+	candidate := cloneManagerState(m.config)
+	if err := validateCandidateConnection(cfg, candidate.Connections, -1); err != nil {
 		m.mu.Unlock()
 		return err
 	}
-	if cfg.Transport == "sse" {
-		if cfg.URL == "" {
-			m.mu.Unlock()
-			return fmt.Errorf("url is required for sse transport")
-		}
-	} else if cfg.Command != "" {
-		if err := validateCommand(cfg.Command); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-	}
-	// Per-container uniqueness: one container can have at most one MCP connection.
-	if cfg.ContainerID != "" && cfg.NodeletID != "" {
-		for _, existing := range m.config.Connections {
-			if existing.ContainerID == cfg.ContainerID && existing.NodeletID == cfg.NodeletID {
-				m.mu.Unlock()
-				return fmt.Errorf("container %q on nodelet %q already has connection %q", cfg.ContainerID, cfg.NodeletID, existing.ID)
-			}
-		}
-	}
-	// Global ID uniqueness (safety net).
-	for _, existing := range m.config.Connections {
-		if existing.ID == cfg.ID {
-			m.mu.Unlock()
-			return fmt.Errorf("connection %q already exists", cfg.ID)
-		}
-	}
+	candidate.Connections = append(candidate.Connections, cloneConnectionConfig(cfg))
+	m.mu.Unlock()
 
-	m.config.Connections = append(m.config.Connections, cfg)
-	if err := m.saveLocked(); err != nil {
-		m.mu.Unlock()
+	if err := m.save(candidate); err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
-	m.appendConnectionLogLocked(cfg.ID, "system", "info", "connection %q saved", cfg.Name)
 
-	var startToken int64
+	var start *connectionStart
+	m.mu.Lock()
+	m.config = candidate
+	m.configRevision++
 	if cfg.Enabled {
-		startToken = m.scheduleStartLocked(cfg.ID)
-		m.appendConnectionLogLocked(cfg.ID, "system", "info", "start scheduled")
+		scheduled := m.scheduleStartLocked(cfg.ID)
+		scheduled.cfg = cloneConnectionConfig(cfg)
+		start = &scheduled
 	}
-
-	m.notifyChangeLocked()
 	m.mu.Unlock()
-	if cfg.Enabled {
-		go m.startAsync(cfg, startToken)
+	m.appendConnectionLog(cfg.ID, "system", "info", "connection %q saved", cfg.Name)
+	if start != nil {
+		m.appendConnectionLog(cfg.ID, "system", "info", "start scheduled")
+		m.launchStart(*start)
 	}
 	return nil
 }
@@ -380,25 +397,14 @@ func (m *Manager) Add(cfg ConnectionConfig) error {
 // Update persists changes to an existing connection, stops the old subprocess,
 // and starts a new one asynchronously if enabled.
 func (m *Manager) Update(cfg ConnectionConfig) error {
-	m.mu.Lock()
 	cfg = normalizeConnectionConfig(cfg)
-
-	if err := validateServerBoundConnection(cfg); err != nil {
+	m.mutationMu.Lock()
+	m.mu.Lock()
+	if m.closed {
 		m.mu.Unlock()
-		return err
+		m.mutationMu.Unlock()
+		return fmt.Errorf("mcp manager is closed")
 	}
-	if cfg.Transport == "sse" {
-		if cfg.URL == "" {
-			m.mu.Unlock()
-			return fmt.Errorf("url is required for sse transport")
-		}
-	} else if cfg.Command != "" {
-		if err := validateCommand(cfg.Command); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-	}
-
 	idx := -1
 	for i, existing := range m.config.Connections {
 		if existing.ID == cfg.ID {
@@ -408,51 +414,58 @@ func (m *Manager) Update(cfg ConnectionConfig) error {
 	}
 	if idx < 0 {
 		m.mu.Unlock()
+		m.mutationMu.Unlock()
 		return fmt.Errorf("connection %q not found", cfg.ID)
 	}
-
-	// Per-container uniqueness: don't allow stealing another container's binding.
-	if cfg.ContainerID != "" && cfg.NodeletID != "" {
-		for i, existing := range m.config.Connections {
-			if i == idx {
-				continue
-			}
-			if existing.ContainerID == cfg.ContainerID && existing.NodeletID == cfg.NodeletID {
-				m.mu.Unlock()
-				return fmt.Errorf("container %q on nodelet %q already has connection %q", cfg.ContainerID, cfg.NodeletID, existing.ID)
-			}
-		}
-	}
-
-	// 同步停止旧进程。
-	m.stopLocked(cfg.ID)
-	delete(m.errors, cfg.ID)
-
-	m.config.Connections[idx] = cfg
-	if err := m.saveLocked(); err != nil {
+	candidate := cloneManagerState(m.config)
+	if err := validateCandidateConnection(cfg, candidate.Connections, idx); err != nil {
 		m.mu.Unlock()
+		m.mutationMu.Unlock()
+		return err
+	}
+	candidate.Connections[idx] = cloneConnectionConfig(cfg)
+	m.mu.Unlock()
+
+	if err := m.save(candidate); err != nil {
+		m.mutationMu.Unlock()
 		return fmt.Errorf("save: %w", err)
 	}
-	m.appendConnectionLogLocked(cfg.ID, "system", "info", "connection %q updated", cfg.Name)
 
-	var startToken int64
+	var start *connectionStart
+	m.mu.Lock()
+	m.config = candidate
+	m.configRevision++
+	old := m.detachProcessLocked(cfg.ID)
+	delete(m.errors, cfg.ID)
 	if cfg.Enabled {
-		startToken = m.scheduleStartLocked(cfg.ID)
-		m.appendConnectionLogLocked(cfg.ID, "system", "info", "start scheduled")
+		scheduled := m.scheduleStartLocked(cfg.ID)
+		scheduled.cfg = cloneConnectionConfig(cfg)
+		start = &scheduled
 	}
-
-	m.notifyChangeLocked()
+	change := m.refreshVisibleToolsLocked()
 	m.mu.Unlock()
-	if cfg.Enabled {
-		go m.startAsync(cfg, startToken)
+	m.enqueueToolChange(change)
+	if start != nil {
+		m.launchStart(*start)
 	}
+	m.appendConnectionLog(cfg.ID, "system", "info", "connection %q updated", cfg.Name)
+	if start != nil {
+		m.appendConnectionLog(cfg.ID, "system", "info", "start scheduled")
+	}
+	m.mutationMu.Unlock()
+	m.closeDetachedProcess(old)
 	return nil
 }
 
 // Remove deletes a connection and stops its subprocess.
 func (m *Manager) Remove(id string) error {
+	m.mutationMu.Lock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.closed {
+		m.mu.Unlock()
+		m.mutationMu.Unlock()
+		return fmt.Errorf("mcp manager is closed")
+	}
 
 	idx := -1
 	for i, existing := range m.config.Connections {
@@ -462,56 +475,82 @@ func (m *Manager) Remove(id string) error {
 		}
 	}
 	if idx < 0 {
+		m.mu.Unlock()
+		m.mutationMu.Unlock()
 		return fmt.Errorf("connection %q not found", id)
 	}
+	candidate := cloneManagerState(m.config)
+	candidate.Connections = append(candidate.Connections[:idx], candidate.Connections[idx+1:]...)
+	m.mu.Unlock()
 
-	m.stopLocked(id)
-	delete(m.errors, id)
-	delete(m.starting, id)
-	m.appendConnectionLogLocked(id, "system", "info", "connection removed")
-	delete(m.logs, id)
-
-	m.config.Connections = append(m.config.Connections[:idx], m.config.Connections[idx+1:]...)
-	if err := m.saveLocked(); err != nil {
+	if err := m.save(candidate); err != nil {
+		m.mutationMu.Unlock()
 		return fmt.Errorf("save: %w", err)
 	}
 
-	m.notifyChangeLocked()
+	m.mu.Lock()
+	m.config = candidate
+	m.configRevision++
+	old := m.detachProcessLocked(id)
+	delete(m.errors, id)
+	logHub := m.logs[id]
+	delete(m.logs, id)
+	change := m.refreshVisibleToolsLocked()
+	m.mu.Unlock()
+	m.enqueueToolChange(change)
+	m.mutationMu.Unlock()
+	logHub.Close()
+	m.closeDetachedProcess(old)
 	return nil
 }
 
 // TestTool calls a single tool on a running connection and returns its output.
 // It does not hold the manager lock during the call, so it doesn't block other operations.
 // If the tool has a parameter schema, default arguments are generated for required fields.
-func (m *Manager) TestTool(connID, toolName string) (string, error) {
-	// Briefly hold lock to copy session reference and look up tool schema.
+func (m *Manager) TestTool(ctx context.Context, connID, toolName string) (string, error) {
+	// Briefly hold the manager lock to acquire a process lease. The call itself
+	// runs outside both locks so lifecycle changes can drain safely.
 	m.mu.Lock()
 	proc, ok := m.processes[connID]
 	if !ok {
+		for draining := range m.draining {
+			if draining.cfg.ID == connID {
+				m.mu.Unlock()
+				return "", fmt.Errorf("%w: %q", ErrConnectionDraining, connID)
+			}
+		}
 		m.mu.Unlock()
 		return "", fmt.Errorf("%w: %q", ErrConnectionNotRunning, connID)
 	}
+	release, err := proc.acquire()
+	if err != nil {
+		m.mu.Unlock()
+		return "", fmt.Errorf("%w: %q", err, connID)
+	}
+	hub := m.ensureLogHubLocked(connID)
 	session := proc.session
 	cfgName := proc.cfg.Name
 
-	// Find the tool's parameter schema to generate sensible defaults.
+	// Metadata was loaded before this process became visible to the manager.
 	var toolInfo *schema.ToolInfo
-	for _, bt := range proc.tools {
-		info, err := bt.Info(context.Background())
-		if err != nil {
-			continue
-		}
-		if info.Name == toolName {
-			toolInfo = info
+	for _, metadata := range proc.metadata {
+		if metadata.info.Name == toolName {
+			toolInfo, err = cloneToolInfo(metadata.info)
+			if err != nil {
+				release()
+				m.mu.Unlock()
+				return "", fmt.Errorf("copy tool metadata: %w", err)
+			}
 			break
 		}
 	}
 	m.mu.Unlock()
+	defer release()
 
 	args := buildDefaultArgs(toolInfo)
-	m.appendConnectionLog(connID, "system", "info", "testing tool %q", toolName)
+	hub.Append("system", "info", fmt.Sprintf("testing tool %q", toolName))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	req := mcp.CallToolRequest{}
@@ -525,8 +564,8 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			zap.String("tool", toolName),
 			zap.Error(err),
 		)
-		console.Feed("mcp error: test tool %q on %q: %v", toolName, cfgName, err)
-		m.appendConnectionLog(connID, "system", "error", "tool %q call error: %v", toolName, err)
+		m.appendConsole("mcp error: test tool %q on %q: %v", toolName, cfgName, err)
+		hub.Append("system", "error", fmt.Sprintf("tool %q call error: %v", toolName, err))
 		return "", fmt.Errorf("%w: call %q: %w", ErrToolCallFailed, toolName, err)
 	}
 	if result.IsError {
@@ -545,8 +584,8 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			zap.String("tool", toolName),
 			zap.String("error", errMsg),
 		)
-		console.Feed("mcp error: test tool %q on %q failed: %s", toolName, cfgName, errMsg)
-		m.appendConnectionLog(connID, "system", "error", "tool %q returned error: %s", toolName, errMsg)
+		m.appendConsole("mcp error: test tool %q on %q failed: %s", toolName, cfgName, errMsg)
+		hub.Append("system", "error", fmt.Sprintf("tool %q returned error: %s", toolName, errMsg))
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
@@ -560,7 +599,7 @@ func (m *Manager) TestTool(connID, toolName string) (string, error) {
 			parts = append(parts, fmt.Sprintf("[%T]", block))
 		}
 	}
-	m.appendConnectionLog(connID, "system", "info", "tool %q test passed", toolName)
+	hub.Append("system", "info", fmt.Sprintf("tool %q test passed", toolName))
 	return strings.Join(parts, "\n"), nil
 }
 
@@ -643,7 +682,7 @@ func inferStringDefault(name string) string {
 // Test attempts a temporary connection to verify the config works.
 // When the tested config matches a saved connection, the runtime status is
 // updated so the UI reflects current MCP availability.
-func (m *Manager) Test(cfg ConnectionConfig) error {
+func (m *Manager) Test(ctx context.Context, cfg ConnectionConfig) error {
 	cfg = normalizeConnectionConfig(cfg)
 	if err := validateServerBoundConnection(cfg); err != nil {
 		return err
@@ -655,7 +694,7 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 			hub.Append("system", "info", fmt.Sprintf("testing connection %q", cfg.Name))
 		}
 	}
-	err := m.testConnection(cfg, hub)
+	err := m.testConnection(ctx, cfg, hub)
 	if hub != nil {
 		if err != nil {
 			hub.Append("system", "error", fmt.Sprintf("connection test error: %v", err))
@@ -663,11 +702,19 @@ func (m *Manager) Test(cfg ConnectionConfig) error {
 			hub.Append("system", "info", "connection test passed")
 		}
 	}
-	m.applyTestResult(cfg, err)
+	if shouldApplyTestResult(err) {
+		m.applyTestResult(cfg, err)
+	}
 	return err
 }
 
-func (m *Manager) testConnection(cfg ConnectionConfig, hub *ConnectionLogHub) error {
+// shouldApplyTestResult filters caller-controlled cancellation from persistent
+// connection state. A canceled HTTP request only ends that one probe.
+func shouldApplyTestResult(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func (m *Manager) testConnection(ctx context.Context, cfg ConnectionConfig, hub *ConnectionLogHub) error {
 	if cfg.Transport == "sse" {
 		if cfg.URL == "" {
 			return fmt.Errorf("url is required for sse transport")
@@ -694,7 +741,7 @@ func (m *Manager) testConnection(cfg ConnectionConfig, hub *ConnectionLogHub) er
 		URL:       cfg.URL,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	var logWriter io.Writer
@@ -707,22 +754,37 @@ func (m *Manager) testConnection(cfg ConnectionConfig, hub *ConnectionLogHub) er
 		return fmt.Errorf("%w: test connect: %w", ErrTestConnectFailed, err)
 	}
 	defer closer()
-	if err := verifyBackend(ctx, cfg, session, tools); err != nil {
+	metadata, err := collectManagedTools(ctx, tools)
+	if err != nil {
+		return fmt.Errorf("%w: test tool metadata: %w", ErrTestConnectFailed, err)
+	}
+	names := make([]string, 0, len(metadata))
+	for _, item := range metadata {
+		names = append(names, item.info.Name)
+	}
+	if err := verifyBackend(ctx, cfg, session, names); err != nil {
 		return fmt.Errorf("%w: test backend: %w", ErrTestConnectFailed, err)
 	}
 	return nil
 }
 
 func (m *Manager) applyTestResult(cfg ConnectionConfig, testErr error) {
-	if cfg.ID == "" {
+	if cfg.ID == "" || !shouldApplyTestResult(testErr) {
 		return
 	}
 
 	var start *connectionStart
+	m.mutationMu.Lock()
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		m.mutationMu.Unlock()
+		return
+	}
 	savedCfg, ok := m.connectionLocked(cfg.ID)
 	if !ok {
 		m.mu.Unlock()
+		m.mutationMu.Unlock()
 		return
 	}
 
@@ -732,52 +794,84 @@ func (m *Manager) applyTestResult(cfg ConnectionConfig, testErr error) {
 			if savedCfg.Enabled {
 				if _, running := m.processes[cfg.ID]; !running {
 					if _, starting := m.starting[cfg.ID]; !starting {
-						token := m.scheduleStartLocked(cfg.ID)
-						m.appendConnectionLogLocked(cfg.ID, "system", "info", "start scheduled after successful test")
-						start = &connectionStart{cfg: savedCfg, token: token}
+						scheduled := m.scheduleStartLocked(cfg.ID)
+						scheduled.cfg = cloneConnectionConfig(savedCfg)
+						start = &scheduled
 					}
 				}
 			}
 		}
-		m.notifyChangeLocked()
 		m.mu.Unlock()
 		if start != nil {
-			go m.startAsync(start.cfg, start.token)
+			m.launchStart(*start)
+			m.appendConnectionLog(cfg.ID, "system", "info", "start scheduled after successful test")
 		}
+		m.mutationMu.Unlock()
 		return
 	}
 
 	proc, running := m.processes[cfg.ID]
 	if !running {
-		delete(m.starting, cfg.ID)
+		if start, ok := m.starting[cfg.ID]; ok {
+			delete(m.starting, cfg.ID)
+			if start.cancel != nil {
+				start.cancel()
+			}
+		}
 		m.errors[cfg.ID] = testErr.Error()
-		m.notifyChangeLocked()
 		m.mu.Unlock()
+		m.mutationMu.Unlock()
 		return
 	}
 	if sameRuntimeConfig(proc.cfg, cfg) {
-		m.markProcessErrorLocked(cfg.ID, testErr)
+		draining := m.detachProcessLocked(cfg.ID)
+		m.errors[cfg.ID] = testErr.Error()
+		change := m.refreshVisibleToolsLocked()
 		m.mu.Unlock()
+		m.enqueueToolChange(change)
+		m.appendConnectionLog(cfg.ID, "system", "error", "connection error: %v", testErr)
+		m.mutationMu.Unlock()
+		m.closeDetachedProcess(draining)
 		return
 	}
 
-	currentCfg := proc.cfg
+	release, err := proc.acquire()
+	if err != nil {
+		m.mu.Unlock()
+		m.mutationMu.Unlock()
+		return
+	}
+	currentCfg := cloneConnectionConfig(proc.cfg)
 	session := proc.session
-	tools := proc.tools
+	names := proc.toolNames()
 	m.mu.Unlock()
+	m.mutationMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	currentErr := verifyBackend(ctx, currentCfg, session, tools)
+	ctx, cancel := context.WithTimeout(proc.context(), 15*time.Second)
+	currentErr := verifyBackend(ctx, currentCfg, session, names)
 	cancel()
+	release()
 	if currentErr == nil {
 		return
 	}
 
+	m.mutationMu.Lock()
 	m.mu.Lock()
-	if currentProc, stillRunning := m.processes[cfg.ID]; stillRunning && currentProc == proc {
-		m.markProcessErrorLocked(cfg.ID, currentErr)
+	if !m.closed {
+		if currentProc, stillRunning := m.processes[cfg.ID]; stillRunning && currentProc == proc {
+			draining := m.detachProcessLocked(cfg.ID)
+			m.errors[cfg.ID] = currentErr.Error()
+			change := m.refreshVisibleToolsLocked()
+			m.mu.Unlock()
+			m.enqueueToolChange(change)
+			m.appendConnectionLog(cfg.ID, "system", "error", "connection error: %v", currentErr)
+			m.mutationMu.Unlock()
+			m.closeDetachedProcess(draining)
+			return
+		}
 	}
 	m.mu.Unlock()
+	m.mutationMu.Unlock()
 }
 
 func (m *Manager) connectionLocked(id string) (ConnectionConfig, bool) {
@@ -819,732 +913,52 @@ func normalizedTransport(transport string) string {
 	return transport
 }
 
-func (m *Manager) markProcessErrorLocked(id string, err error) {
-	delete(m.starting, id)
-	m.errors[id] = err.Error()
-	m.appendConnectionLogLocked(id, "system", "error", "connection error: %v", err)
-	if proc, ok := m.processes[id]; ok {
-		if proc.healthCancel != nil {
-			proc.healthCancel()
-		}
-		proc.closer()
-		delete(m.processes, id)
-	}
-	m.notifyChangeLocked()
-}
-
-type backendProbe struct {
-	name string
-	args map[string]any
-}
-
-func verifyBackend(ctx context.Context, cfg ConnectionConfig, session MCPSession, tools []tool.BaseTool) error {
-	for _, probe := range backendProbes(cfg) {
-		if !hasTool(ctx, tools, probe.name) {
-			continue
-		}
-		return callBackendProbe(ctx, session, probe)
-	}
-
-	return Verify(ctx, session)
-}
-
-func callBackendProbe(ctx context.Context, session MCPSession, probe backendProbe) error {
-	req := mcp.CallToolRequest{}
-	req.Params.Name = probe.name
-	req.Params.Arguments = callToolArguments(probe.args)
-
-	result, err := session.CallTool(ctx, req)
-	if err != nil {
-		return fmt.Errorf("call %q: %w", probe.name, err)
-	}
-	if result.IsError {
-		errMsg := toolErrorText(result)
-		if errMsg == "" {
-			errMsg = "returned error with no message"
-		}
-		return fmt.Errorf("call %q: %s", probe.name, errMsg)
-	}
-	if failure := probeFailureText(result); failure != "" {
-		return fmt.Errorf("call %q: %s", probe.name, failure)
-	}
-	return nil
-}
-
-func backendProbes(cfg ConnectionConfig) []backendProbe {
-	switch strings.ToLower(cfg.Type) {
-	case "mysql":
-		return []backendProbe{
-			{name: "ping"},
-			{name: "server_info"},
-			{name: "list_databases"},
-		}
-	case "redis":
-		return []backendProbe{
-			{name: "info"},
-			{name: "dbsize"},
-		}
-	case "postgres":
-		return []backendProbe{
-			{name: "query", args: map[string]any{"sql": "SELECT 1"}},
-		}
-	case "etcd":
-		return []backendProbe{
-			{name: "etcd_health"},
-			{name: "etcd_status"},
-		}
-	case "elasticsearch":
-		return []backendProbe{
-			{name: "get_cluster_health"},
-			{name: "list_indices"},
-		}
-	case "kafka":
-		return []backendProbe{
-			{name: "list-topics"},
-		}
-	case "nacos":
-		return []backendProbe{{
-			name: "search_mcp_server",
-			args: map[string]any{
-				"task_description": "健康检查\nhealth check",
-				"key_words":        "health,nacos",
-			},
-		}}
-	default:
-		return nil
-	}
-}
-
-func hasTool(ctx context.Context, tools []tool.BaseTool, name string) bool {
-	for _, bt := range tools {
-		info, err := bt.Info(ctx)
-		if err != nil || info == nil {
-			continue
-		}
-		if info.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func toolErrorText(result *mcp.CallToolResult) string {
-	var msgs []string
-	for _, block := range result.Content {
-		if tb, ok := block.(mcp.TextContent); ok {
-			msgs = append(msgs, tb.Text)
-		}
-	}
-	return strings.Join(msgs, "; ")
-}
-
-func probeFailureText(result *mcp.CallToolResult) string {
-	text := toolErrorText(result)
-	lower := strings.ToLower(text)
-	if strings.HasPrefix(strings.TrimSpace(lower), "error ") {
-		return text
-	}
-	markers := []string{
-		"failed with message",
-		"unexpected error",
-		"unauthorized",
-		"forbidden",
-		"authentication failed",
-		"connection refused",
-		"no such host",
-		"i/o timeout",
-		"dial tcp",
-		"could not connect",
-		"server selection timeout",
-		"error retrieving",
-		"error getting",
-		"mcp-confluent",
-		"kafkaerror",
-		"all brokers down",
-		"no kafka clusters",
-	}
-	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
-			return text
-		}
-	}
-	return ""
-}
-
-// Close stops all running subprocesses.
 func (m *Manager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.closed = true
-	for id := range m.starting {
-		delete(m.starting, id)
-	}
-	for id := range m.processes {
-		m.stopLocked(id)
-	}
-}
-
-// --- internal (caller must hold m.mu) ---
-
-// expandEnvSlice 展开字符串切片中的 ${VAR} 环境变量引用。
-func expandEnvSlice(vals []string) []string {
-	if len(vals) == 0 {
-		return vals
-	}
-	out := make([]string, len(vals))
-	for i, v := range vals {
-		out[i] = os.ExpandEnv(v)
-	}
-	return out
-}
-
-func normalizeConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
-	cfg.NodeletID = strings.TrimSpace(cfg.NodeletID)
-	cfg.ContainerID = strings.TrimSpace(cfg.ContainerID)
-	switch strings.ToLower(cfg.Type) {
-	case "mysql":
-		return normalizeEnvConfig(cfg, []string{
-			"MYSQL_DSN",
-		})
-	case "redis":
-		return normalizeRedisConnectionConfig(cfg)
-	case "postgres":
-		return normalizeEnvConfig(cfg, []string{
-			"DATABASE_URL",
-		})
-	case "etcd":
-		return normalizeEnvConfig(cfg, []string{
-			"ETCD_ENDPOINTS",
-			"ETCD_USERNAME",
-			"ETCD_PASSWORD",
-		})
-	case "elasticsearch":
-		return normalizeElasticsearchConnectionConfig(cfg)
-	case "kafka":
-		return normalizeKafkaConnectionConfig(cfg)
-	case "nacos":
-		return normalizeNacosConnectionConfig(cfg)
-	default:
-		return cfg
-	}
-}
-
-func validateServerBoundConnection(cfg ConnectionConfig) error {
-	if strings.TrimSpace(cfg.NodeletID) == "" {
-		return fmt.Errorf("nodeletId is required")
-	}
-	return nil
-}
-
-func normalizeEnvConfig(cfg ConnectionConfig, keys []string) ConnectionConfig {
-	generated := make([]string, 0, len(keys))
-	for _, key := range keys {
-		value := envValue(cfg.Env, key)
-		if value != "" {
-			generated = append(generated, key+"="+value)
-		}
-	}
-	return withGeneratedEnv(cfg, generated, keys)
-}
-
-func normalizeRedisConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
-	generated := make([]string, 0, 5)
-	if host := envValue(cfg.Env, "REDIS_HOST"); host != "" {
-		generated = append(generated, "REDIS_HOST="+host)
-	}
-	if port := envValue(cfg.Env, "REDIS_PORT"); port != "" {
-		generated = append(generated, "REDIS_PORT="+port)
-	}
-	if username := envValue(cfg.Env, "REDIS_USERNAME"); username != "" {
-		generated = append(generated, "REDIS_USERNAME="+username)
-	}
-	if database := envValue(cfg.Env, "REDIS_DB"); database != "" {
-		generated = append(generated, "REDIS_DB="+database)
-	}
-	if password := envValueAny(cfg.Env, "REDIS_PWD", "REDIS_PASSWORD"); password != "" {
-		generated = append(generated, "REDIS_PWD="+password)
-	}
-	return withGeneratedEnv(cfg, generated, []string{
-		"REDIS_HOST",
-		"REDIS_PORT",
-		"REDIS_USERNAME",
-		"REDIS_DB",
-		"REDIS_PWD",
-		"REDIS_PASSWORD",
-	})
-}
-
-func normalizeElasticsearchConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
-	hosts := envValueAny(cfg.Env, "ELASTICSEARCH_HOSTS", "ELASTICSEARCH_URL")
-	generated := make([]string, 0, 3)
-	if hosts != "" {
-		generated = append(generated, "ELASTICSEARCH_HOSTS="+hosts)
-	}
-	if username := envValue(cfg.Env, "ELASTICSEARCH_USERNAME"); username != "" {
-		generated = append(generated, "ELASTICSEARCH_USERNAME="+username)
-	}
-	if password := envValue(cfg.Env, "ELASTICSEARCH_PASSWORD"); password != "" {
-		generated = append(generated, "ELASTICSEARCH_PASSWORD="+password)
-	}
-	return withGeneratedEnv(cfg, generated, []string{
-		"ELASTICSEARCH_HOSTS",
-		"ELASTICSEARCH_URL",
-		"ELASTICSEARCH_USERNAME",
-		"ELASTICSEARCH_PASSWORD",
-	})
-}
-
-func normalizeKafkaConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
-	bootstrap := envValueAny(cfg.Env, "BOOTSTRAP_SERVERS", "KAFKA_BOOTSTRAP_SERVERS")
-	username := envValueAny(cfg.Env, "KAFKA_API_KEY", "KAFKA_SASL_USERNAME")
-	password := envValueAny(cfg.Env, "KAFKA_API_SECRET", "KAFKA_SASL_PASSWORD")
-	securityProtocol := envValue(cfg.Env, "KAFKA_SECURITY_PROTOCOL")
-	saslMechanism := envValueAny(cfg.Env, "KAFKA_SASL_MECHANISM", "KAFKA_SASL_MECHANISMS")
-
-	if username != "" && password != "" {
-		if securityProtocol == "" {
-			securityProtocol = "sasl_plaintext"
-		}
-		if saslMechanism == "" {
-			saslMechanism = "PLAIN"
-		}
-	}
-
-	generated := make([]string, 0, 5)
-	if bootstrap != "" {
-		generated = append(generated, "BOOTSTRAP_SERVERS="+bootstrap)
-	}
-	if username != "" && password != "" {
-		generated = append(generated, "KAFKA_API_KEY="+username)
-		generated = append(generated, "KAFKA_API_SECRET="+password)
-	}
-	if securityProtocol != "" {
-		generated = append(generated, "KAFKA_SECURITY_PROTOCOL="+securityProtocol)
-	}
-	if saslMechanism != "" {
-		generated = append(generated, "KAFKA_SASL_MECHANISM="+saslMechanism)
-	}
-	return withGeneratedEnv(cfg, generated, []string{
-		"BOOTSTRAP_SERVERS",
-		"KAFKA_BOOTSTRAP_SERVERS",
-		"KAFKA_API_KEY",
-		"KAFKA_API_SECRET",
-		"KAFKA_SASL_USERNAME",
-		"KAFKA_SASL_PASSWORD",
-		"KAFKA_SECURITY_PROTOCOL",
-		"KAFKA_SASL_MECHANISM",
-		"KAFKA_SASL_MECHANISMS",
-	})
-}
-
-func normalizeNacosConnectionConfig(cfg ConnectionConfig) ConnectionConfig {
-	addr := envValue(cfg.Env, "NACOS_ADDR")
-	if addr == "" {
-		addr = joinHostPort(argValue(cfg.Args, "--host"), argValue(cfg.Args, "--port"))
-	}
-
-	generated := make([]string, 0, 4)
-	if addr != "" {
-		generated = append(generated, "NACOS_ADDR="+addr)
-	}
-	if username := envValue(cfg.Env, "NACOS_USERNAME"); username != "" {
-		generated = append(generated, "NACOS_USERNAME="+username)
-	}
-	if password := envValue(cfg.Env, "NACOS_PASSWORD"); password != "" {
-		generated = append(generated, "NACOS_PASSWORD="+password)
-	}
-	if namespace := envValue(cfg.Env, "NACOS_NAMESPACE"); namespace != "" {
-		generated = append(generated, "NACOS_NAMESPACE="+namespace)
-	}
-
-	cfg.Args = stripArgsWithValues(cfg.Args, []string{"--host", "--port", "--access_token"})
-	return withGeneratedEnv(cfg, generated, []string{
-		"NACOS_ADDR",
-		"NACOS_USERNAME",
-		"NACOS_PASSWORD",
-		"NACOS_NAMESPACE",
-	})
-}
-
-func withGeneratedEnv(cfg ConnectionConfig, generated []string, keys []string) ConnectionConfig {
-	keySet := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		keySet[key] = struct{}{}
-	}
-	extra := make([]string, 0, len(cfg.Env))
-	for _, item := range cfg.Env {
-		if _, ok := keySet[envKey(item)]; ok {
-			continue
-		}
-		extra = append(extra, item)
-	}
-	next := append(append([]string{}, generated...), extra...)
-	if slices.Equal(cfg.Env, next) {
-		return cfg
-	}
-	cfg.Env = next
-	return cfg
-}
-
-func envKey(env string) string {
-	key, _, _ := strings.Cut(env, "=")
-	return strings.TrimSpace(key)
-}
-
-func envValue(env []string, key string) string {
-	prefix := key + "="
-	for _, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
-		}
-	}
-	return ""
-}
-
-func envValueAny(env []string, keys ...string) string {
-	for _, key := range keys {
-		if value := envValue(env, key); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func argValue(args []string, flag string) string {
-	for i, arg := range args {
-		if arg == flag && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
-}
-
-func joinHostPort(host, port string) string {
-	if host == "" {
-		return ""
-	}
-	if port == "" || strings.Contains(host, ":") || strings.Contains(host, ",") || strings.Contains(host, "://") {
-		return host
-	}
-	return host + ":" + port
-}
-
-func stripArgsWithValues(args []string, flags []string) []string {
-	flagSet := make(map[string]struct{}, len(flags))
-	for _, flag := range flags {
-		flagSet[flag] = struct{}{}
-	}
-	kept := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if _, ok := flagSet[args[i]]; ok {
-			i++
-			continue
-		}
-		kept = append(kept, args[i])
-	}
-	return kept
-}
-
-func (m *Manager) load() error {
-	ctx := context.Background()
-	records, err := m.runtime.ListMCPConnections(ctx)
-	if err != nil {
-		return err
-	}
-	m.config.Connections = make([]ConnectionConfig, 0, len(records))
-	for _, r := range records {
-		m.config.Connections = append(m.config.Connections, mcpConnectionFromRuntime(r))
-	}
-	if m.config.Connections == nil {
-		m.config.Connections = []ConnectionConfig{}
-	}
-	normalized := false
-	for i := range m.config.Connections {
-		next := normalizeConnectionConfig(m.config.Connections[i])
-		if strings.TrimSpace(next.NodeletID) == "" && next.Enabled {
-			next.Enabled = false
-			logutil.Warn("mcp: disabled unbound connection pending server binding",
-				zap.String("id", next.ID),
-				zap.String("name", next.Name),
-			)
-		}
-		if !sameStoredConnectionConfig(m.config.Connections[i], next) {
-			m.config.Connections[i] = next
-			normalized = true
-		}
-	}
-	if normalized {
-		return m.saveLocked()
-	}
-	return nil
-}
-
-func (m *Manager) saveLocked() error {
-	return m.runtime.ReplaceMCPConnections(context.Background(), mcpConnectionsToRuntime(m.config.Connections))
-}
-
-func mcpConnectionsToRuntime(connections []ConnectionConfig) []runtimestore.MCPConnectionRecord {
-	records := make([]runtimestore.MCPConnectionRecord, len(connections))
-	for i, c := range connections {
-		c = normalizeConnectionConfig(c)
-		records[i] = runtimestore.MCPConnectionRecord{
-			ID:          c.ID,
-			Name:        c.Name,
-			Type:        c.Type,
-			Transport:   c.Transport,
-			Command:     c.Command,
-			Args:        append([]string{}, c.Args...),
-			Env:         append([]string{}, c.Env...),
-			URL:         c.URL,
-			Enabled:     c.Enabled,
-			ContainerID: c.ContainerID,
-			NodeletID:   c.NodeletID,
-		}
-	}
-	return records
-}
-
-func mcpConnectionsFromRuntime(records []runtimestore.MCPConnectionRecord) []ConnectionConfig {
-	connections := make([]ConnectionConfig, len(records))
-	for i, r := range records {
-		connections[i] = mcpConnectionFromRuntime(r)
-	}
-	return connections
-}
-
-func mcpConnectionFromRuntime(r runtimestore.MCPConnectionRecord) ConnectionConfig {
-	return ConnectionConfig{
-		ID:          r.ID,
-		Name:        r.Name,
-		Type:        r.Type,
-		Transport:   r.Transport,
-		Command:     r.Command,
-		Args:        append([]string{}, r.Args...),
-		Env:         append([]string{}, r.Env...),
-		URL:         r.URL,
-		Enabled:     r.Enabled,
-		ContainerID: r.ContainerID,
-		NodeletID:   r.NodeletID,
-	}
-}
-
-func (m *Manager) scheduleStartLocked(id string) int64 {
-	m.nextStart++
-	token := m.nextStart
-	m.starting[id] = token
-	delete(m.errors, id)
-	return token
-}
-
-func (m *Manager) startAsync(cfg ConnectionConfig, token int64) {
-	hub := m.ensureLogHub(cfg.ID)
-	hub.Append("system", "info", fmt.Sprintf("starting connection %q", cfg.Name))
-	startProc := m.startProc
-	if startProc == nil {
-		startProc = startProcess
-	}
-	proc, err := startProc(cfg, hub)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	currentToken, isStarting := m.starting[cfg.ID]
-	if !isStarting || currentToken != token {
-		if proc != nil {
-			proc.closer()
-		}
-		hub.Append("system", "warn", "start cancelled by newer change")
-		return
-	}
-
-	currentCfg, exists := m.connectionLocked(cfg.ID)
-	if m.closed || !exists || !currentCfg.Enabled || !sameRuntimeConfig(currentCfg, cfg) {
-		delete(m.starting, cfg.ID)
-		if proc != nil {
-			proc.closer()
-		}
-		hub.Append("system", "warn", "start cancelled because connection config changed")
-		m.notifyChangeLocked()
-		return
-	}
-
-	delete(m.starting, cfg.ID)
-	if err != nil {
-		logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(err))
-		m.errors[cfg.ID] = err.Error()
-		hub.Append("system", "error", fmt.Sprintf("connection start error: %v", err))
-		m.notifyChangeLocked()
-		return
-	}
-	if proc == nil {
-		logutil.Error("mcp: start", zap.String("id", cfg.ID), zap.Error(errors.New("start returned nil process")))
-		m.errors[cfg.ID] = "start returned nil process"
-		hub.Append("system", "error", "connection start error: start returned nil process")
-		m.notifyChangeLocked()
-		return
-	}
-
-	if oldProc, ok := m.processes[cfg.ID]; ok {
-		if oldProc.healthCancel != nil {
-			oldProc.healthCancel()
-		}
-		oldProc.closer()
-	}
-
-	proc.cfg = currentCfg
-	healthCtx, healthCancel := context.WithCancel(context.Background())
-	proc.healthCancel = healthCancel
-	m.processes[cfg.ID] = proc
-	delete(m.errors, cfg.ID)
-	logutil.Info("mcp: started",
-		zap.String("id", cfg.ID),
-		zap.Int("tools", len(proc.tools)),
-	)
-	hub.Append("system", "info", fmt.Sprintf("connection started with %d tools", len(proc.tools)))
-	go m.runHealthCheck(healthCtx, cfg.ID)
-	m.notifyChangeLocked()
-}
-
-func startProcess(cfg ConnectionConfig, hub *ConnectionLogHub) (*managedProcess, error) {
-	transport := cfg.Transport
-	if transport == "" {
-		transport = "stdio"
-	}
-	mcpCfg := config.MCPConfig{
-		Enabled:   true,
-		Transport: transport,
-		Command:   cfg.Command,
-		Args:      expandEnvSlice(cfg.Args),
-		Env:       expandEnvSlice(cfg.Env),
-		URL:       cfg.URL,
-	}
-
-	const maxRetries = 3
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		if hub != nil {
-			hub.Append("system", "info", fmt.Sprintf("connect attempt %d/%d via %s", attempt, maxRetries, transport))
-		}
-
-		var logWriter io.Writer
-		if hub != nil {
-			logWriter = hub.LineWriter("stderr")
-		}
-		session, tools, closer, err := ConnectWithLog(ctx, mcpCfg, logWriter)
-		if err == nil {
-			if verifyErr := verifyBackend(ctx, cfg, session, tools); verifyErr != nil {
-				closer()
-				err = fmt.Errorf("backend verify: %w", verifyErr)
-			}
-		}
-		cancel()
-
-		if err == nil {
-			if hub != nil {
-				hub.Append("system", "info", fmt.Sprintf("connect attempt %d/%d passed", attempt, maxRetries))
-			}
-			return &managedProcess{
-				cfg:     cfg,
-				session: session,
-				closer:  closer,
-				tools:   tools,
-			}, nil
-		}
-
-		lastErr = err
-		if hub != nil {
-			level := "warn"
-			if attempt == maxRetries {
-				level = "error"
-			}
-			hub.Append("system", level, fmt.Sprintf("connect attempt %d/%d error: %v", attempt, maxRetries, err))
-		}
-		if attempt < maxRetries {
-			logutil.Warn("mcp: connect retry",
-				zap.String("id", cfg.ID),
-				zap.Int("attempt", attempt),
-				zap.Int("max", maxRetries),
-				zap.Error(err),
-			)
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	return nil, fmt.Errorf("connect (%d attempts): %w", maxRetries, lastErr)
-}
-
-// runHealthCheck 在后台周期性对已启动的连接执行 verifyBackend。
-// 检查到后端不可达时标记为 error 并移除进程；恢复时清除错误。
-// 使用轻量 Verify (MCP Ping) 避免阻塞，耗时通常 <1s。
-func (m *Manager) runHealthCheck(ctx context.Context, id string) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-
+	m.closeOnce.Do(func() {
+		m.mutationMu.Lock()
 		m.mu.Lock()
-		proc, ok := m.processes[id]
-		if !ok {
-			m.mu.Unlock()
-			return
+		m.closed = true
+		if m.cancel != nil {
+			m.cancel()
 		}
-		cfg := proc.cfg
-		session := proc.session
-		tools := proc.tools
+		for id, start := range m.starting {
+			delete(m.starting, id)
+			if start.cancel != nil {
+				start.cancel()
+			}
+		}
+		for id := range m.processes {
+			m.detachProcessLocked(id)
+		}
+		processes := make([]*managedProcess, 0, len(m.draining))
+		for proc := range m.draining {
+			processes = append(processes, proc)
+		}
+		logHubs := make([]*ConnectionLogHub, 0, len(m.logs))
+		for _, hub := range m.logs {
+			logHubs = append(logHubs, hub)
+		}
+		m.logs = nil
+		m.visibleTools = nil
 		m.mu.Unlock()
 
-		verifyCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		verifyErr := verifyBackend(verifyCtx, cfg, session, tools)
-		cancel()
-
-		m.mu.Lock()
-		if currentProc, stillThere := m.processes[id]; !stillThere || currentProc != proc {
-			m.mu.Unlock()
-			return
+		m.closeNotificationDispatcher()
+		m.mutationMu.Unlock()
+		for _, hub := range logHubs {
+			hub.Close()
 		}
-
-		if verifyErr != nil {
-			logutil.Error("mcp: health check failed",
-				zap.String("id", id),
-				zap.String("name", cfg.Name),
-				zap.Error(verifyErr),
-			)
-			console.Feed("mcp error: connection %q health check failed: %v", cfg.Name, verifyErr)
-			m.markProcessErrorLocked(id, verifyErr)
-		} else {
-			if _, hadError := m.errors[id]; hadError {
-				delete(m.errors, id)
-				logutil.Info("mcp: health check recovered", zap.String("id", id), zap.String("name", cfg.Name))
-				console.Feed("mcp info: connection %q recovered", cfg.Name)
-				m.appendConnectionLogLocked(id, "system", "info", "health check recovered")
-				m.notifyChangeLocked()
-			}
+		m.workers.Wait()
+		for _, proc := range processes {
+			m.closeDetachedProcess(proc)
 		}
-		m.mu.Unlock()
-	}
+	})
 }
 
-func (m *Manager) stopLocked(id string) {
-	delete(m.starting, id)
-	proc, ok := m.processes[id]
-	if !ok {
-		return
+func (m *Manager) lifecycleContext() context.Context {
+	if m.lifecycle != nil {
+		return m.lifecycle
 	}
-	if proc.healthCancel != nil {
-		proc.healthCancel()
-	}
-	proc.closer()
-	delete(m.processes, id)
-	logutil.Info("mcp: stopped", zap.String("id", id))
-	m.appendConnectionLogLocked(id, "system", "info", "connection stopped")
+	return context.Background()
 }
 
 func (m *Manager) toolInfosForConnectionLocked(connID string) []ToolInfo {
@@ -1554,7 +968,7 @@ func (m *Manager) toolInfosForConnectionLocked(connID string) []ToolInfo {
 
 func (m *Manager) connectionToolInfosLocked() map[string][]ToolInfo {
 	result := make(map[string][]ToolInfo, len(m.processes))
-	for _, entry := range m.collectToolsLocked() {
+	for _, entry := range m.visibleTools {
 		result[entry.ConnectionID] = append(result[entry.ConnectionID], ToolInfo{
 			Name:           entry.OriginalName,
 			Description:    entry.Description,
@@ -1566,45 +980,46 @@ func (m *Manager) connectionToolInfosLocked() map[string][]ToolInfo {
 	return result
 }
 
-func (m *Manager) collectToolsLocked() []ConnectionTool {
+func (m *Manager) refreshVisibleToolsLocked() *toolChange {
+	next := m.buildVisibleToolsLocked()
+	if sameVisibleTools(m.visibleTools, next) {
+		return nil
+	}
+	m.visibleTools = next
+	m.toolRevision++
+	return &toolChange{revision: m.toolRevision, tools: slices.Clone(next)}
+}
+
+func (m *Manager) buildVisibleToolsLocked() []ConnectionTool {
 	ids := make([]string, 0, len(m.processes))
 	for id := range m.processes {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
 
-	var all []ConnectionTool
+	all := make([]ConnectionTool, 0)
 	for _, id := range ids {
 		proc := m.processes[id]
-		for _, bt := range proc.tools {
-			info, err := bt.Info(context.Background())
-			if err != nil {
-				continue
-			}
-			all = append(all, ConnectionTool{
-				ConnectionID:   proc.cfg.ID,
-				ConnectionName: proc.cfg.Name,
-				ConnectionType: proc.cfg.Type,
-				NodeletID:      proc.cfg.NodeletID,
-				OriginalName:   info.Name,
-				Description:    info.Desc,
-				Tool:           bt,
-			})
-		}
+		all = append(all, proc.connectionTools()...)
 	}
 	return all
 }
 
-func (m *Manager) notifyChange() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.notifyChangeLocked()
-}
-
-func (m *Manager) notifyChangeLocked() {
-	if m.onChange == nil {
-		return
+func sameVisibleTools(a, b []ConnectionTool) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	tools := m.collectToolsLocked()
-	m.onChange(tools)
+	for i := range a {
+		if a[i].ConnectionID != b[i].ConnectionID ||
+			a[i].ConnectionName != b[i].ConnectionName ||
+			a[i].ConnectionType != b[i].ConnectionType ||
+			a[i].NodeletID != b[i].NodeletID ||
+			a[i].ServerName != b[i].ServerName ||
+			a[i].OriginalName != b[i].OriginalName ||
+			a[i].ModelName != b[i].ModelName ||
+			a[i].Description != b[i].Description {
+			return false
+		}
+	}
+	return true
 }

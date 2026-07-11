@@ -1,0 +1,595 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"oops/internal/config"
+	"oops/internal/llm/ai/protocol"
+	"oops/internal/llm/runtime/harness"
+)
+
+type runManagerTestPayload struct {
+	Type  string `json:"type"`
+	Index int    `json:"index"`
+	Text  string `json:"text,omitempty"`
+}
+
+func testRunItem(index int, text string) runStreamItem {
+	return runStreamItem{
+		name: "agent_start",
+		payload: runManagerTestPayload{
+			Type:  "agent_start",
+			Index: index,
+			Text:  text,
+		},
+	}
+}
+
+func readRunSubscription(t *testing.T, subscription *runSubscription) []runFrame {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var frames []runFrame
+	for {
+		frame, live, ok := subscription.next(ctx)
+		if !ok {
+			if err := ctx.Err(); err != nil {
+				t.Fatalf("subscription did not close: %v", err)
+			}
+			return frames
+		}
+		frames = append(frames, frame)
+		if live {
+			subscription.acknowledge(frame)
+		}
+	}
+}
+
+func TestRunManagerDefaultActiveCapacity(t *testing.T) {
+	manager := newRunManagerForTest(t)
+	limits := config.DefaultRunLimits()
+	reservations := make([]*runReservation, 0, limits.MaxActiveRuns)
+	for i := 0; i < limits.MaxActiveRuns; i++ {
+		reservation, err := manager.reserve()
+		if err != nil {
+			t.Fatalf("reserve slot %d: %v", i, err)
+		}
+		reservations = append(reservations, reservation)
+	}
+	if _, err := manager.reserve(); !errors.Is(err, ErrRunCapacity) {
+		t.Fatalf("reserve beyond %d active runs = %v, want ErrRunCapacity", limits.MaxActiveRuns, err)
+	}
+	for _, reservation := range reservations {
+		reservation.release()
+	}
+}
+
+func TestRunManagerReservationBoundsActiveRuns(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxActiveRuns = 1
+	manager := newRunManagerForTest(t, limits)
+
+	first, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	if _, err := manager.reserve(); !errors.Is(err, ErrRunCapacity) {
+		t.Fatalf("second reserve error = %v, want ErrRunCapacity", err)
+	}
+	first.release()
+
+	second, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve after release: %v", err)
+	}
+	second.release()
+}
+
+func TestRunManagerSubscriberLimitAndSlowSubscriberEviction(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxSubscribers = 1
+	limits.MaxSubscriberQueueEvents = 1
+	limits.MaxSubscriberQueueBytes = 1024
+	limits.MaxLiveQueueBytes = 1024
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-1", "sess-1")
+
+	subscription, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("first subscribe: %v", err)
+	}
+	defer subscription.unsubscribe()
+	if _, err := manager.subscribe(run.id); !errors.Is(err, ErrRunSubscriberLimit) {
+		t.Fatalf("second subscribe error = %v, want ErrRunSubscriberLimit", err)
+	}
+
+	run.publish(runStreamItem{name: "agent_start", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart}})
+	run.publish(runStreamItem{name: "agent_end", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentEnd}})
+
+	first, live, ok := subscription.next(t.Context())
+	if !ok || !live || !strings.Contains(string(first.data), "event: agent_start\n") {
+		t.Fatalf("first live frame = %q, live=%t ok=%t", first.data, live, ok)
+	}
+	subscription.acknowledge(first)
+	if _, _, ok := subscription.next(t.Context()); ok {
+		t.Fatal("evicted subscriber still receives live frames")
+	}
+
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if len(run.subscribers) != 0 || run.liveQueueBytes != 0 {
+		t.Fatalf("subscriber state = %d/%d, want 0/0", len(run.subscribers), run.liveQueueBytes)
+	}
+}
+
+func TestRunManagerAcknowledgementKeepsRemainingQueueBudget(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxSubscriberQueueEvents = 2
+	limits.MaxSubscriberQueueBytes = 1024
+	limits.MaxLiveQueueBytes = 1024
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-1", "sess-1")
+
+	subscription, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer subscription.unsubscribe()
+	run.publish(runStreamItem{name: "agent_start", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart}})
+	run.publish(runStreamItem{name: "agent_end", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentEnd}})
+
+	first, live, ok := subscription.next(t.Context())
+	if !ok || !live {
+		t.Fatalf("first live frame = %q, live=%t, ok=%t", first.data, live, ok)
+	}
+	subscription.acknowledge(first)
+
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if subscription.subscriber.pendingEvents != 1 {
+		t.Fatalf("pending events = %d, want 1", subscription.subscriber.pendingEvents)
+	}
+	if subscription.subscriber.pendingBytes != run.history[1].size() {
+		t.Fatalf("pending bytes = %d, want %d", subscription.subscriber.pendingBytes, run.history[1].size())
+	}
+	if run.liveQueueBytes != run.history[1].size() {
+		t.Fatalf("live queue bytes = %d, want %d", run.liveQueueBytes, run.history[1].size())
+	}
+}
+
+func TestRunManagerRetainsTerminalWhenEventOrHistoryLimitIsReached(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxRetainedEvents = 1
+	limits.MaxRetainedBytes = 512
+	limits.MaxEventBytes = 512
+	limits.MaxTerminalBytes = 512
+	limits.MaxErrorTextBytes = 64
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-1", "sess-1")
+
+	run.publish(runStreamItem{name: "agent_start", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart}})
+	run.publish(runStreamItem{name: "agent_end", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentEnd}})
+
+	subscription, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer subscription.unsubscribe()
+	first, _, ok := subscription.next(t.Context())
+	if !ok || !strings.Contains(string(first.data), "event: agent_start\n") {
+		t.Fatalf("first retained frame = %q", first.data)
+	}
+	terminal, _, ok := subscription.next(t.Context())
+	if !ok || !strings.Contains(string(terminal.data), "event: run_error\n") {
+		t.Fatalf("terminal retained frame = %q", terminal.data)
+	}
+	if terminal.sequence != 2 {
+		t.Fatalf("terminal sequence = %d, want 2", terminal.sequence)
+	}
+	if _, _, ok := subscription.next(t.Context()); ok {
+		t.Fatal("terminal run retained extra frames")
+	}
+}
+
+func TestRunManagerRetainedByteAndSingleEventLimitsKeepBoundedTerminal(t *testing.T) {
+	item := testRunItem(1, strings.Repeat("x", 128))
+	frame, err := encodeRunFrame(item)
+	if err != nil {
+		t.Fatalf("encode test frame: %v", err)
+	}
+
+	t.Run("single event", func(t *testing.T) {
+		limits := config.DefaultRunLimits()
+		limits.MaxEventBytes = frame.size() - 1
+		manager := newRunManagerForTest(t, limits)
+		run := activateRunForTest(t, manager, "run-event-limit", "sess-1")
+
+		run.publish(item)
+		subscription, err := manager.subscribe(run.id)
+		if err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		frames := readRunSubscription(t, subscription)
+		if len(frames) != 1 || !strings.Contains(string(frames[0].data), "event: run_error\n") {
+			t.Fatalf("frames = %q, want one bounded run_error", frames)
+		}
+		if frames[0].size() > manager.limits.MaxTerminalBytes {
+			t.Fatalf("terminal frame size = %d, limit = %d", frames[0].size(), manager.limits.MaxTerminalBytes)
+		}
+	})
+
+	t.Run("retained bytes", func(t *testing.T) {
+		limits := config.DefaultRunLimits()
+		limits.MaxEventBytes = frame.size()
+		limits.MaxRetainedBytes = frame.size()
+		manager := newRunManagerForTest(t, limits)
+		run := activateRunForTest(t, manager, "run-byte-limit", "sess-1")
+
+		run.publish(item)
+		run.publish(item)
+		subscription, err := manager.subscribe(run.id)
+		if err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		frames := readRunSubscription(t, subscription)
+		if len(frames) != 2 {
+			t.Fatalf("frame count = %d, want normal event and terminal", len(frames))
+		}
+		if !strings.Contains(string(frames[1].data), "event: run_error\n") {
+			t.Fatalf("terminal frame = %q, want run_error", frames[1].data)
+		}
+		run.mu.Lock()
+		defer run.mu.Unlock()
+		if run.normalBytes != frame.size() || run.normalBytes > manager.limits.MaxRetainedBytes {
+			t.Fatalf("normal retained bytes = %d, limit = %d", run.normalBytes, manager.limits.MaxRetainedBytes)
+		}
+	})
+}
+
+func TestRunManagerLiveByteLimitEvictsSlowSubscriberAndReconnectsTerminal(t *testing.T) {
+	item := testRunItem(1, strings.Repeat("x", 64))
+	frame, err := encodeRunFrame(item)
+	if err != nil {
+		t.Fatalf("encode test frame: %v", err)
+	}
+	limits := config.DefaultRunLimits()
+	limits.MaxSubscriberQueueEvents = 64
+	limits.MaxSubscriberQueueBytes = frame.size() * 4
+	limits.MaxLiveQueueBytes = frame.size()
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-slow-subscriber", "sess-1")
+
+	slow, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("subscribe slow client: %v", err)
+	}
+	run.publish(item)
+	run.publish(testRunItem(2, strings.Repeat("x", 64)))
+	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+	run.finishExecution()
+
+	slowFrames := readRunSubscription(t, slow)
+	if len(slowFrames) != 1 || slowFrames[0].sequence != 1 {
+		t.Fatalf("slow subscriber frames = %#v, want only first live frame", slowFrames)
+	}
+	run.mu.Lock()
+	if len(run.subscribers) != 0 || run.liveQueueBytes != 0 {
+		run.mu.Unlock()
+		t.Fatalf("slow subscriber state = %d/%d, want 0/0", len(run.subscribers), run.liveQueueBytes)
+	}
+	run.mu.Unlock()
+
+	reconnected, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	frames := readRunSubscription(t, reconnected)
+	if len(frames) != 3 {
+		t.Fatalf("reconnected frame count = %d, want 3", len(frames))
+	}
+	for index, replayed := range frames {
+		if replayed.sequence != uint64(index+1) {
+			t.Fatalf("reconnected sequence[%d] = %d, want %d", index, replayed.sequence, index+1)
+		}
+	}
+	if !strings.Contains(string(frames[2].data), "event: run_done\n") {
+		t.Fatalf("reconnected terminal = %q, want run_done", frames[2].data)
+	}
+}
+
+func TestRunManagerReplaysDefaultHistoryCapacityInStrictSequence(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.CompletedTTL = time.Hour
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-history-capacity", "sess-1")
+
+	for index := 0; index < limits.MaxRetainedEvents; index++ {
+		run.publish(testRunItem(index, "history"))
+	}
+	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+	run.finishExecution()
+
+	subscription, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	frames := readRunSubscription(t, subscription)
+	if len(frames) != limits.MaxRetainedEvents+1 {
+		t.Fatalf("replayed frame count = %d, want %d", len(frames), limits.MaxRetainedEvents+1)
+	}
+	for index, frame := range frames {
+		if frame.sequence != uint64(index+1) {
+			t.Fatalf("sequence[%d] = %d, want %d", index, frame.sequence, index+1)
+		}
+	}
+	if !strings.Contains(string(frames[len(frames)-1].data), "event: run_done\n") {
+		t.Fatalf("last replayed frame = %q, want run_done", frames[len(frames)-1].data)
+	}
+}
+
+func TestRunManagerConcurrentSubscribeAndPublishKeepsOrderedTerminal(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.CompletedTTL = time.Hour
+	manager := newRunManagerForTest(t, limits)
+
+	const rounds = 64
+	for round := 0; round < rounds; round++ {
+		run := activateRunForTest(t, manager, fmt.Sprintf("run-linearized-%d", round), "sess-1")
+		start := make(chan struct{})
+		subscriptions := make(chan *runSubscription, 1)
+		errs := make(chan error, 1)
+		var workers sync.WaitGroup
+		workers.Add(2)
+		go func() {
+			defer workers.Done()
+			<-start
+			subscription, err := manager.subscribe(run.id)
+			if err != nil {
+				errs <- err
+				return
+			}
+			subscriptions <- subscription
+		}()
+		go func() {
+			defer workers.Done()
+			<-start
+			run.publish(testRunItem(1, "first"))
+			run.publish(testRunItem(2, "second"))
+			run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+			run.finishExecution()
+		}()
+		close(start)
+		workers.Wait()
+		select {
+		case err := <-errs:
+			t.Fatalf("round %d subscribe: %v", round, err)
+		default:
+		}
+		subscription := <-subscriptions
+		frames := readRunSubscription(t, subscription)
+		if len(frames) != 3 {
+			t.Fatalf("round %d frame count = %d, want 3", round, len(frames))
+		}
+		for index, frame := range frames {
+			if frame.sequence != uint64(index+1) {
+				t.Fatalf("round %d sequence[%d] = %d, want %d", round, index, frame.sequence, index+1)
+			}
+		}
+		if !strings.Contains(string(frames[2].data), "event: run_done\n") {
+			t.Fatalf("round %d terminal = %q, want run_done", round, frames[2].data)
+		}
+	}
+}
+
+func TestRunManagerAbortAndTerminalRaceKeepsOneTerminal(t *testing.T) {
+	manager := newRunManagerForTest(t)
+
+	const rounds = 64
+	for round := 0; round < rounds; round++ {
+		run := activateRunForTest(t, manager, fmt.Sprintf("run-terminal-race-%d", round), "sess-1")
+		start := make(chan struct{})
+		var workers sync.WaitGroup
+		workers.Add(2)
+		go func() {
+			defer workers.Done()
+			<-start
+			run.abort()
+		}()
+		go func() {
+			defer workers.Done()
+			<-start
+			run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+		}()
+		close(start)
+		workers.Wait()
+		run.finishExecution()
+
+		run.mu.Lock()
+		terminalCount := 0
+		for _, frame := range run.history {
+			if strings.Contains(string(frame.data), "event: run_done\n") || strings.Contains(string(frame.data), "event: run_error\n") {
+				terminalCount++
+			}
+		}
+		run.mu.Unlock()
+		if terminalCount != 1 {
+			t.Fatalf("round %d terminal count = %d, want 1", round, terminalCount)
+		}
+	}
+}
+
+func TestRunManagerReleasesCapacityAfterExecutionFinishes(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxActiveRuns = 1
+	manager := newRunManagerForTest(t, limits)
+	reservation, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	run, err := reservation.activate("run-1", "sess-1", "", func() {})
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+	if _, err := manager.reserve(); !errors.Is(err, ErrRunCapacity) {
+		t.Fatalf("reserve while execution is still unwinding = %v, want ErrRunCapacity", err)
+	}
+	run.finishExecution()
+	second, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve after execution finished: %v", err)
+	}
+	second.release()
+}
+
+func TestRunManagerBoundsTerminalSnapshotAndExpiresCompletedRun(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxTerminalBytes = 512
+	limits.MaxErrorTextBytes = 32
+	limits.CompletedTTL = 10 * time.Millisecond
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-1", strings.Repeat("s", 128))
+
+	run.publishTerminal(runStreamItem{
+		name: "run_done",
+		payload: runDoneEvent{
+			Type: "run_done",
+			Session: harness.SessionSnapshot{
+				SessionID: strings.Repeat("s", 128),
+				LeafID:    strings.Repeat("l", 128),
+				Messages:  protocol.MessageList{protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent(strings.Repeat("x", 2048))}}},
+			},
+		},
+	})
+	run.finishExecution()
+
+	subscription, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	frame, _, ok := subscription.next(t.Context())
+	if !ok {
+		t.Fatal("terminal frame missing")
+	}
+	if frame.size() > limits.MaxTerminalBytes {
+		t.Fatalf("terminal frame size = %d, limit = %d", frame.size(), limits.MaxTerminalBytes)
+	}
+	if !strings.Contains(string(frame.data), `"messages":[]`) {
+		t.Fatalf("terminal frame did not use bounded snapshot: %q", frame.data)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, exists := manager.get(run.id); !exists {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("completed run did not expire")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRunManagerClampsTerminalBudgetToEncodableFrame(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxTerminalBytes = 1
+	manager := newRunManagerForTest(t, limits)
+	if manager.limits.MaxTerminalBytes < 256 {
+		t.Fatalf("terminal budget = %d, want at least 256", manager.limits.MaxTerminalBytes)
+	}
+	run := activateRunForTest(t, manager, "run-1", strings.Repeat("s", 4096))
+	run.publishTerminal(runStreamItem{
+		name: "run_done",
+		payload: runDoneEvent{
+			Type: "run_done",
+			Session: harness.SessionSnapshot{
+				SessionID: strings.Repeat("s", 4096),
+				LeafID:    strings.Repeat("l", 4096),
+			},
+		},
+	})
+
+	subscription, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	frame, _, ok := subscription.next(t.Context())
+	if !ok {
+		t.Fatal("terminal frame missing")
+	}
+	if frame.size() > manager.limits.MaxTerminalBytes {
+		t.Fatalf("terminal frame size = %d, limit = %d", frame.size(), manager.limits.MaxTerminalBytes)
+	}
+}
+
+func TestRunManagerCloseWaitsForExecution(t *testing.T) {
+	manager := newRunManager()
+	reservation, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	ctx, cancelRun := context.WithCancel(context.Background())
+	run, err := reservation.activate("run-1", "sess-1", "", cancelRun)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), time.Second)
+	defer cancelClose()
+	closed := make(chan error, 1)
+	go func() { closed <- manager.close(closeCtx) }()
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned before execution ended: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if ctx.Err() == nil {
+		t.Fatal("close did not cancel active run")
+	}
+
+	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+	run.finishExecution()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close did not wait for execution completion")
+	}
+}
+
+func TestRunManagerCloseWaitsForReservationRelease(t *testing.T) {
+	manager := newRunManager()
+	reservation, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), time.Second)
+	defer cancelClose()
+	closed := make(chan error, 1)
+	go func() { closed <- manager.close(closeCtx) }()
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned before reservation release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	reservation.release()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close did not wait for reservation release")
+	}
+}

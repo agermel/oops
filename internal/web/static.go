@@ -13,9 +13,9 @@ import (
 
 // pageConfig 注入到 HTML 的页面配置。
 type pageConfig struct {
-	AuthProvider string     `json:"authProvider"`
-	User         *pageUser  `json:"user,omitempty"`
-	NeedsSetup   bool       `json:"needsSetup,omitempty"`
+	AuthProvider string    `json:"authProvider"`
+	User         *pageUser `json:"user,omitempty"`
+	NeedsSetup   bool      `json:"needsSetup,omitempty"`
 }
 
 type pageUser struct {
@@ -103,7 +103,7 @@ func (h *spaHandler) ensureBuild() error {
 	indexPath := filepath.Join(h.staticDir, "index.html")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
-		return fmt.Errorf("React build is missing. Run: npm --prefix web install && npm --prefix web run build")
+		return fmt.Errorf("react build is missing. Run: npm --prefix web install && npm --prefix web run build")
 	}
 	h.indexHTML = data
 	return nil

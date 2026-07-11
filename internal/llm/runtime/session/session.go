@@ -192,10 +192,6 @@ func (s *Session) AppendCustomEntry(customType string, payload []byte) (Entry, e
 	return s.append(Entry{Type: EntryCustom, CustomType: customType, Payload: cloneRaw(payload)})
 }
 
-func (s *Session) AppendCustomMessageEntry(message protocol.AgentMessage) (Entry, error) {
-	return s.append(Entry{Type: EntryCustomMessage, Message: protocol.CloneMessage(message)})
-}
-
 func (s *Session) AppendLabel(label string) (Entry, error) {
 	return s.append(Entry{Type: EntryLabel, Label: label})
 }
@@ -277,13 +273,33 @@ func (s *Session) Children(parentID string) []Entry {
 }
 
 func (s *Session) Load(entries []Entry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	id := s.id
+	s.mu.RUnlock()
+
+	// 先在候选 Session 完成全部校验，成功后才交换状态。
+	// JSONL 的任意一行损坏都不能污染正在服务的会话。
+	candidate := &Session{
+		id:      id,
+		entries: make(map[string]Entry),
+	}
 	for _, entry := range entries {
-		if err := s.loadEntryLocked(entry); err != nil {
+		if err := candidate.loadEntryLocked(entry); err != nil {
 			return err
 		}
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cwd = candidate.cwd
+	s.projectID = candidate.projectID
+	s.name = candidate.name
+	s.title = candidate.title
+	s.entries = candidate.entries
+	s.order = candidate.order
+	s.leafID = candidate.leafID
+	s.createdAt = candidate.createdAt
+	s.updatedAt = candidate.updatedAt
 	return nil
 }
 
@@ -349,10 +365,8 @@ func (s *Session) storeEntryLocked(entry Entry) {
 	if s.createdAt.IsZero() || entry.Timestamp.Before(s.createdAt) {
 		s.createdAt = entry.Timestamp
 	}
-	if entry.Timestamp.After(s.updatedAt) {
+	if s.updatedAt.IsZero() || entry.Timestamp.After(s.updatedAt) {
 		s.updatedAt = entry.Timestamp
-	} else {
-		s.updatedAt = time.Now()
 	}
 }
 
@@ -367,20 +381,21 @@ func (s *Session) messageCountLocked() int {
 }
 
 func (s *Session) loadEntryLocked(entry Entry) error {
-	if entry.Type == "" {
-		return errors.New("session entry requires type")
-	}
-	if entry.Timestamp.IsZero() {
-		entry.Timestamp = time.Now()
-	}
-	if entry.Version == 0 {
-		entry.Version = Version
-	}
-	if entry.Type != EntryLeaf && entry.ID == "" {
-		entry.ID = newEntryID()
-	}
 	if err := entry.Validate(); err != nil {
 		return err
+	}
+	if _, exists := s.entries[entry.ID]; exists {
+		return fmt.Errorf("duplicate session entry id %q", entry.ID)
+	}
+	if entry.ParentID != "" {
+		if _, ok := s.entries[entry.ParentID]; !ok {
+			return fmt.Errorf("session entry %q references unknown parent %q", entry.ID, entry.ParentID)
+		}
+	}
+	if entry.Type == EntryLeaf && entry.LeafID != "" {
+		if _, ok := s.entries[entry.LeafID]; !ok {
+			return fmt.Errorf("session leaf %q references unknown entry %q", entry.ID, entry.LeafID)
+		}
 	}
 	s.storeEntryLocked(entry)
 	return nil

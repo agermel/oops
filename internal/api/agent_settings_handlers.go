@@ -48,5 +48,5 @@ func (s *Server) handleAgentSettingsUpdate(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, "save agent settings: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, agentSettingsResponse{MaxTurns: req.MaxTurns})
+	writeJSON(w, agentSettingsResponse(req))
 }

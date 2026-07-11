@@ -12,8 +12,19 @@ import (
 	coreagent "oops/internal/llm/core/agent"
 	"oops/internal/llm/runtime/harness"
 	runtimesession "oops/internal/llm/runtime/session"
-	oldsession "oops/internal/llm/session"
 )
+
+// sessionInfo 是 HTTP 会话列表和重命名响应的稳定 DTO。
+// Runtime Session 的领域对象不会穿透到 HTTP 边界。
+type sessionInfo struct {
+	ID           string `json:"id"`
+	ProjectID    string `json:"projectId,omitempty"`
+	Title        string `json:"title,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	MessageCount int    `json:"messageCount"`
+	CreatedAt    int64  `json:"createdAt"`
+	UpdatedAt    int64  `json:"updatedAt"`
+}
 
 type runtimeBranchRequest struct {
 	LeafID  string `json:"leafId"`
@@ -62,7 +73,7 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snapshot)
 }
 
-func (s *Server) runtimeSessionInfos(projectID string) ([]oldsession.SessionInfo, error) {
+func (s *Server) runtimeSessionInfos(projectID string) ([]sessionInfo, error) {
 	if s.agentRepo == nil {
 		return nil, nil
 	}
@@ -70,7 +81,7 @@ func (s *Server) runtimeSessionInfos(projectID string) ([]oldsession.SessionInfo
 	if err != nil {
 		return nil, err
 	}
-	out := make([]oldsession.SessionInfo, 0, len(infos))
+	out := make([]sessionInfo, 0, len(infos))
 	for _, info := range infos {
 		if projectID != "*" && info.ProjectID != projectID {
 			continue
@@ -83,8 +94,8 @@ func (s *Server) runtimeSessionInfos(projectID string) ([]oldsession.SessionInfo
 	return out, nil
 }
 
-func runtimeSessionInfo(info runtimesession.Info) oldsession.SessionInfo {
-	return oldsession.SessionInfo{
+func runtimeSessionInfo(info runtimesession.Info) sessionInfo {
+	return sessionInfo{
 		ID:           info.ID,
 		ProjectID:    info.ProjectID,
 		Title:        info.Title,
@@ -114,32 +125,32 @@ func (s *Server) runtimeSessionInfoByID(sessionID string) (runtimesession.Info, 
 	return runtimeSession.Info(), true, nil
 }
 
-func (s *Server) renameRuntimeSession(sessionID, projectID, title string) (oldsession.SessionInfo, bool, error) {
+func (s *Server) renameRuntimeSession(sessionID, projectID, title string) (sessionInfo, bool, error) {
 	if s.agentRepo == nil || sessionID == "" {
-		return oldsession.SessionInfo{}, false, nil
+		return sessionInfo{}, false, nil
 	}
 	runtimeSession, ok := s.agentRepo.Get(sessionID)
 	if !ok {
 		var err error
 		runtimeSession, err = s.agentRepo.Load(sessionID)
 		if err != nil {
-			return oldsession.SessionInfo{}, false, err
+			return sessionInfo{}, false, err
 		}
 		if len(runtimeSession.Entries()) == 0 {
 			_, _ = s.agentRepo.Delete(sessionID)
-			return oldsession.SessionInfo{}, false, nil
+			return sessionInfo{}, false, nil
 		}
 	}
 	info := runtimeSession.Info()
 	if projectID != "" && info.ProjectID != projectID {
-		return oldsession.SessionInfo{}, false, nil
+		return sessionInfo{}, false, nil
 	}
 	entry, err := runtimeSession.AppendSessionTitle(title)
 	if err != nil {
-		return oldsession.SessionInfo{}, false, err
+		return sessionInfo{}, false, err
 	}
 	if err := s.agentRepo.SaveEntry(runtimeSession.ID(), entry); err != nil {
-		return oldsession.SessionInfo{}, false, err
+		return sessionInfo{}, false, err
 	}
 	return runtimeSessionInfo(runtimeSession.Info()), true, nil
 }

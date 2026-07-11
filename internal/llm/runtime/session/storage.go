@@ -57,6 +57,7 @@ func (s *FileStorage) Load(sessionID string) ([]Entry, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	entries := []Entry{}
+	candidate := &Session{id: sessionID, entries: make(map[string]Entry)}
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -68,10 +69,13 @@ func (s *FileStorage) Load(sessionID string) ([]Entry, error) {
 		if err := json.Unmarshal([]byte(text), &entry); err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", filepath.Base(path), line, err)
 		}
+		if err := candidate.loadEntryLocked(entry); err != nil {
+			return nil, fmt.Errorf("%s:%d: %w", filepath.Base(path), line, err)
+		}
 		entries = append(entries, entry)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s:%d: %w", filepath.Base(path), line, err)
 	}
 	return entries, nil
 }

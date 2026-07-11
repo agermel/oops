@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"oops/internal/config"
-	"oops/internal/console"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -78,19 +77,15 @@ func connectStdio(ctx context.Context, cfg config.MCPConfig, logWriter io.Writer
 
 	stderrBuf := &StderrBuffer{}
 
-	// MCP 子进程 stderr 输出到控制台（实时可见），同时缓冲用于错误回显。
+	// stderr 同时写入连接专属日志和错误缓冲；Console 由 Manager 注入。
 	stderrReader, hasStderr := mcpclient.GetStderr(c)
 	if hasStderr {
-		pipeWriter := console.NewLineWriter(fmt.Sprintf("mcp-stderr(%s)", cfg.Command))
-		writers := []io.Writer{pipeWriter, stderrBuf}
+		writers := []io.Writer{stderrBuf}
 		if logWriter != nil {
 			writers = append(writers, logWriter)
 		}
 		go func() {
 			_, _ = io.Copy(io.MultiWriter(writers...), stderrReader)
-			if closer, ok := pipeWriter.(io.Closer); ok {
-				_ = closer.Close()
-			}
 			if closer, ok := logWriter.(io.Closer); ok {
 				_ = closer.Close()
 			}

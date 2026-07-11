@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -60,5 +61,17 @@ func TestHandleMCPLogs(t *testing.T) {
 	}
 	if logs[0].ConnectionID != "conn-1" {
 		t.Fatalf("connection id = %q, want conn-1", logs[0].ConnectionID)
+	}
+}
+
+func TestWriteMCPToolTestErrorMapsDrainingToRetryableServiceUnavailable(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeMCPToolTestError(response, fmt.Errorf("%w: conn-1", mcp.ErrConnectionDraining))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if got := response.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After = %q, want 1", got)
 	}
 }

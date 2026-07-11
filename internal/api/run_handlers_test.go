@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	"oops/internal/config"
 	"oops/internal/llm/agent"
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/runtime/harness"
@@ -61,8 +63,8 @@ func TestStreamRunItemsUsesNamedSSEOrder(t *testing.T) {
 }
 
 func TestRunManagerReplaysHistoryAndRunDone(t *testing.T) {
-	manager := newRunManager()
-	run := manager.create("run-1", "sess-1", "", func() {})
+	manager := newRunManagerForTest(t)
+	run := activateRunForTest(t, manager, "run-1", "sess-1")
 	run.publish(runStreamItem{
 		name:    string(protocol.AgentEventAgentStart),
 		payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart},
@@ -75,29 +77,40 @@ func TestRunManagerReplaysHistoryAndRunDone(t *testing.T) {
 		},
 	})
 
-	events, unsubscribe, ok := manager.subscribe("run-1")
-	if !ok {
-		t.Fatal("subscribe() ok = false")
+	subscription, err := manager.subscribe("run-1")
+	if err != nil || subscription == nil {
+		t.Fatalf("subscribe() = %v, %v", subscription, err)
 	}
-	defer unsubscribe()
+	defer subscription.unsubscribe()
 
-	first, ok := <-events
-	if !ok || first.name != string(protocol.AgentEventAgentStart) {
-		t.Fatalf("first event = %#v, ok=%v", first, ok)
+	first, _, ok := subscription.next(t.Context())
+	if !ok || !strings.Contains(string(first.data), "event: agent_start\n") {
+		t.Fatalf("first frame = %q, ok=%v", first.data, ok)
 	}
-	second, ok := <-events
-	if !ok || second.name != "run_done" {
-		t.Fatalf("second event = %#v, ok=%v", second, ok)
+	second, _, ok := subscription.next(t.Context())
+	if !ok || !strings.Contains(string(second.data), "event: run_done\n") {
+		t.Fatalf("second frame = %q, ok=%v", second.data, ok)
 	}
-	if _, ok := <-events; ok {
-		t.Fatal("events channel still open after terminal replay")
+	if _, _, ok := subscription.next(t.Context()); ok {
+		t.Fatal("subscription still has events after terminal replay")
 	}
 }
 
 func TestRunManagerAbortCancelsActiveRun(t *testing.T) {
-	manager := newRunManager()
+	manager := newRunManagerForTest(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	run := manager.create("run-1", "sess-1", "", cancel)
+	reservation, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	run, err := reservation.activate("run-1", "sess-1", "", cancel)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	t.Cleanup(func() {
+		run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+		run.finishExecution()
+	})
 
 	aborted, ok := manager.abort("run-1")
 	if !ok || !aborted {
@@ -112,6 +125,38 @@ func TestRunManagerAbortCancelsActiveRun(t *testing.T) {
 	if !ok || aborted {
 		t.Fatalf("abort() after done = %v, %v; want false, true", aborted, ok)
 	}
+}
+
+func activateRunForTest(t *testing.T, manager *runManager, runID, sessionID string) *runState {
+	t.Helper()
+	reservation, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	_, cancel := context.WithCancel(t.Context())
+	run, err := reservation.activate(runID, sessionID, "", cancel)
+	if err != nil {
+		cancel()
+		t.Fatalf("activate: %v", err)
+	}
+	t.Cleanup(func() {
+		run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+		run.finishExecution()
+	})
+	return run
+}
+
+func newRunManagerForTest(t *testing.T, limits ...config.RunLimits) *runManager {
+	t.Helper()
+	manager := newRunManager(limits...)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.close(ctx); err != nil {
+			t.Errorf("close run manager: %v", err)
+		}
+	})
+	return manager
 }
 
 func TestWriteNamedSSEEscapesPayload(t *testing.T) {
@@ -160,7 +205,7 @@ func TestRunToolHelpersPreferReservedNames(t *testing.T) {
 }
 
 func TestHandleRunCreateRejectsInvalidSkillCommandBeforeRun(t *testing.T) {
-	manager := newRunManager()
+	manager := newRunManagerForTest(t)
 	server := &Server{
 		llmClient:  &agent.Client{},
 		runManager: manager,
@@ -183,6 +228,73 @@ func TestHandleRunCreateRejectsInvalidSkillCommandBeforeRun(t *testing.T) {
 	}
 	if len(manager.runs) != 0 {
 		t.Fatalf("runs created = %d, want 0", len(manager.runs))
+	}
+}
+
+func TestHandleRunCreateRejectsAtCapacityWithRetryAfter(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxActiveRuns = 1
+	manager := newRunManagerForTest(t, limits)
+	reservation, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	defer reservation.release()
+
+	server := &Server{llmClient: &agent.Client{}, runManager: manager}
+	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello"}`))
+	recorder := httptest.NewRecorder()
+
+	server.handleRunCreate(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After = %q, want 1", got)
+	}
+}
+
+func TestHandleRunEventsRejectsSubscriberLimitAndExpiredRun(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxSubscribers = 1
+	limits.CompletedTTL = 10 * time.Millisecond
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-1", "sess-1")
+	first, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("first subscribe: %v", err)
+	}
+	defer first.unsubscribe()
+	server := &Server{runManager: manager}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/runs/run-1/events", nil)
+	request.SetPathValue("id", run.id)
+	recorder := httptest.NewRecorder()
+	server.handleRunEvents(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("subscriber limit status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+
+	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+	run.finishExecution()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, exists := manager.get(run.id); !exists {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("completed run did not expire")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/runs/run-1/events", nil)
+	request.SetPathValue("id", run.id)
+	recorder = httptest.NewRecorder()
+	server.handleRunEvents(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expired run status = %d, want %d", recorder.Code, http.StatusNotFound)
 	}
 }
 

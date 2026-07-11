@@ -372,10 +372,25 @@ func (s *Server) handleMCPLogsStream(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-
-	ch, cancel, ok := s.mcpManager.SubscribeConnectionLogs(id, mcpLogTail(r))
+	streamCtx, finishStream, ok := s.beginStream(r.Context())
 	if !ok {
-		writeJSONError(w, "connection not found", http.StatusNotFound)
+		writeJSONError(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	defer finishStream()
+
+	ch, cancel, err := s.mcpManager.SubscribeConnectionLogsWithError(id, mcpLogTail(r))
+	if err != nil {
+		switch {
+		case errors.Is(err, mcp.ErrConnectionLogSubscriberLimit):
+			w.Header().Set("Retry-After", "1")
+			writeJSONError(w, err.Error(), http.StatusTooManyRequests)
+		case errors.Is(err, mcp.ErrConnectionLogClosed):
+			w.Header().Set("Retry-After", "1")
+			writeJSONError(w, err.Error(), http.StatusServiceUnavailable)
+		default:
+			writeJSONError(w, "connection not found", http.StatusNotFound)
+		}
 		return
 	}
 	defer cancel()
@@ -392,7 +407,7 @@ func (s *Server) handleMCPLogsStream(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case entry, ok := <-ch:
 			if !ok {
@@ -430,7 +445,7 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.mcpManager.Test(cfg); err != nil {
+	if err := s.mcpManager.Test(r.Context(), cfg); err != nil {
 		logutil.Error("api: mcp test", zap.Error(err))
 		switch {
 		case errors.Is(err, mcp.ErrTestConnectFailed):
@@ -451,22 +466,29 @@ func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	output, err := s.mcpManager.TestTool(connID, toolName)
+	output, err := s.mcpManager.TestTool(r.Context(), connID, toolName)
 	if err != nil {
 		logutil.Error("api: mcp tool test failed",
 			zap.String("connID", connID),
 			zap.String("tool", toolName),
 			zap.Error(err),
 		)
-		switch {
-		case errors.Is(err, mcp.ErrConnectionNotRunning):
-			writeJSON(w, map[string]string{"status": "unavailable", "error": err.Error()})
-		case errors.Is(err, mcp.ErrToolCallFailed):
-			writeJSON(w, map[string]string{"status": "transport_error", "error": err.Error()})
-		default:
-			writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
-		}
+		writeMCPToolTestError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok", "output": output})
+}
+
+func writeMCPToolTestError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, mcp.ErrConnectionDraining):
+		w.Header().Set("Retry-After", "1")
+		writeJSONError(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, mcp.ErrConnectionNotRunning):
+		writeJSON(w, map[string]string{"status": "unavailable", "error": err.Error()})
+	case errors.Is(err, mcp.ErrToolCallFailed):
+		writeJSON(w, map[string]string{"status": "transport_error", "error": err.Error()})
+	default:
+		writeJSON(w, map[string]string{"status": "error", "error": err.Error()})
+	}
 }

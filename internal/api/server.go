@@ -2,16 +2,18 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
-	"net/http"
+	"sync"
 	"time"
 
 	"oops/internal/auth"
 	"oops/internal/config"
 	"oops/internal/console"
+	"oops/internal/httprate"
 	"oops/internal/llm/agent"
 	runtimesession "oops/internal/llm/runtime/session"
-	"oops/internal/llm/session"
 	"oops/internal/llm/skills"
 	llmtools "oops/internal/llm/tools"
 	"oops/internal/logutil"
@@ -45,82 +47,114 @@ type NodeletClient interface {
 
 // Options 保存中心端 API 服务依赖。
 type Options struct {
-	NodeletManager *nodelet.NodeletManager
-	NodeletClient  NodeletClient
-	RuntimeStore   *runtimestore.Store
-	LLMEnabled     bool
-	LLMConfig      config.LLMConfig
-	UserStore      *auth.Store
-	TokenService   *auth.TokenService
-	TokenTTL       time.Duration
+	NodeletManager    *nodelet.NodeletManager
+	NodeletClient     NodeletClient
+	RuntimeStore      *runtimestore.Store
+	LLMEnabled        bool
+	LLMConfig         config.LLMConfig
+	RunLimits         config.RunLimits
+	UserStore         *auth.Store
+	TokenService      *auth.TokenService
+	TokenTTL          time.Duration
+	HTTPRateLimiter   *httprate.Limiter
+	TrustedProxyCIDRs []string
+	ConsoleHub        *console.Hub
 }
 
 // Server 保存中心端 API 服务运行所需的配置和依赖。
 type Server struct {
-	nodeletManager *nodelet.NodeletManager
-	nodeletProber  *nodelet.NodeletProber
-	nodeletClient  NodeletClient
-	llmClient      *agent.Client
-	llmConfig      config.LLMConfig
-	skillStore     *skills.SkillStore
-	mcpManager     *mcp.Manager
-	projectStore   *config.ProjectStore
-	dsnStore       *config.ContainerDSNStore
-	runtimeStore   *runtimestore.Store
-	sessionStore   *session.SessionStore
-	agentRepo      *runtimesession.Repository
-	runManager     *runManager
-	UserStore      *auth.Store
-	TokenService   *auth.TokenService
-	tokenTTL       time.Duration
+	nodeletManager  *nodelet.NodeletManager
+	nodeletProber   *nodelet.NodeletProber
+	nodeletClient   NodeletClient
+	llmClient       *agent.Client
+	llmConfig       config.LLMConfig
+	skillStore      *skills.SkillStore
+	mcpManager      *mcp.Manager
+	projectStore    *config.ProjectStore
+	dsnStore        *config.ContainerDSNStore
+	runtimeStore    *runtimestore.Store
+	agentRepo       *runtimesession.Repository
+	runManager      *runManager
+	UserStore       *auth.Store
+	TokenService    *auth.TokenService
+	tokenTTL        time.Duration
+	httpRateLimiter *httprate.Limiter
+	loginLimiter    *loginLimiter
+	consoleHub      *console.Hub
+
+	lifecycleMu     sync.Mutex
+	lifecycle       context.Context
+	cancelLifecycle context.CancelFunc
+	quiescing       bool
+	requestWG       sync.WaitGroup
+	streamWG        sync.WaitGroup
+	quiesceOnce     sync.Once
+
+	closeMu   sync.Mutex
+	closing   bool
+	closeDone chan struct{}
+	closeErr  error
 }
 
 // NewFromConfig 使用配置创建中心端 API 服务。
-func NewFromConfig(cfg config.Config) *Server {
+func NewFromConfig(cfg config.Config) (*Server, error) {
+	return NewFromConfigWithConsoleHub(cfg, nil)
+}
+
+// NewFromConfigWithConsoleHub builds the API service with the process-owned
+// console hub supplied by the composition root.
+func NewFromConfigWithConsoleHub(cfg config.Config, consoleHub *console.Hub) (*Server, error) {
 	runtimeStore, err := runtimestore.OpenRuntime()
 	if err != nil {
-		logutil.Fatal("runtime store: open", zap.Error(err))
+		return nil, fmt.Errorf("open runtime store: %w", err)
 	}
 
 	nm, err := nodelet.NewNodeletManagerWithRuntime(runtimeStore)
 	if err != nil {
-		logutil.Fatal("nodelet: manager", zap.Error(err))
+		_ = runtimeStore.Close()
+		return nil, fmt.Errorf("create nodelet manager: %w", err)
 	}
 
-	// 后台保活探测器。
-	prober := nodelet.NewNodeletProber(nm)
-	prober.Start()
+	projectStore, err := config.NewProjectStoreWithRuntime(runtimeStore)
+	if err != nil {
+		_ = runtimeStore.Close()
+		return nil, fmt.Errorf("create project store: %w", err)
+	}
+
+	dsnStore, err := config.NewContainerDSNStoreWithRuntime(runtimeStore)
+	if err != nil {
+		_ = runtimeStore.Close()
+		return nil, fmt.Errorf("create container DSN store: %w", err)
+	}
+	httpRateLimiter, err := httprate.New(httprate.Options{TrustedProxyCIDRs: cfg.HTTP.TrustedProxyCIDRs})
+	if err != nil {
+		_ = runtimeStore.Close()
+		return nil, fmt.Errorf("create HTTP rate limiter: %w", err)
+	}
 
 	s := New(Options{
-		NodeletManager: nm,
-		NodeletClient:  nodelet.NewClient(nil),
-		RuntimeStore:   runtimeStore,
-		LLMEnabled:     cfg.LLM.Enabled,
-		LLMConfig:      cfg.LLM,
+		NodeletManager:  nm,
+		NodeletClient:   nodelet.NewClient(nil),
+		RuntimeStore:    runtimeStore,
+		LLMEnabled:      cfg.LLM.Enabled,
+		LLMConfig:       cfg.LLM,
+		RunLimits:       cfg.Run,
+		HTTPRateLimiter: httpRateLimiter,
+		ConsoleHub:      consoleHub,
 	})
-	s.nodeletProber = prober
 
 	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
-	mgr, err := mcp.NewManagerWithRuntime(runtimeStore, func(mcpTools []mcp.ConnectionTool) {
+	mgr, err := mcp.NewManagerWithRuntimeAndConsole(runtimeStore, s.consoleHub, func(mcpTools []mcp.ConnectionTool) {
 		s.onMCPToolsChanged(mcpTools)
 	})
 	if err != nil {
-		logutil.Fatal("mcp: manager", zap.Error(err))
+		closeCtx, cancel := context.WithTimeout(context.Background(), cfg.Run.WithDefaults().CloseTimeout)
+		_ = s.Close(closeCtx)
+		cancel()
+		return nil, fmt.Errorf("create mcp manager: %w", err)
 	}
 	s.mcpManager = mgr
-
-	// 项目存储。
-	projectStore, err := config.NewProjectStoreWithRuntime(runtimeStore)
-	if err != nil {
-		logutil.Fatal("projects: store", zap.Error(err))
-	}
 	s.projectStore = projectStore
-
-	// 容器 DSN 覆盖值存储。
-	dsnStore, err := config.NewContainerDSNStoreWithRuntime(runtimeStore)
-	if err != nil {
-		logutil.Fatal("dsn: store", zap.Error(err))
-	}
 	s.dsnStore = dsnStore
 
 	// 用户认证。
@@ -143,7 +177,11 @@ func NewFromConfig(cfg config.Config) *Server {
 		}
 	}
 
-	return s
+	prober := nodelet.NewNodeletProber(nm)
+	s.nodeletProber = prober
+	prober.Start()
+
+	return s, nil
 }
 
 // New 创建中心端 API 服务。
@@ -151,23 +189,35 @@ func New(options Options) *Server {
 	if options.NodeletClient == nil {
 		options.NodeletClient = nodelet.NewClient(nil)
 	}
-
-	// JSONL-backed session store（重启后会话可恢复）。
-	sessionStore, err := session.OpenSessionStore("data/sessions")
-	if err != nil {
-		logutil.Warn("session: open store, falling back to memory-only", zap.Error(err))
-		sessionStore = session.NewSessionStore()
+	lifecycle, cancelLifecycle := context.WithCancel(context.Background())
+	consoleHub := options.ConsoleHub
+	if consoleHub == nil {
+		consoleHub = console.NewHub()
+	}
+	httpRateLimiter := options.HTTPRateLimiter
+	if httpRateLimiter == nil {
+		var err error
+		httpRateLimiter, err = httprate.New(httprate.Options{TrustedProxyCIDRs: options.TrustedProxyCIDRs})
+		if err != nil {
+			logutil.Warn("api: invalid trusted proxy configuration", zap.Error(err))
+			httpRateLimiter, _ = httprate.New(httprate.Options{})
+		}
 	}
 
 	s := &Server{
-		nodeletManager: options.NodeletManager,
-		nodeletClient:  options.NodeletClient,
-		runtimeStore:   options.RuntimeStore,
-		llmConfig:      options.LLMConfig,
-		sessionStore:   sessionStore,
-		UserStore:      options.UserStore,
-		TokenService:   options.TokenService,
-		tokenTTL:       options.TokenTTL,
+		nodeletManager:  options.NodeletManager,
+		nodeletClient:   options.NodeletClient,
+		runtimeStore:    options.RuntimeStore,
+		llmConfig:       options.LLMConfig,
+		UserStore:       options.UserStore,
+		TokenService:    options.TokenService,
+		tokenTTL:        options.TokenTTL,
+		lifecycle:       lifecycle,
+		cancelLifecycle: cancelLifecycle,
+		closeDone:       make(chan struct{}),
+		httpRateLimiter: httpRateLimiter,
+		loginLimiter:    newLoginLimiter(nil),
+		consoleHub:      consoleHub,
 	}
 	if storage, err := runtimesession.NewFileStorage("data/agent-sessions"); err != nil {
 		logutil.Warn("agent session: open store, falling back to memory-only", zap.Error(err))
@@ -175,13 +225,21 @@ func New(options Options) *Server {
 	} else {
 		s.agentRepo = runtimesession.NewRepository(storage)
 	}
-	s.runManager = newRunManager()
+	s.runManager = newRunManager(options.RunLimits)
+
+	// SkillStore 必须在 LLM Client 之前就绪，保证无 MCP 连接时也会注册 skill 工具。
+	ss, err := skills.NewSkillStore("config/skills")
+	if err != nil {
+		logutil.Warn("llm: skill store", zap.Error(err))
+	} else {
+		s.skillStore = ss
+	}
 
 	if options.LLMEnabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		nativeTools, err := llmtools.NewTools(s, nil) // SkillStore 在后续初始化，此处传 nil，skill 工具后续由 onMCPToolsChanged 补上
+		nativeTools, err := llmtools.NewTools(s, s.skillStore)
 		if err != nil {
 			logutil.Error("llm: create tools", zap.Error(err))
 			return s
@@ -196,133 +254,165 @@ func New(options Options) *Server {
 		}
 	}
 
-	// SkillStore 管理 Agent 技能（替换旧 PromptStore + Router）。
-	// 即使 LLM 未启用也初始化，供后续启用时使用。
-	ss, err := skills.NewSkillStore("config/skills")
-	if err != nil {
-		logutil.Warn("llm: skill store", zap.Error(err))
-	} else {
-		s.skillStore = ss
-	}
-
 	return s
 }
 
-// Routes 返回中心端 API 路由。
-func (s *Server) Routes() *http.ServeMux {
-	mux := http.NewServeMux()
-	s.Mount(mux)
-	return mux
+// Quiesce stops admission and active streams while the HTTP server drains.
+func (s *Server) Quiesce() {
+	s.quiesceOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		s.quiescing = true
+		cancel := s.cancelLifecycle
+		s.lifecycleMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if s.runManager != nil {
+			s.runManager.quiesce()
+		}
+	})
 }
 
-// Mount 把中心端 API 路由挂载到指定 mux。
-// Go 1.22+ 原生支持方法和路径参数匹配，不再需要手工 TrimPrefix+Split 解析。
-func (s *Server) Mount(mux *http.ServeMux) {
-	// 所有 API 路由统一经过: securityHeaders → rateLimit → authMiddleware → requireAuth → limitBody → handler
-	authed := func(f http.HandlerFunc) http.HandlerFunc {
-		return securityHeaders(rateLimit(s.authMiddleware(s.requireAuth(limitBody(f)))))
+// Close releases the server-owned resources after Quiesce and HTTP shutdown.
+func (s *Server) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	authedRun := func(f http.HandlerFunc) http.HandlerFunc {
-		return securityHeaders(rateLimitChat(s.authMiddleware(s.requireAuth(limitBody(f)))))
+	s.Quiesce()
+
+	s.closeMu.Lock()
+	if !s.closing {
+		s.closing = true
+		if s.closeDone == nil {
+			s.closeDone = make(chan struct{})
+		}
+		go s.closeResources()
 	}
-	publicWrap := func(f http.HandlerFunc) http.HandlerFunc {
-		return securityHeaders(rateLimit(s.authMiddleware(f)))
+	done := s.closeDone
+	s.closeMu.Unlock()
+
+	select {
+	case <-done:
+		s.closeMu.Lock()
+		err := s.closeErr
+		s.closeMu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	// ---- Auth ----
-	mux.HandleFunc("POST /api/token", publicWrap(s.handleCreateToken))
-	mux.HandleFunc("DELETE /api/token", publicWrap(s.handleDeleteToken))
-	mux.HandleFunc("GET /api/auth/me", authed(s.handleAuthMe))
-	mux.HandleFunc("GET /api/auth/status", publicWrap(s.handleAuthStatus))
-	mux.HandleFunc("POST /api/setup", publicWrap(s.handleSetup))
-
-	// ---- Nodelets ----
-	mux.HandleFunc("GET /api/nodelets", authed(s.handleNodeletList))
-	mux.HandleFunc("GET /api/nodelets/status", authed(s.handleNodelets))
-	mux.HandleFunc("POST /api/nodelets", authed(s.handleNodeletAdd))
-	mux.HandleFunc("PUT /api/nodelets/{id}", authed(s.handleNodeletUpdate))
-	mux.HandleFunc("DELETE /api/nodelets/{id}", authed(s.handleNodeletRemove))
-	mux.HandleFunc("POST /api/nodelets/test", authed(s.handleNodeletTest))
-	mux.HandleFunc("POST /api/nodelets/{id}/probe", authed(s.handleNodeletProbe))
-	mux.HandleFunc("POST /api/nodelets/probe-all", authed(s.handleNodeletProbeAll))
-	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers", authed(s.handleNodeletContainers))
-	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs", authed(s.handleNodeletLogs))
-	mux.HandleFunc("GET /api/nodelets/{nodeletID}/containers/{containerID}/logs/stream", authed(s.handleNodeletLogsStreamRoute))
-
-	// ---- Chat & Sessions ----
-	mux.HandleFunc("POST /api/runs", authedRun(s.handleRunCreate))
-	mux.HandleFunc("GET /api/runs/{id}/events", authed(s.handleRunEvents))
-	mux.HandleFunc("POST /api/runs/{id}/abort", authed(s.handleRunAbort))
-	mux.HandleFunc("GET /api/agent-settings", authed(s.handleAgentSettingsGet))
-	mux.HandleFunc("PUT /api/agent-settings", authed(s.handleAgentSettingsUpdate))
-	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
-	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
-	mux.HandleFunc("PATCH /api/sessions/{id}", authed(s.handleSessionUpdate))
-	mux.HandleFunc("DELETE /api/sessions/{id}", authed(s.handleSessionDelete))
-	mux.HandleFunc("POST /api/sessions/{id}/branch", authed(s.handleSessionBranch))
-
-	// ---- MCP Connections ----
-	mux.HandleFunc("GET /api/mcp/connections", authed(s.handleMCPList))
-	mux.HandleFunc("POST /api/mcp/connections", authed(s.handleMCPAdd))
-	mux.HandleFunc("PUT /api/mcp/connections/{id}", authed(s.handleMCPUpdate))
-	mux.HandleFunc("DELETE /api/mcp/connections/{id}", authed(s.handleMCPRemove))
-	mux.HandleFunc("GET /api/mcp/connections/{id}/logs", authed(s.handleMCPLogs))
-	mux.HandleFunc("GET /api/mcp/connections/{id}/logs/stream", authed(s.handleMCPLogsStream))
-	mux.HandleFunc("POST /api/mcp/connections/{id}/tools/{toolName}/test", authed(s.handleMCPToolTestRoute))
-	mux.HandleFunc("POST /api/mcp/connections/test", authed(s.handleMCPTest))
-
-	// ---- Tools ----
-	mux.HandleFunc("GET /api/tools", authed(s.handleTools))
-	mux.HandleFunc("PUT /api/tools/{name}", authed(s.handleToolToggle))
-
-	// ---- Skills ----
-	mux.HandleFunc("GET /api/skills", authed(s.handleSkillsList))
-	mux.HandleFunc("PUT /api/skills/{name}", authed(s.handleSkillsUpdate))
-	mux.HandleFunc("DELETE /api/skills/{name}", authed(s.handleSkillsDelete))
-
-	// ---- Console SSE ----
-	mux.HandleFunc("GET /api/console/stream", securityHeaders(s.authMiddleware(console.Default().SSEHandler)))
-
-	// ---- Projects ----
-	mux.HandleFunc("GET /api/projects", authed(s.handleProjectList))
-	mux.HandleFunc("POST /api/projects", authed(s.handleProjectCreate))
-	mux.HandleFunc("GET /api/projects/{pid}", authed(s.handleProjectGet))
-	mux.HandleFunc("PUT /api/projects/{pid}", authed(s.handleProjectUpdate))
-	mux.HandleFunc("DELETE /api/projects/{pid}", authed(s.handleProjectDelete))
-
-	// ---- Project Container Exclusions ----
-	mux.HandleFunc("POST /api/projects/{pid}/excluded-containers", authed(s.handleProjectExcludeContainer))
-	mux.HandleFunc("DELETE /api/projects/{pid}/excluded-containers", authed(s.handleProjectIncludeContainer))
-
-	// ---- Project Sessions ----
-	mux.HandleFunc("GET /api/projects/{pid}/sessions", authed(s.handleProjectSessions))
-	mux.HandleFunc("GET /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionGet))
-	mux.HandleFunc("PATCH /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionUpdate))
-	mux.HandleFunc("DELETE /api/projects/{pid}/sessions/{id}", authed(s.handleProjectSessionDelete))
-
-	// ---- Project Servers ----
-	mux.HandleFunc("GET /api/projects/{pid}/servers", authed(s.handleProjectServersList))
-	mux.HandleFunc("POST /api/projects/{pid}/servers", authed(s.handleProjectServersAdd))
-	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}", authed(s.handleProjectServersRemove))
-
-	// ---- Project MCP Connections ----
-	mux.HandleFunc("GET /api/projects/{pid}/mcp/connections", authed(s.handleProjectMCPList))
-
-	// ---- Project Containers ----
-	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers", authed(s.handleProjectContainers))
-	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}", authed(s.handleContainerDetail))
-	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/logs/stream", authed(s.handleProjectLogsStream))
-	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp", authed(s.handleContainerMCPGet))
-	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/mcp", authed(s.handleContainerMCPDelete))
-	mux.HandleFunc("GET /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNGet))
-	mux.HandleFunc("PUT /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNPut))
-	mux.HandleFunc("DELETE /api/projects/{pid}/servers/{sid}/containers/{cid}/dsn", authed(s.handleContainerDSNDelete))
 }
 
-// findNodelet 按配置 ID 查找 Nodelet。
-func (s *Server) findNodelet(id string) (nodelet.NodeletConfig, bool) {
-	if s.nodeletManager == nil {
-		return nodelet.NodeletConfig{}, false
+func (s *Server) closeResources() {
+	var closeErr error
+	if err := s.waitForRequests(context.Background()); err != nil {
+		closeErr = errors.Join(closeErr, err)
 	}
-	return s.nodeletManager.Find(id)
+	if err := s.waitForStreams(context.Background()); err != nil {
+		closeErr = errors.Join(closeErr, err)
+	}
+	if s.httpRateLimiter != nil {
+		s.httpRateLimiter.Close()
+	}
+	if s.loginLimiter != nil {
+		s.loginLimiter.Close()
+	}
+	if s.runManager != nil {
+		if err := s.runManager.close(context.Background()); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	if s.mcpManager != nil {
+		s.mcpManager.Close()
+	}
+	if s.skillStore != nil {
+		s.skillStore.Close()
+	}
+	if s.nodeletProber != nil {
+		s.nodeletProber.Stop()
+	}
+	if s.runtimeStore != nil {
+		if err := s.runtimeStore.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+
+	s.closeMu.Lock()
+	s.closeErr = closeErr
+	close(s.closeDone)
+	s.closeMu.Unlock()
+}
+
+func (s *Server) beginRequest(requestCtx context.Context) (context.Context, func(), bool) {
+	s.lifecycleMu.Lock()
+	if s.quiescing {
+		s.lifecycleMu.Unlock()
+		return nil, nil, false
+	}
+	lifecycle := s.lifecycle
+	s.requestWG.Add(1)
+	s.lifecycleMu.Unlock()
+
+	if requestCtx == nil {
+		requestCtx = context.Background()
+	}
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	requestCtx, cancel := context.WithCancel(requestCtx)
+	stopLifecycleCancel := context.AfterFunc(lifecycle, cancel)
+	return requestCtx, func() {
+		stopLifecycleCancel()
+		cancel()
+		s.requestWG.Done()
+	}, true
+}
+
+func (s *Server) beginStream(requestCtx context.Context) (context.Context, func(), bool) {
+	s.lifecycleMu.Lock()
+	if s.quiescing {
+		s.lifecycleMu.Unlock()
+		return nil, nil, false
+	}
+	lifecycle := s.lifecycle
+	s.streamWG.Add(1)
+	s.lifecycleMu.Unlock()
+
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	streamCtx, cancel := context.WithCancel(requestCtx)
+	stopLifecycleCancel := context.AfterFunc(lifecycle, cancel)
+	return streamCtx, func() {
+		stopLifecycleCancel()
+		cancel()
+		s.streamWG.Done()
+	}, true
+}
+
+func (s *Server) waitForStreams(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.streamWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Server) waitForRequests(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.requestWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

@@ -170,12 +170,7 @@ func (s *Store) ListNodelets(ctx context.Context) ([]NodeletRecord, error) {
 	}
 	out := make([]NodeletRecord, len(rows))
 	for i, row := range rows {
-		out[i] = NodeletRecord{
-			ID:      row.ID,
-			Name:    row.Name,
-			Address: row.Address,
-			Token:   row.Token,
-		}
+		out[i] = NodeletRecord(row)
 	}
 	return out, nil
 }
@@ -186,12 +181,7 @@ func (s *Store) ReplaceNodelets(ctx context.Context, rows []NodeletRecord) error
 			return err
 		}
 		for _, row := range rows {
-			if err := q.InsertNodelet(ctx, InsertNodeletParams{
-				ID:      row.ID,
-				Name:    row.Name,
-				Address: row.Address,
-				Token:   row.Token,
-			}); err != nil {
+			if err := q.InsertNodelet(ctx, InsertNodeletParams(row)); err != nil {
 				return err
 			}
 		}
@@ -430,19 +420,12 @@ func (s *Store) GetUser(ctx context.Context) (*UserRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UserRecord{
-		Username: u.Username,
-		Name:     u.Name,
-		Password: u.Password,
-	}, nil
+	record := UserRecord(u)
+	return &record, nil
 }
 
 func (s *Store) UpsertUser(ctx context.Context, u UserRecord) error {
-	return s.q.UpsertUser(ctx, UpsertUserParams{
-		Username: u.Username,
-		Name:     u.Name,
-		Password: u.Password,
-	})
+	return s.q.UpsertUser(ctx, UpsertUserParams(u))
 }
 
 func (s *Store) tx(ctx context.Context, fn func(*Queries) error) error {

@@ -1,83 +1,121 @@
-// Package console provides a real-time log hub that captures backend
-// stdout/stderr and streams it to web clients via Server-Sent Events.
+// Package console provides a real-time process log hub for browser clients.
 package console
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"oops/internal/loghub"
 )
 
+const (
+	defaultHistorySize     = 200
+	defaultMaxSubscribers  = 32
+	defaultSubscriberQueue = 128
+	defaultMaxEntryBytes   = 16 << 10
+)
+
 // Entry is a single console log line shipped to the browser.
 type Entry struct {
 	Timestamp string `json:"timestamp"`
-	Level     string `json:"level"` // "info" | "warn" | "error"
+	Level     string `json:"level"`
 	Message   string `json:"message"`
 }
 
-const historySize = 200
+// Options bounds one process console hub and supports deterministic tests.
+type Options struct {
+	HistorySize     int
+	MaxSubscribers  int
+	SubscriberQueue int
+	MaxEntryBytes   int
+	Now             func() time.Time
+}
 
-// Hub receives log lines from the backend and fans them out to
-// all connected SSE subscribers. It keeps a small ring buffer so
-// new subscribers see recent history.
+// Hub receives log lines from the backend and fans them out to SSE clients.
 type Hub struct {
-	entries *loghub.Hub[Entry]
+	entries       *loghub.Hub[Entry]
+	maxEntryBytes int
+	now           func() time.Time
 }
 
-var defaultHub = &Hub{
-	entries: loghub.New[Entry](historySize),
+// NewHub creates the process-owned console hub used by the composition root.
+func NewHub() *Hub {
+	return NewHubWithOptions(Options{})
 }
 
-// Default returns the process-wide singleton hub.
-func Default() *Hub { return defaultHub }
+// NewHubWithOptions creates a console hub with explicit capacity limits.
+func NewHubWithOptions(options Options) *Hub {
+	if options.HistorySize <= 0 {
+		options.HistorySize = defaultHistorySize
+	}
+	if options.MaxSubscribers <= 0 {
+		options.MaxSubscribers = defaultMaxSubscribers
+	}
+	if options.SubscriberQueue <= 0 {
+		options.SubscriberQueue = defaultSubscriberQueue
+	}
+	if options.MaxEntryBytes <= 0 {
+		options.MaxEntryBytes = defaultMaxEntryBytes
+	}
+	if options.Now == nil {
+		options.Now = time.Now
+	}
+	return &Hub{
+		entries: loghub.NewWithOptions[Entry](loghub.Options{
+			HistorySize:     options.HistorySize,
+			MaxSubscribers:  options.MaxSubscribers,
+			SubscriberQueue: options.SubscriberQueue,
+		}),
+		maxEntryBytes: options.MaxEntryBytes,
+		now:           options.Now,
+	}
+}
 
-// Write implements io.Writer. Each call is treated as one log line
-// (the standard log package already emits line-at-a-time). The line is
-// forwarded to every subscriber.
+// Write implements io.Writer. Each call becomes one bounded console entry.
 func (h *Hub) Write(p []byte) (int, error) {
+	if h == nil {
+		return len(p), nil
+	}
 	msg := strings.TrimRight(string(p), "\n\r")
 	if msg == "" {
 		return len(p), nil
 	}
-	entry := Entry{
-		Timestamp: time.Now().Format(time.RFC3339),
+	h.entries.Push(Entry{
+		Timestamp: h.now().Format(time.RFC3339),
 		Level:     levelFrom(msg),
-		Message:   msg,
-	}
-	h.entries.Push(entry)
+		Message:   truncateMessage(msg, h.maxEntryBytes),
+	})
 	return len(p), nil
 }
 
-// Feed writes a raw message directly to the hub without going through log.
-// Useful for MCP stderr and other subsystems that don't use log.Printf.
-func Feed(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	defaultHub.Write([]byte(msg))
+// Feed records one formatted line in this hub.
+func (h *Hub) Feed(format string, args ...any) {
+	if h == nil {
+		return
+	}
+	_, _ = h.Write([]byte(fmt.Sprintf(format, args...)))
 }
 
-// RedirectLog sets the standard log package's output to write to both
-// os.Stderr and the hub so all log.Printf calls appear in the console.
-func RedirectLog() {
-	multi := io.MultiWriter(os.Stderr, defaultHub)
-	log.SetOutput(multi)
-	log.Default().SetOutput(multi)
+// Subscribe registers a bounded SSE subscriber with replay history.
+func (h *Hub) Subscribe() (<-chan Entry, func(), error) {
+	if h == nil {
+		return nil, nil, loghub.ErrClosed
+	}
+	return h.entries.Subscribe(defaultHistorySize)
 }
 
-// Subscribe registers a new SSE subscriber. The returned channel
-// receives recent history first, then live entries. Call cancel when done.
-func (h *Hub) Subscribe() (<-chan Entry, func()) {
-	return h.entries.Subscribe(historySize)
+// Close closes every subscriber and rejects future writes/subscriptions.
+func (h *Hub) Close() {
+	if h != nil {
+		h.entries.Close()
+	}
 }
 
-// SSEHandler is an http.HandlerFunc that streams console logs to the browser.
+// SSEHandler streams console logs to one HTTP client.
 func (h *Hub) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -85,22 +123,28 @@ func (h *Hub) SSEHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ch, cancel, err := h.Subscribe()
+	if err != nil {
+		if errors.Is(err, loghub.ErrSubscriberLimit) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer cancel()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	ch, cancel := h.Subscribe()
-	defer cancel()
-
-	// Send initial comment to force the browser into streaming mode.
-	fmt.Fprintf(w, ":ok\n\n")
+	fmt.Fprint(w, ":ok\n\n")
 	flusher.Flush()
 
-	ctx := r.Context()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-r.Context().Done():
 			return
 		case entry, ok := <-ch:
 			if !ok {
@@ -116,7 +160,17 @@ func (h *Hub) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// levelFrom heuristically determines a severity level from a log message.
+func truncateMessage(message string, maxBytes int) string {
+	if len(message) <= maxBytes {
+		return message
+	}
+	const marker = " …[truncated]"
+	if maxBytes <= len(marker) {
+		return marker[:maxBytes]
+	}
+	return message[:maxBytes-len(marker)] + marker
+}
+
 func levelFrom(msg string) string {
 	lower := strings.ToLower(msg)
 	switch {
@@ -127,21 +181,4 @@ func levelFrom(msg string) string {
 	default:
 		return "info"
 	}
-}
-
-// NewLineWriter returns an io.Writer that feeds each line to the hub
-// via Feed. Use this to capture stderr of subprocesses line-by-line.
-func NewLineWriter(prefix string) io.Writer {
-	r, w := io.Pipe()
-	go func() {
-		scanner := bufio.NewScanner(r)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
-			}
-			Feed("%s: %s", prefix, line)
-		}
-	}()
-	return w
 }

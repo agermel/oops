@@ -49,12 +49,17 @@ type NodeletProber struct {
 	deathThreshold int           // 连续失败多少次判死（默认 3）
 
 	httpClient *http.Client
-	stopCh     chan struct{}
+	lifecycle  context.Context
+	cancel     context.CancelFunc
 	doneCh     chan struct{}
+	workers    sync.WaitGroup
+	started    bool
+	stopped    bool
 }
 
 // NewNodeletProber 创建 Prober 并初始化内部状态。
 func NewNodeletProber(manager *NodeletManager) *NodeletProber {
+	lifecycle, cancel := context.WithCancel(context.Background())
 	p := &NodeletProber{
 		manager:        manager,
 		results:        make(map[string]*ProbeResult),
@@ -64,7 +69,8 @@ func NewNodeletProber(manager *NodeletManager) *NodeletProber {
 		probeTimeout:   5 * time.Second,
 		deathThreshold: 3,
 		httpClient:     &http.Client{Timeout: 5 * time.Second},
-		stopCh:         make(chan struct{}),
+		lifecycle:      lifecycle,
+		cancel:         cancel,
 		doneCh:         make(chan struct{}),
 	}
 	p.cond = sync.NewCond(&p.mu)
@@ -80,6 +86,15 @@ func NewNodeletProber(manager *NodeletManager) *NodeletProber {
 
 // Start 启动后台探测循环。首次启动会立即探测全部节点。
 func (p *NodeletProber) Start() {
+	p.mu.Lock()
+	if p.started || p.stopped {
+		p.mu.Unlock()
+		return
+	}
+	p.started = true
+	p.workers.Add(2)
+	p.mu.Unlock()
+
 	logutil.Info("nodelet prober: starting",
 		zap.Int("nodeletCount", len(p.results)),
 		zap.Duration("healthInterval", p.healthInterval),
@@ -87,32 +102,44 @@ func (p *NodeletProber) Start() {
 		zap.Int("deathThreshold", p.deathThreshold),
 	)
 
-	go p.loop()
-
-	// 首轮探测：对全部已知节点立刻探测一次（不等定时器）
 	go func() {
-		p.mu.Lock()
-		ids := make([]string, 0, len(p.results))
-		for id := range p.results {
-			ids = append(ids, id)
-		}
-		p.mu.Unlock()
-
-		for _, id := range ids {
-			cfg, ok := p.manager.Find(id)
-			if !ok {
-				continue
-			}
-			p.probeOne(cfg)
-		}
-		logutil.Info("nodelet prober: initial probe round complete")
+		defer p.workers.Done()
+		p.loop()
+	}()
+	go func() {
+		defer p.workers.Done()
+		p.initialProbe()
+	}()
+	go func() {
+		p.workers.Wait()
+		close(p.doneCh)
 	}()
 }
 
 // Stop 停止后台探测循环。
 func (p *NodeletProber) Stop() {
-	logutil.Info("nodelet prober: stopping")
-	close(p.stopCh)
+	p.mu.Lock()
+	if !p.started {
+		if !p.stopped {
+			p.stopped = true
+			if p.cancel != nil {
+				p.cancel()
+			}
+		}
+		p.mu.Unlock()
+		return
+	}
+	if !p.stopped {
+		p.stopped = true
+		cancel := p.cancel
+		p.mu.Unlock()
+		logutil.Info("nodelet prober: stopping")
+		if cancel != nil {
+			cancel()
+		}
+	} else {
+		p.mu.Unlock()
+	}
 	<-p.doneCh
 	logutil.Info("nodelet prober: stopped")
 }
@@ -240,14 +267,12 @@ func (p *NodeletProber) OnConfigChange() {
 
 // loop 是后台探测主循环。
 func (p *NodeletProber) loop() {
-	defer close(p.doneCh)
-
 	ticker := time.NewTicker(5 * time.Second) // 每 5s 检查一次哪些节点该探测了
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-p.stopCh:
+		case <-p.lifecycle.Done():
 			return
 		case <-ticker.C:
 			p.tick()
@@ -255,8 +280,37 @@ func (p *NodeletProber) loop() {
 	}
 }
 
+func (p *NodeletProber) initialProbe() {
+	p.mu.Lock()
+	ids := make([]string, 0, len(p.results))
+	for id := range p.results {
+		ids = append(ids, id)
+	}
+	p.mu.Unlock()
+
+	for _, id := range ids {
+		select {
+		case <-p.lifecycle.Done():
+			return
+		default:
+		}
+		cfg, ok := p.manager.Find(id)
+		if !ok {
+			continue
+		}
+		p.probeOne(cfg)
+	}
+	logutil.Info("nodelet prober: initial probe round complete")
+}
+
 // tick 检查每个节点是否到了该探测的时间。
 func (p *NodeletProber) tick() {
+	select {
+	case <-p.lifecycle.Done():
+		return
+	default:
+	}
+
 	cfgs := p.manager.List()
 	now := time.Now()
 
@@ -291,7 +345,9 @@ func (p *NodeletProber) tick() {
 		p.mu.Unlock()
 
 		// 异步探测（不阻塞 tick 循环）
+		p.workers.Add(1)
 		go func(c NodeletConfig) {
+			defer p.workers.Done()
 			defer func() {
 				p.mu.Lock()
 				delete(p.probing, c.ID)
@@ -310,7 +366,7 @@ func (p *NodeletProber) tick() {
 func (p *NodeletProber) probeOne(cfg NodeletConfig) ProbeResult {
 	start := time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), p.probeTimeout)
+	ctx, cancel := context.WithTimeout(p.lifecycle, p.probeTimeout)
 	defer cancel()
 
 	endpoint := cfg.Address + "/host"
@@ -401,4 +457,3 @@ func (p *NodeletProber) applyResult(nodeletID string, success bool, errMsg strin
 	cp := *r
 	return cp
 }
-

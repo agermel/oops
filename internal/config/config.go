@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -14,11 +15,15 @@ const (
 
 	// DefaultPath 是生产/本地默认配置文件路径。
 	DefaultPath = "config/config.yaml"
+
+	minRunTerminalBytes = 256
 )
 
 // Config 是应用启动或刷新时读取到的完整配置。
 type Config struct {
-	LLM LLMConfig `mapstructure:"llm"`
+	LLM  LLMConfig  `mapstructure:"llm"`
+	Run  RunLimits  `mapstructure:"run"`
+	HTTP HTTPConfig `mapstructure:"http"`
 }
 
 // LLMConfig 保存 LLM Agent 配置。
@@ -27,6 +32,96 @@ type LLMConfig struct {
 	Model   string `mapstructure:"model"`
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
+}
+
+// HTTPConfig defines trust-boundary settings for HTTP listeners.
+type HTTPConfig struct {
+	TrustedProxyCIDRs []string `mapstructure:"trusted_proxy_cidrs"`
+}
+
+// RunLimits 定义 Run、SSE 重放和关闭的资源上限。
+type RunLimits struct {
+	MaxActiveRuns            int           `mapstructure:"max_active_runs"`
+	MaxRetainedEvents        int           `mapstructure:"max_retained_events"`
+	MaxRetainedBytes         int           `mapstructure:"max_retained_bytes"`
+	MaxEventBytes            int           `mapstructure:"max_event_bytes"`
+	MaxTerminalBytes         int           `mapstructure:"max_terminal_bytes"`
+	MaxErrorTextBytes        int           `mapstructure:"max_error_text_bytes"`
+	MaxSubscribers           int           `mapstructure:"max_subscribers"`
+	MaxSubscriberQueueEvents int           `mapstructure:"max_subscriber_queue_events"`
+	MaxSubscriberQueueBytes  int           `mapstructure:"max_subscriber_queue_bytes"`
+	MaxLiveQueueBytes        int           `mapstructure:"max_live_queue_bytes"`
+	CompletedTTL             time.Duration `mapstructure:"completed_ttl"`
+	RetryAfter               time.Duration `mapstructure:"retry_after"`
+	CloseTimeout             time.Duration `mapstructure:"close_timeout"`
+}
+
+// DefaultRunLimits returns the bounded production defaults for Run execution.
+func DefaultRunLimits() RunLimits {
+	return RunLimits{
+		MaxActiveRuns:            32,
+		MaxRetainedEvents:        512,
+		MaxRetainedBytes:         4 << 20,
+		MaxEventBytes:            256 << 10,
+		MaxTerminalBytes:         8 << 10,
+		MaxErrorTextBytes:        2 << 10,
+		MaxSubscribers:           16,
+		MaxSubscriberQueueEvents: 64,
+		MaxSubscriberQueueBytes:  512 << 10,
+		MaxLiveQueueBytes:        8 << 20,
+		CompletedTTL:             15 * time.Minute,
+		RetryAfter:               time.Second,
+		CloseTimeout:             15 * time.Second,
+	}
+}
+
+// WithDefaults fills omitted limits with production defaults.
+func (l RunLimits) WithDefaults() RunLimits {
+	d := DefaultRunLimits()
+	if l.MaxActiveRuns <= 0 {
+		l.MaxActiveRuns = d.MaxActiveRuns
+	}
+	if l.MaxRetainedEvents <= 0 {
+		l.MaxRetainedEvents = d.MaxRetainedEvents
+	}
+	if l.MaxRetainedBytes <= 0 {
+		l.MaxRetainedBytes = d.MaxRetainedBytes
+	}
+	if l.MaxEventBytes <= 0 {
+		l.MaxEventBytes = d.MaxEventBytes
+	}
+	if l.MaxTerminalBytes < minRunTerminalBytes {
+		if l.MaxTerminalBytes > 0 {
+			l.MaxTerminalBytes = minRunTerminalBytes
+		} else {
+			l.MaxTerminalBytes = d.MaxTerminalBytes
+		}
+	}
+	if l.MaxErrorTextBytes <= 0 {
+		l.MaxErrorTextBytes = d.MaxErrorTextBytes
+	}
+	if l.MaxSubscribers <= 0 {
+		l.MaxSubscribers = d.MaxSubscribers
+	}
+	if l.MaxSubscriberQueueEvents <= 0 {
+		l.MaxSubscriberQueueEvents = d.MaxSubscriberQueueEvents
+	}
+	if l.MaxSubscriberQueueBytes <= 0 {
+		l.MaxSubscriberQueueBytes = d.MaxSubscriberQueueBytes
+	}
+	if l.MaxLiveQueueBytes <= 0 {
+		l.MaxLiveQueueBytes = d.MaxLiveQueueBytes
+	}
+	if l.CompletedTTL <= 0 {
+		l.CompletedTTL = d.CompletedTTL
+	}
+	if l.RetryAfter <= 0 {
+		l.RetryAfter = d.RetryAfter
+	}
+	if l.CloseTimeout <= 0 {
+		l.CloseTimeout = d.CloseTimeout
+	}
+	return l
 }
 
 // MCPConfig 保存一个 MCP Server 的连接配置。

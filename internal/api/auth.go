@@ -44,8 +44,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 
 	// 登录限流：按 username+ip 限制失败次数，防暴力破解。
-	limitKey := loginLimitKey(username, r)
-	if !defaultLoginLimiter.allow(limitKey) {
+	limitKey := s.loginLimitKey(username, r)
+	if s.loginLimiter != nil && !s.loginLimiter.allow(limitKey) {
 		w.Header().Set("Retry-After", "900")
 		writeJSONError(w, "too many login attempts, please try again later", http.StatusTooManyRequests)
 		return
@@ -53,12 +53,16 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.UserStore.Validate(username, password)
 	if err != nil {
-		defaultLoginLimiter.recordFail(limitKey)
+		if s.loginLimiter != nil {
+			s.loginLimiter.recordFail(limitKey)
+		}
 		writeJSONError(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
 
-	defaultLoginLimiter.recordSuccess(limitKey)
+	if s.loginLimiter != nil {
+		s.loginLimiter.recordSuccess(limitKey)
+	}
 
 	token, err := s.TokenService.CreateToken(username, user.Name)
 	if err != nil {

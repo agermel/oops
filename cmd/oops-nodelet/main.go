@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -69,7 +70,11 @@ func main() {
 		logutil.Fatalf("docker client: %v", err)
 	}
 
-	server := nodelet.NewServerWithToken(dockerClient, token)
+	trustedProxyCIDRs := strings.Split(os.Getenv("OOPS_NODELET_TRUSTED_PROXY_CIDRS"), ",")
+	server, err := nodelet.NewServerWithTokenAndTrustedProxies(dockerClient, token, trustedProxyCIDRs)
+	if err != nil {
+		logutil.Fatalf("create nodelet server: %v", err)
+	}
 	defer server.Shutdown()
 
 	tokenStatus := "configured"

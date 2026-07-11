@@ -59,6 +59,7 @@ func (f fakeHostProvider) ContainerLogsStream(_ *http.Request, _ string) (<-chan
 // TestServerHealth 验证 Nodelet 存活接口。
 func TestServerHealth(t *testing.T) {
 	server := NewServer(fakeHostProvider{})
+	t.Cleanup(server.Shutdown)
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
 	response := httptest.NewRecorder()
 
@@ -69,6 +70,24 @@ func TestServerHealth(t *testing.T) {
 	}
 	if response.Body.String() != "{\"status\":\"ok\"}\n" {
 		t.Fatalf("body = %q", response.Body.String())
+	}
+}
+
+func TestServerClientIPUsesForwardedAddressOnlyForTrustedProxy(t *testing.T) {
+	server, err := NewServerWithTokenAndTrustedProxies(fakeHostProvider{}, "secret", []string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Cleanup(server.Shutdown)
+	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
+	request.Header.Set("X-Forwarded-For", "203.0.113.9")
+	request.RemoteAddr = "198.51.100.9:443"
+	if got := server.clientIP(request); got != "198.51.100.9" {
+		t.Fatalf("untrusted client IP = %q", got)
+	}
+	request.RemoteAddr = "10.0.0.9:443"
+	if got := server.clientIP(request); got != "203.0.113.9" {
+		t.Fatalf("trusted client IP = %q", got)
 	}
 }
 

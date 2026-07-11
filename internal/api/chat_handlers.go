@@ -2,8 +2,6 @@ package api
 
 import (
 	"net/http"
-
-	oldsession "oops/internal/llm/session"
 )
 
 // handleSessions handles GET /api/sessions — lists global or project sessions.
@@ -14,43 +12,22 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		sanitizedError(w, "list runtime sessions", err, http.StatusInternalServerError)
 		return
 	}
-	if s.agentRepo != nil {
-		writeJSON(w, infos)
-		return
-	}
-	writeJSON(w, s.sessionStore.List(projectID))
+	writeJSON(w, infos)
 }
 
 // handleSessionGet handles GET /api/sessions/{id}.
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if s.agentRepo != nil {
-		snapshot, ok, err := s.runtimeSessionSnapshot(r.Context(), id, "")
-		if err != nil {
-			sanitizedError(w, "get runtime session", err, http.StatusInternalServerError)
-			return
-		}
-		if ok {
-			writeJSON(w, snapshot)
-			return
-		}
+	snapshot, ok, err := s.runtimeSessionSnapshot(r.Context(), id, "")
+	if err != nil {
+		sanitizedError(w, "get runtime session", err, http.StatusInternalServerError)
+		return
 	}
-	sess, ok := s.sessionStore.Get(id)
 	if !ok {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	if r.URL.Query().Get("include_messages") == "true" {
-		writeJSON(w, sess.ToDetail())
-	} else {
-		writeJSON(w, oldsession.SessionInfo{
-			ID:           sess.ID,
-			ProjectID:    sess.ProjectID,
-			MessageCount: len(sess.Messages),
-			CreatedAt:    sess.CreatedAt.UnixMilli(),
-			UpdatedAt:    sess.UpdatedAt.UnixMilli(),
-		})
-	}
+	writeJSON(w, snapshot)
 }
 
 // handleSessionUpdate handles PATCH /api/sessions/{id}.
@@ -61,16 +38,14 @@ func (s *Server) handleSessionUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid session title", http.StatusBadRequest)
 		return
 	}
-	if s.agentRepo != nil {
-		info, found, err := s.renameRuntimeSession(id, "", title)
-		if err != nil {
-			sanitizedError(w, "update runtime session", err, http.StatusInternalServerError)
-			return
-		}
-		if found {
-			writeJSON(w, info)
-			return
-		}
+	info, found, err := s.renameRuntimeSession(id, "", title)
+	if err != nil {
+		sanitizedError(w, "update runtime session", err, http.StatusInternalServerError)
+		return
+	}
+	if found {
+		writeJSON(w, info)
+		return
 	}
 	writeJSONError(w, "session not found", http.StatusNotFound)
 }
@@ -78,18 +53,16 @@ func (s *Server) handleSessionUpdate(w http.ResponseWriter, r *http.Request) {
 // handleSessionDelete handles DELETE /api/sessions/{id}.
 func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if s.agentRepo != nil {
-		deleted, err := s.agentRepo.Delete(id)
-		if err != nil {
-			sanitizedError(w, "delete runtime session", err, http.StatusInternalServerError)
-			return
-		}
-		if deleted {
-			writeJSONOK(w)
-			return
-		}
+	if s.agentRepo == nil {
+		writeJSONError(w, "session not found", http.StatusNotFound)
+		return
 	}
-	if !s.sessionStore.Delete(id) {
+	deleted, err := s.agentRepo.Delete(id)
+	if err != nil {
+		sanitizedError(w, "delete runtime session", err, http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
@@ -104,44 +77,23 @@ func (s *Server) handleProjectSessions(w http.ResponseWriter, r *http.Request) {
 		sanitizedError(w, "list project runtime sessions", err, http.StatusInternalServerError)
 		return
 	}
-	if s.agentRepo != nil {
-		writeJSON(w, infos)
-		return
-	}
-	writeJSON(w, s.sessionStore.List(pid))
+	writeJSON(w, infos)
 }
 
 // handleProjectSessionGet handles GET /api/projects/{pid}/sessions/{id}.
 func (s *Server) handleProjectSessionGet(w http.ResponseWriter, r *http.Request) {
 	pid := r.PathValue("pid")
 	id := r.PathValue("id")
-	if s.agentRepo != nil {
-		snapshot, ok, err := s.runtimeSessionSnapshot(r.Context(), id, pid)
-		if err != nil {
-			sanitizedError(w, "get project runtime session", err, http.StatusInternalServerError)
-			return
-		}
-		if ok {
-			writeJSON(w, snapshot)
-			return
-		}
+	snapshot, ok, err := s.runtimeSessionSnapshot(r.Context(), id, pid)
+	if err != nil {
+		sanitizedError(w, "get project runtime session", err, http.StatusInternalServerError)
+		return
 	}
-	sess, ok := s.sessionStore.Get(id)
-	if !ok || sess.ProjectID != pid {
+	if !ok {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	if r.URL.Query().Get("include_messages") == "true" {
-		writeJSON(w, sess.ToDetail())
-	} else {
-		writeJSON(w, oldsession.SessionInfo{
-			ID:           sess.ID,
-			ProjectID:    sess.ProjectID,
-			MessageCount: len(sess.Messages),
-			CreatedAt:    sess.CreatedAt.UnixMilli(),
-			UpdatedAt:    sess.UpdatedAt.UnixMilli(),
-		})
-	}
+	writeJSON(w, snapshot)
 }
 
 // handleProjectSessionUpdate handles PATCH /api/projects/{pid}/sessions/{id}.
@@ -153,16 +105,14 @@ func (s *Server) handleProjectSessionUpdate(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, "invalid session title", http.StatusBadRequest)
 		return
 	}
-	if s.agentRepo != nil {
-		info, found, err := s.renameRuntimeSession(id, pid, title)
-		if err != nil {
-			sanitizedError(w, "update project runtime session", err, http.StatusInternalServerError)
-			return
-		}
-		if found {
-			writeJSON(w, info)
-			return
-		}
+	info, found, err := s.renameRuntimeSession(id, pid, title)
+	if err != nil {
+		sanitizedError(w, "update project runtime session", err, http.StatusInternalServerError)
+		return
+	}
+	if found {
+		writeJSON(w, info)
+		return
 	}
 	writeJSONError(w, "session not found", http.StatusNotFound)
 }
@@ -171,29 +121,23 @@ func (s *Server) handleProjectSessionUpdate(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleProjectSessionDelete(w http.ResponseWriter, r *http.Request) {
 	pid := r.PathValue("pid")
 	id := r.PathValue("id")
-	if s.agentRepo != nil {
-		info, ok, err := s.runtimeSessionInfoByID(id)
-		if err != nil {
-			sanitizedError(w, "delete project runtime session", err, http.StatusInternalServerError)
-			return
-		}
-		if ok && info.ProjectID == pid {
-			deleted, err := s.agentRepo.Delete(id)
-			if err != nil {
-				sanitizedError(w, "delete project runtime session", err, http.StatusInternalServerError)
-				return
-			}
-			if deleted {
-				writeJSONOK(w)
-				return
-			}
-		}
+	info, ok, err := s.runtimeSessionInfoByID(id)
+	if err != nil {
+		sanitizedError(w, "delete project runtime session", err, http.StatusInternalServerError)
+		return
 	}
-	sess, ok := s.sessionStore.Get(id)
-	if !ok || sess.ProjectID != pid {
+	if !ok || info.ProjectID != pid || s.agentRepo == nil {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	s.sessionStore.Delete(id)
+	deleted, err := s.agentRepo.Delete(id)
+	if err != nil {
+		sanitizedError(w, "delete project runtime session", err, http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
+		writeJSONError(w, "session not found", http.StatusNotFound)
+		return
+	}
 	writeJSONOK(w)
 }

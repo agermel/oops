@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -362,7 +363,7 @@ func TestEntryDetailsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileStorageLoadsOldJSONL(t *testing.T) {
+func TestFileStorageRejectsLegacyJSONL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s1.jsonl")
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -380,14 +381,83 @@ func TestFileStorageLoadsOldJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := NewRepository(storage)
-	s, err := repo.Load("s1")
+	if _, err := repo.Load("s1"); err == nil {
+		t.Fatal("Load() error = nil, want legacy JSONL rejection")
+	} else if !strings.Contains(err.Error(), "s1.jsonl:1") {
+		t.Fatalf("Load() error = %q, want filename and line", err)
+	}
+	if _, ok := repo.Get("s1"); ok {
+		t.Fatal("failed legacy load populated repository cache")
+	}
+}
+
+func TestEntryUnmarshalRejectsNonV3OrIncompleteWire(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	validMessage := `{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}`
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "missing version", raw: `{"type":"message","id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`},
+		{name: "old version", raw: `{"type":"message","version":2,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`},
+		{name: "legacy entry type", raw: `{"type":"session","version":3,"id":"header","timestamp":"` + now + `"}`},
+		{name: "missing id", raw: `{"type":"session_info","version":3,"timestamp":"` + now + `"}`},
+		{name: "missing timestamp", raw: `{"type":"session_info","version":3,"id":"header"}`},
+		{name: "legacy message shape", raw: `{"type":"message","version":3,"id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var entry Entry
+			if err := json.Unmarshal([]byte(tt.raw), &entry); err == nil {
+				t.Fatalf("json.Unmarshal(%s) error = nil", tt.raw)
+			}
+		})
+	}
+}
+
+func TestSessionLoadIsAtomicOnInvalidSecondEntry(t *testing.T) {
+	session := New("existing")
+	existing := mustAppendMessage(t, session, "keep")
+	before := session.Entries()
+	beforeInfo := session.Info()
+
+	candidate := New("candidate")
+	valid := mustAppendMessage(t, candidate, "candidate")
+	invalid := valid
+	invalid.ID = ""
+	if err := session.Load([]Entry{valid, invalid}); err == nil {
+		t.Fatal("Load() error = nil, want invalid second entry rejection")
+	}
+	after := session.Entries()
+	afterInfo := session.Info()
+	if len(after) != len(before) || after[0].ID != existing.ID || afterInfo.LeafID != beforeInfo.LeafID {
+		t.Fatalf("failed Load mutated session: entries=%#v info=%+v", after, afterInfo)
+	}
+}
+
+func TestRepositoryListDoesNotPartiallyPopulateCache(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := s.BuildContext()
-	assertTexts(t, ctx.Messages, []string{"hello", "world"})
-	if info := s.Info(); info.CWD != "/tmp/project" || info.Summary != "hello" {
-		t.Fatalf("cwd = %q", info.CWD)
+	validSession := New("valid")
+	valid, err := validSession.AppendSessionInfo("/tmp/project", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Append("valid", valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "invalid.jsonl"), []byte(`{"type":"session_info","version":3}\n`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(storage)
+	if _, err := repo.List(); err == nil {
+		t.Fatal("List() error = nil, want invalid file rejection")
+	}
+	if _, ok := repo.Get("valid"); ok {
+		t.Fatal("failed List() partially populated valid cache entry")
 	}
 }
 

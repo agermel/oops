@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"oops/internal/llm/ai/protocol"
@@ -29,7 +31,7 @@ const (
 
 type Entry struct {
 	Type      EntryType `json:"type"`
-	Version   int       `json:"version,omitempty"`
+	Version   int       `json:"version"`
 	ID        string    `json:"id"`
 	ParentID  string    `json:"parentId,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
@@ -59,7 +61,7 @@ type Entry struct {
 
 type entryWire struct {
 	Type             EntryType       `json:"type"`
-	Version          int             `json:"version,omitempty"`
+	Version          int             `json:"version"`
 	ID               string          `json:"id"`
 	ParentID         string          `json:"parentId,omitempty"`
 	Timestamp        time.Time       `json:"timestamp"`
@@ -127,14 +129,14 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	}
 	var message protocol.AgentMessage
 	if len(wire.Message) > 0 {
-		parsed, err := unmarshalEntryMessage(wire.Message)
+		parsed, err := protocol.UnmarshalMessage(wire.Message)
 		if err != nil {
 			return err
 		}
 		message = parsed
 	}
 	*e = Entry{
-		Type:             normalizeEntryType(wire.Type),
+		Type:             wire.Type,
 		Version:          wire.Version,
 		ID:               wire.ID,
 		ParentID:         wire.ParentID,
@@ -164,8 +166,14 @@ func (e Entry) Validate() error {
 	if e.Type == "" {
 		return errors.New("session entry requires type")
 	}
-	if e.ID == "" && e.Type != EntryLeaf && e.Type != EntrySessionInfo {
+	if e.Version != Version {
+		return fmt.Errorf("session entry version %d, want %d", e.Version, Version)
+	}
+	if e.ID == "" {
 		return errors.New("session entry requires id")
+	}
+	if e.Timestamp.IsZero() {
+		return errors.New("session entry requires timestamp")
 	}
 	switch e.Type {
 	case EntrySessionInfo, EntryMessage, EntryModelChange, EntryThinkingLevelChange, EntryActiveToolsChange,
@@ -223,13 +231,6 @@ type Storage interface {
 	Delete(sessionID string) (bool, error)
 }
 
-func normalizeEntryType(entryType EntryType) EntryType {
-	if entryType == "session" {
-		return EntrySessionInfo
-	}
-	return entryType
-}
-
 func cloneEntry(entry Entry) Entry {
 	entry.Message = protocol.CloneMessage(entry.Message)
 	entry.ToolNames = cloneStrings(entry.ToolNames)
@@ -253,16 +254,12 @@ func cloneStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
+	return slices.Clone(values)
 }
 
 func cloneRaw(raw json.RawMessage) json.RawMessage {
 	if raw == nil {
 		return nil
 	}
-	out := make(json.RawMessage, len(raw))
-	copy(out, raw)
-	return out
+	return bytes.Clone(raw)
 }

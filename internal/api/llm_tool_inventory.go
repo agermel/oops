@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,13 +10,6 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 )
-
-func (s *Server) mcpToolInventoryPrompt(ctx context.Context) string {
-	if s.mcpManager == nil {
-		return ""
-	}
-	return formatMCPToolInventory(s.namespacedMCPToolEntries(ctx))
-}
 
 func formatMCPToolInventory(entries []mcp.ConnectionTool) string {
 	if len(entries) == 0 {

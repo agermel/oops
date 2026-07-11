@@ -14,23 +14,6 @@ type SummaryDetails struct {
 	ModifiedFiles []string `json:"modifiedFiles"`
 }
 
-type CompactionPolicy struct {
-	ContextWindow    int
-	ReserveTokens    int
-	KeepRecentTokens int
-}
-
-func (p CompactionPolicy) ShouldCompact(tokens int) bool {
-	if p.ContextWindow <= 0 {
-		return false
-	}
-	reserve := p.ReserveTokens
-	if reserve < 0 {
-		reserve = 0
-	}
-	return tokens > p.ContextWindow-reserve
-}
-
 func (s *Session) SummaryDetailsBefore(firstKeptEntryID string) (SummaryDetails, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

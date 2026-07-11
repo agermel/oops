@@ -104,12 +104,21 @@ func (s *Server) handleNodeletLogsStreamRoute(w http.ResponseWriter, r *http.Req
 
 // handleNodeletLogsStream 透传远端 Nodelet 的容器日志 SSE。
 func (s *Server) handleNodeletLogsStream(w http.ResponseWriter, r *http.Request, item nodelet.NodeletConfig, containerID string) {
-	stream, err := s.nodeletClient.ContainerLogsStream(r.Context(), item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
+	streamCtx, finishStream, ok := s.beginStream(r.Context())
+	if !ok {
+		writeJSONError(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	defer finishStream()
+
+	stream, err := s.nodeletClient.ContainerLogsStream(streamCtx, item.Address, item.Token, containerID, r.URL.Query().Get("tail"))
 	if err != nil {
 		sanitizedError(w, "nodelet logs stream", err, http.StatusServiceUnavailable)
 		return
 	}
 	defer stream.Close()
+	stopClose := context.AfterFunc(streamCtx, func() { _ = stream.Close() })
+	defer stopClose()
 
 	flusher, err := requireFlusher(w)
 	if err != nil {
@@ -307,4 +316,3 @@ func (s *Server) handleNodeletProbeAll(w http.ResponseWriter, r *http.Request) {
 	s.nodeletProber.ProbeAll()
 	writeJSONOK(w)
 }
-

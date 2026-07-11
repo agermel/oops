@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -9,7 +12,20 @@ import (
 	"oops/internal/loghub"
 )
 
-const connectionLogHistorySize = 1000
+const (
+	connectionLogHistorySize     = 1000
+	connectionLogMaxSubscribers  = 32
+	connectionLogSubscriberQueue = 128
+	connectionLogMaxMessageBytes = 16 << 10
+	connectionLogTruncatedMarker = " …[truncated]"
+)
+
+var (
+	// ErrConnectionLogSubscriberLimit reports an overloaded MCP log stream.
+	ErrConnectionLogSubscriberLimit = errors.New("connection log subscriber limit reached")
+	// ErrConnectionLogClosed reports a manager that has stopped serving logs.
+	ErrConnectionLogClosed = errors.New("connection log hub closed")
+)
 
 // LogEntry is a single MCP connection log line.
 type LogEntry struct {
@@ -21,79 +37,108 @@ type LogEntry struct {
 	Level        string    `json:"level,omitempty"`
 }
 
-// ConnectionLogHub keeps recent logs for one MCP connection and fans out live entries.
+// ConnectionLogHub keeps bounded logs for one MCP connection.
 type ConnectionLogHub struct {
 	connectionID string
 	entries      *loghub.Hub[LogEntry]
 }
 
 func NewConnectionLogHub(connectionID string) *ConnectionLogHub {
+	return newConnectionLogHubWithOptions(connectionID, loghub.Options{
+		HistorySize:     connectionLogHistorySize,
+		MaxSubscribers:  connectionLogMaxSubscribers,
+		SubscriberQueue: connectionLogSubscriberQueue,
+	})
+}
+
+func newConnectionLogHubWithOptions(connectionID string, options loghub.Options) *ConnectionLogHub {
 	return &ConnectionLogHub{
 		connectionID: connectionID,
-		entries:      loghub.New[LogEntry](connectionLogHistorySize),
+		entries:      loghub.NewWithOptions[LogEntry](options),
 	}
 }
 
 func (h *ConnectionLogHub) Append(stream, level, message string) {
+	if h == nil {
+		return
+	}
 	message = strings.TrimRight(message, "\r\n")
 	if message == "" {
 		return
 	}
+	message = truncateConnectionLogMessage(message)
 	if level == "" {
 		level = levelFromLogMessage(message)
 	}
-	entry := LogEntry{
+	h.entries.Push(LogEntry{
 		Timestamp:    time.Now(),
 		ConnectionID: h.connectionID,
 		Stream:       stream,
 		Message:      message,
 		RawMessage:   message,
 		Level:        level,
-	}
-	h.entries.Push(entry)
+	})
 }
 
 func (h *ConnectionLogHub) Snapshot(tail int) []LogEntry {
+	if h == nil {
+		return nil
+	}
 	return h.entries.Snapshot(tail)
 }
 
-func (h *ConnectionLogHub) Subscribe(tail int) (<-chan LogEntry, func()) {
-	return h.entries.Subscribe(tail)
+func (h *ConnectionLogHub) Subscribe(tail int) (<-chan LogEntry, func(), error) {
+	if h == nil {
+		return nil, nil, ErrConnectionLogClosed
+	}
+	ch, cancel, err := h.entries.Subscribe(tail)
+	switch {
+	case errors.Is(err, loghub.ErrSubscriberLimit):
+		return nil, nil, ErrConnectionLogSubscriberLimit
+	case errors.Is(err, loghub.ErrClosed):
+		return nil, nil, ErrConnectionLogClosed
+	default:
+		return ch, cancel, err
+	}
+}
+
+func (h *ConnectionLogHub) Close() {
+	if h != nil {
+		h.entries.Close()
+	}
 }
 
 func (h *ConnectionLogHub) LineWriter(stream string) *ConnectionLogLineWriter {
 	return &ConnectionLogLineWriter{hub: h, stream: stream}
 }
 
-// ConnectionLogLineWriter turns chunked process output into connection log lines.
+// ConnectionLogLineWriter turns chunked process output into bounded log lines.
 type ConnectionLogLineWriter struct {
-	mu     sync.Mutex
-	hub    *ConnectionLogHub
-	stream string
-	buf    strings.Builder
+	mu        sync.Mutex
+	hub       *ConnectionLogHub
+	stream    string
+	buf       bytes.Buffer
+	truncated bool
+	closed    bool
 }
 
 func (w *ConnectionLogLineWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	written, err := w.buf.Write(p)
-	if err != nil {
-		return written, err
+	if w.closed {
+		return 0, io.ErrClosedPipe
 	}
 
-	data := w.buf.String()
-	lines := strings.Split(data, "\n")
-	w.buf.Reset()
-
-	limit := len(lines)
-	if !strings.HasSuffix(data, "\n") {
-		limit--
-		_, _ = w.buf.WriteString(lines[len(lines)-1])
-	}
-
-	for _, line := range lines[:limit] {
-		w.emit(line)
+	written := len(p)
+	for len(p) > 0 {
+		lineEnd := bytes.IndexByte(p, '\n')
+		if lineEnd < 0 {
+			w.appendChunk(p)
+			break
+		}
+		w.appendChunk(p[:lineEnd])
+		w.emitBuffered()
+		p = p[lineEnd+1:]
 	}
 	return written, nil
 }
@@ -101,18 +146,49 @@ func (w *ConnectionLogLineWriter) Write(p []byte) (int, error) {
 func (w *ConnectionLogLineWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	w.emit(w.buf.String())
-	w.buf.Reset()
+	if w.closed {
+		return nil
+	}
+	w.emitBuffered()
+	w.closed = true
 	return nil
 }
 
-func (w *ConnectionLogLineWriter) emit(line string) {
-	line = strings.TrimRight(line, "\r")
+func (w *ConnectionLogLineWriter) appendChunk(chunk []byte) {
+	maxContentBytes := connectionLogMaxMessageBytes - len(connectionLogTruncatedMarker)
+	remaining := maxContentBytes - w.buf.Len()
+	if remaining <= 0 {
+		if len(chunk) > 0 {
+			w.truncated = true
+		}
+		return
+	}
+	if len(chunk) > remaining {
+		_, _ = w.buf.Write(chunk[:remaining])
+		w.truncated = true
+		return
+	}
+	_, _ = w.buf.Write(chunk)
+}
+
+func (w *ConnectionLogLineWriter) emitBuffered() {
+	line := strings.TrimRight(w.buf.String(), "\r")
+	if w.truncated {
+		line += connectionLogTruncatedMarker
+	}
+	w.buf.Reset()
+	w.truncated = false
 	if strings.TrimSpace(line) == "" {
 		return
 	}
 	w.hub.Append(w.stream, "", line)
+}
+
+func truncateConnectionLogMessage(message string) string {
+	if len(message) <= connectionLogMaxMessageBytes {
+		return message
+	}
+	return message[:connectionLogMaxMessageBytes-len(connectionLogTruncatedMarker)] + connectionLogTruncatedMarker
 }
 
 func levelFromLogMessage(message string) string {
