@@ -793,6 +793,128 @@ func TestManagerCloseWaitsForBlockedToolCallback(t *testing.T) {
 	goleak.VerifyNone(t, ignoreExisting)
 }
 
+func TestManagerShutdownCanResumeAfterCallbackDeadline(t *testing.T) {
+	ignoreExisting := goleak.IgnoreCurrent()
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseCallback) }) })
+	var callbackOnce sync.Once
+	manager, runtime := newMCPManagerForTest(t, func([]ConnectionTool) {
+		callbackOnce.Do(func() { close(callbackEntered) })
+		<-releaseCallback
+	})
+	manager.startProc = func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error) {
+		return &managedProcess{
+			tools:  []tool.BaseTool{toolBaseForTest{name: "inspect", desc: "inspect state"}},
+			closer: func() {},
+		}, nil
+	}
+	if err := manager.Add(testMCPConnectionConfig("shutdown-callback", true)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	select {
+	case <-callbackEntered:
+	case <-time.After(time.Second):
+		t.Fatal("tool callback did not start")
+	}
+
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelShort()
+	if err := manager.Shutdown(shortCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown with blocked callback = %v, want context deadline exceeded", err)
+	}
+
+	releaseOnce.Do(func() { close(releaseCallback) })
+	longCtx, cancelLong := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLong()
+	if err := manager.Shutdown(longCtx); err != nil {
+		t.Fatalf("Shutdown after callback drain: %v", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("close runtime: %v", err)
+	}
+	goleak.VerifyNone(t, ignoreExisting)
+}
+
+func TestManagerShutdownDrainsLeasedToolAfterDeadline(t *testing.T) {
+	ignoreExisting := goleak.IgnoreCurrent()
+	releaseCall := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseCall) }) })
+	base := &blockingInvokableTool{started: make(chan struct{}), release: releaseCall}
+	closed := make(chan struct{})
+	manager, runtime := newMCPManagerForTest(t, nil)
+	manager.startProc = func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error) {
+		return &managedProcess{
+			tools:  []tool.BaseTool{base},
+			closer: func() { close(closed) },
+		}, nil
+	}
+	if err := manager.Add(testMCPConnectionConfig("shutdown-lease", true)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	var invokable tool.InvokableTool
+	waitForMCP(t, func() bool {
+		entries := manager.GetConnectionToolEntries()
+		if len(entries) != 1 {
+			return false
+		}
+		var ok bool
+		invokable, ok = entries[0].Tool.(tool.InvokableTool)
+		return ok
+	})
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := invokable.InvokableRun(t.Context(), "{}")
+		callDone <- err
+	}()
+	select {
+	case <-base.started:
+	case <-time.After(time.Second):
+		t.Fatal("tool call did not start")
+	}
+
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelShort()
+	if err := manager.Shutdown(shortCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown with leased tool = %v, want context deadline exceeded", err)
+	}
+	if _, err := invokable.InvokableRun(t.Context(), "{}"); !errors.Is(err, ErrConnectionDraining) {
+		t.Fatalf("tool call during shutdown = %v, want ErrConnectionDraining", err)
+	}
+	select {
+	case <-closed:
+		t.Fatal("process closed before leased tool completed")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(releaseCall) })
+	select {
+	case err := <-callDone:
+		if err != nil {
+			t.Fatalf("leased tool: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("leased tool did not finish")
+	}
+	longCtx, cancelLong := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLong()
+	if err := manager.Shutdown(longCtx); err != nil {
+		t.Fatalf("Shutdown after lease drain: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("process closer was not called")
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("close runtime: %v", err)
+	}
+	goleak.VerifyNone(t, ignoreExisting)
+}
+
 func TestManagerCloseCancelsBlockedStart(t *testing.T) {
 	ignoreExisting := goleak.IgnoreCurrent()
 	startEntered := make(chan struct{})

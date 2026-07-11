@@ -163,6 +163,7 @@ type Manager struct {
 	pendingChange    *toolChange
 	notificationStop bool
 	closeOnce        sync.Once
+	closeDone        chan struct{}
 	closed           bool
 }
 
@@ -913,45 +914,69 @@ func normalizedTransport(transport string) string {
 	return transport
 }
 
-func (m *Manager) Close() {
+// Shutdown starts the manager shutdown and waits until resources have drained
+// or ctx expires. Drain continues in the background after a caller deadline.
+func (m *Manager) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.closeOnce.Do(func() {
-		m.mutationMu.Lock()
-		m.mu.Lock()
-		m.closed = true
-		if m.cancel != nil {
-			m.cancel()
-		}
-		for id, start := range m.starting {
-			delete(m.starting, id)
-			if start.cancel != nil {
-				start.cancel()
-			}
-		}
-		for id := range m.processes {
-			m.detachProcessLocked(id)
-		}
-		processes := make([]*managedProcess, 0, len(m.draining))
-		for proc := range m.draining {
-			processes = append(processes, proc)
-		}
-		logHubs := make([]*ConnectionLogHub, 0, len(m.logs))
-		for _, hub := range m.logs {
-			logHubs = append(logHubs, hub)
-		}
-		m.logs = nil
-		m.visibleTools = nil
-		m.mu.Unlock()
-
-		m.closeNotificationDispatcher()
-		m.mutationMu.Unlock()
-		for _, hub := range logHubs {
-			hub.Close()
-		}
-		m.workers.Wait()
-		for _, proc := range processes {
-			m.closeDetachedProcess(proc)
-		}
+		m.closeDone = make(chan struct{})
+		go m.closeResources()
 	})
+
+	select {
+	case <-m.closeDone:
+		return nil
+	case <-ctx.Done():
+		logutil.Warn("mcp: shutdown still draining", zap.Error(ctx.Err()))
+		return ctx.Err()
+	}
+}
+
+// Close waits until the manager has drained all owned resources.
+func (m *Manager) Close() {
+	_ = m.Shutdown(context.Background())
+}
+
+func (m *Manager) closeResources() {
+	defer close(m.closeDone)
+	m.mutationMu.Lock()
+	m.mu.Lock()
+	m.closed = true
+	if m.cancel != nil {
+		m.cancel()
+	}
+	for id, start := range m.starting {
+		delete(m.starting, id)
+		if start.cancel != nil {
+			start.cancel()
+		}
+	}
+	for id := range m.processes {
+		m.detachProcessLocked(id)
+	}
+	processes := make([]*managedProcess, 0, len(m.draining))
+	for proc := range m.draining {
+		processes = append(processes, proc)
+	}
+	logHubs := make([]*ConnectionLogHub, 0, len(m.logs))
+	for _, hub := range m.logs {
+		logHubs = append(logHubs, hub)
+	}
+	m.logs = nil
+	m.visibleTools = nil
+	m.mu.Unlock()
+
+	m.closeNotificationDispatcher()
+	m.mutationMu.Unlock()
+	for _, hub := range logHubs {
+		hub.Close()
+	}
+	m.workers.Wait()
+	for _, proc := range processes {
+		m.closeDetachedProcess(proc)
+	}
 }
 
 func (m *Manager) lifecycleContext() context.Context {
