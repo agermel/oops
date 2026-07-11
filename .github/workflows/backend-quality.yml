@@ -117,9 +117,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install fixed uv release
+      - name: Install fixed uv and CPython releases
         run: |
           ./scripts/fetch-uv.sh linux/amd64 "$RUNNER_TEMP/uv-bin"
+          export PATH="$RUNNER_TEMP/uv-bin:$PATH"
+          ./scripts/fetch-python.sh linux/amd64 "$RUNNER_TEMP/uv-python"
           echo "$RUNNER_TEMP/uv-bin" >> "$GITHUB_PATH"
       - name: Validate locked wrapper environments
         shell: bash
@@ -127,7 +129,12 @@ jobs:
           for wrapper in nacos redis elasticsearch; do
             directory="mcp-servers/$wrapper"
             uv lock --directory "$directory" --check
-            UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/mcp-venvs/$wrapper" uv sync --directory "$directory" --locked
+            UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/mcp-venvs/$wrapper" \
+              UV_PYTHON_INSTALL_DIR="$RUNNER_TEMP/uv-python" \
+              UV_PYTHON=3.12.13 \
+              UV_MANAGED_PYTHON=1 \
+              UV_PYTHON_DOWNLOADS=never \
+              uv sync --directory "$directory" --locked
             if uv export --help | rg -q 'requirements-txt'; then
               uv export --directory "$directory" --locked --format requirements-txt --generate-hashes > "$RUNNER_TEMP/$wrapper-requirements.txt"
             else

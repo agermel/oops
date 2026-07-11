@@ -89,6 +89,34 @@
       "license": "MIT OR Apache-2.0",
       "build_or_fetch": "./scripts/fetch-uv.sh darwin/arm64",
       "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "cpython",
+      "source": "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.12.13%2B20260623-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "version": "3.12.13",
+      "build": "20260623",
+      "target": "cpython-3.12.13-linux-x86_64-gnu",
+      "archive": "cpython-3.12.13%2B20260623-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "platform": "linux/amd64",
+      "integrity_kind": "python-standalone-archive",
+      "sha256": "10a452caac7041357805f0c19a60576df53f1ab06d1abfc9200f1f0157cb3bd1",
+      "license": "PSF-2.0",
+      "build_or_fetch": "./scripts/fetch-python.sh linux/amd64",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "cpython",
+      "source": "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.12.13%2B20260623-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "version": "3.12.13",
+      "build": "20260623",
+      "target": "cpython-3.12.13-linux-aarch64-gnu",
+      "archive": "cpython-3.12.13%2B20260623-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "platform": "linux/arm64",
+      "integrity_kind": "python-standalone-archive",
+      "sha256": "b85154b9c7ca9de3f85f2c9f032d503151db16ef198de86b885fc61890c075ed",
+      "license": "PSF-2.0",
+      "build_or_fetch": "./scripts/fetch-python.sh linux/arm64",
+      "verify": "./scripts/verify-artifacts.sh"
     }
   ]
 }

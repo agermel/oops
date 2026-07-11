@@ -21,7 +21,7 @@ jq -e '
   def nonempty_string: type == "string" and length > 0;
   def integrity_kind:
     type == "string"
-    and test("^(go-source-tree|go-module-zip|python-wheel|release-archive)$");
+    and test("^(go-source-tree|go-module-zip|python-wheel|release-archive|python-standalone-archive)$");
   .artifacts
   | type == "array" and length > 0
   and all(.[];
@@ -39,6 +39,10 @@ jq -e '
         if .integrity_kind == "go-module-zip" then
           (.module | type == "string" and test("^[A-Za-z0-9._/-]+$"))
           and (.revision | type == "string" and test("^[0-9a-f]{40}$"))
+        elif .integrity_kind == "python-standalone-archive" then
+          (.build | type == "string" and test("^[0-9]{8}$"))
+          and (.target | type == "string" and test("^cpython-[0-9]+\\.[0-9]+\\.[0-9]+-linux-(x86_64|aarch64)-gnu$"))
+          and (.archive | type == "string" and endswith(".tar.gz"))
         else
           true
         end
@@ -207,6 +211,44 @@ verify_uv_fetch_hash() {
 	fi
 }
 
+verify_cpython_runtime_lock() {
+	local platform="$1"
+	local source version build target archive hash expected_source wrapper
+
+	source="$(manifest_value cpython source "$platform")"
+	version="$(manifest_value cpython version "$platform")"
+	build="$(manifest_value cpython build "$platform")"
+	target="$(manifest_value cpython target "$platform")"
+	archive="$(manifest_value cpython archive "$platform")"
+	hash="$(manifest_value cpython sha256 "$platform")"
+	expected_source="https://github.com/astral-sh/python-build-standalone/releases/download/$build/$archive"
+	if [[ "$source" != "$expected_source" ]]; then
+		echo "manifest CPython source does not match its build and archive for $platform" >&2
+		return 1
+	fi
+	for wrapper in nacos redis elasticsearch; do
+		if ! rg -Fq "requires-python = \"==$version\"" "$root/mcp-servers/$wrapper/pyproject.toml" || \
+			! rg -Fq "requires-python = \"==$version\"" "$root/mcp-servers/$wrapper/uv.lock"; then
+			echo "CPython version does not match $wrapper lock" >&2
+			return 1
+		fi
+	done
+	if ! rg -Fq "version=\"$version\"" "$root/scripts/fetch-python.sh" || \
+		! rg -Fq "build=\"$build\"" "$root/scripts/fetch-python.sh" || \
+		! rg -Fq "target=\"$target\"" "$root/scripts/fetch-python.sh" || \
+		! rg -Fq "archive=\"$archive\"" "$root/scripts/fetch-python.sh" || \
+		! rg -Fq "expected=\"$hash\"" "$root/scripts/fetch-python.sh"; then
+		echo "manifest CPython data does not match fetch script for $platform" >&2
+		return 1
+	fi
+	if ! rg -Fq '/usr/local/lib/oops/fetch-python.sh "${TARGETOS}/${TARGETARCH}" /opt/oops/uv-python' "$root/deployment/Dockerfile" || \
+		! rg -Fq "UV_PYTHON=$version" "$root/deployment/Dockerfile" || \
+		! rg -Fq 'UV_MANAGED_PYTHON=1' "$root/deployment/Dockerfile"; then
+		echo "Docker runtime does not select the locked CPython interpreter" >&2
+		return 1
+	fi
+}
+
 if should_verify etcd-mcp-server; then
 	verify_go_source_tree etcd-mcp-server
 fi
@@ -226,6 +268,8 @@ if [[ -z "$only_artifact" ]]; then
 	verify_uv_fetch_hash linux/amd64
 	verify_uv_fetch_hash linux/arm64
 	verify_uv_fetch_hash darwin/arm64
+	verify_cpython_runtime_lock linux/amd64
+	verify_cpython_runtime_lock linux/arm64
 
 	found=0
 	while IFS= read -r -d '' file_path; do

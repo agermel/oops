@@ -2,7 +2,7 @@
 name = "oops-elasticsearch-mcp-wrapper"
 version = "0.1.0"
 description = "Pinned Elasticsearch MCP wrapper"
-requires-python = ">=3.12,<3.13"
+requires-python = "==3.12.13"
 dependencies = [
     "elasticsearch-mcp-server==2.1.2",
 ]

@@ -2,7 +2,7 @@
 name = "oops-nacos-mcp-wrapper"
 version = "0.1.0"
 description = "Pinned Nacos MCP wrapper"
-requires-python = ">=3.12,<3.13"
+requires-python = "==3.12.13"
 dependencies = [
     "nacos-mcp-router==0.2.2",
 ]

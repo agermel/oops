@@ -2,7 +2,7 @@
 name = "oops-redis-mcp-wrapper"
 version = "0.1.0"
 description = "Pinned Redis MCP wrapper"
-requires-python = ">=3.12,<3.13"
+requires-python = "==3.12.13"
 dependencies = [
     "redis-mcp-server==0.5.0",
 ]
