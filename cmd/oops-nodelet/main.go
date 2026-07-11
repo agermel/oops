@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"oops/internal/common"
 	"oops/internal/docker"
 	"oops/internal/logutil"
 	"oops/internal/nodelet"
@@ -26,7 +25,7 @@ import (
 // 首次启动时生成随机 token 并持久化到文件，后续启动直接读文件。
 // token 文件路径可通过 OOPS_NODELET_TOKEN_FILE 指定（默认 /var/lib/oops/nodelet/token）。
 func resolveToken() string {
-	tokenFile := common.EnvOrDefault("OOPS_NODELET_TOKEN_FILE", "/var/lib/oops/nodelet/token")
+	tokenFile := envOrDefault("OOPS_NODELET_TOKEN_FILE", "/var/lib/oops/nodelet/token")
 
 	// 从持久化文件读取。
 	if data, err := os.ReadFile(tokenFile); err == nil && len(data) > 0 {
@@ -57,11 +56,11 @@ func resolveToken() string {
 
 // 子服务器的 nodelet 进程
 func main() {
-	logPath := common.EnvOrDefault("OOPS_NODELET_LOG_PATH", "/var/log/oops/nodelet.log")
+	logPath := envOrDefault("OOPS_NODELET_LOG_PATH", "/var/log/oops/nodelet.log")
 	logutil.Init(false, nil, logPath)
 
-	addr := common.EnvOrDefault("OOPS_NODELET_ADDR", ":8686")
-	publicAddress := common.EnvOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
+	addr := envOrDefault("OOPS_NODELET_ADDR", ":8686")
+	publicAddress := envOrDefault("OOPS_NODELET_PUBLIC_ADDRESS", "http://localhost"+addr)
 
 	token := resolveToken()
 
@@ -117,4 +116,11 @@ func main() {
 		logutil.Fatalf("shutdown: %v", err)
 	}
 	logutil.Infof("stopped")
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

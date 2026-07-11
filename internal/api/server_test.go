@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"oops/internal/auth"
-	"oops/internal/config"
 	"oops/internal/nodelet"
+	"oops/internal/project"
 	runtimestore "oops/internal/store/runtime"
 
 	"golang.org/x/crypto/bcrypt"
@@ -40,7 +40,7 @@ func testNodeletManager(t *testing.T) *nodelet.NodeletManager {
 	return nm
 }
 
-func testProjectStore(t *testing.T) *config.ProjectStore {
+func testProjectStore(t *testing.T) *project.Store {
 	t.Helper()
 	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
 	if err != nil {
@@ -49,9 +49,9 @@ func testProjectStore(t *testing.T) *config.ProjectStore {
 	t.Cleanup(func() {
 		_ = runtime.Close()
 	})
-	store, err := config.NewProjectStoreWithRuntime(runtime)
+	store, err := project.NewStore(runtime)
 	if err != nil {
-		t.Fatalf("NewProjectStoreWithRuntime: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	return store
 }
@@ -201,7 +201,7 @@ func TestHandleProjectCreateGeneratesID(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d, body = %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	var project config.Project
+	var project project.Project
 	if err := json.NewDecoder(response.Body).Decode(&project); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestHandleProjectCreateRejectsDuplicateName(t *testing.T) {
 	userStore, tokenService, jwtToken := testAuthSetup(t)
 
 	projectStore := testProjectStore(t)
-	if err := projectStore.Add(config.Project{ID: "project-1", Name: "CCNU Box"}); err != nil {
+	if err := projectStore.Add(project.Project{ID: "project-1", Name: "CCNU Box"}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
 	server := New(Options{
@@ -241,6 +241,58 @@ func TestHandleProjectCreateRejectsDuplicateName(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "already exists") {
 		t.Fatalf("body = %s", response.Body.String())
+	}
+}
+
+func TestHandleProjectUpdateCollectionPresence(t *testing.T) {
+	userStore, tokenService, jwtToken := testAuthSetup(t)
+	projectStore := testProjectStore(t)
+	if err := projectStore.Add(project.Project{
+		ID:                    "project-1",
+		Name:                  "Project",
+		NodeletIDs:            []string{"nodelet-1", "nodelet-2"},
+		ExcludedContainerRefs: []string{"nodelet-1/container-1"},
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	original := projectStore.Get("project-1")
+	server := New(Options{UserStore: userStore, TokenService: tokenService})
+	server.projectStore = projectStore
+
+	update := func(body string) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPut, "/api/projects/project-1", bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.AddCookie(&http.Cookie{Name: "jwt", Value: jwtToken})
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("PUT body=%s: status=%d body=%s", body, response.Code, response.Body.String())
+		}
+	}
+
+	update(`{"name":"Omitted"}`)
+	if got := projectStore.Get("project-1"); len(got.NodeletIDs) != 2 || len(got.ExcludedContainerRefs) != 1 {
+		t.Fatalf("omitted collections changed: %+v", got)
+	}
+
+	update(`{"name":"Null","nodeletIds":null,"excludedContainerRefs":null}`)
+	if got := projectStore.Get("project-1"); len(got.NodeletIDs) != 2 || len(got.ExcludedContainerRefs) != 1 {
+		t.Fatalf("null collections changed: %+v", got)
+	}
+
+	update(`{"name":"Empty","nodeletIds":[],"excludedContainerRefs":[]}`)
+	if got := projectStore.Get("project-1"); len(got.NodeletIDs) != 0 || len(got.ExcludedContainerRefs) != 0 {
+		t.Fatalf("empty collections were not applied: %+v", got)
+	}
+
+	update(`{"name":"Arrays","nodeletIds":["nodelet-3"],"excludedContainerRefs":["nodelet-3/container-3"],"createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z"}`)
+	got := projectStore.Get("project-1")
+	if len(got.NodeletIDs) != 1 || got.NodeletIDs[0] != "nodelet-3" || len(got.ExcludedContainerRefs) != 1 || got.ExcludedContainerRefs[0] != "nodelet-3/container-3" {
+		t.Fatalf("arrays were not applied: %+v", got)
+	}
+	if !got.CreatedAt.Equal(original.CreatedAt) {
+		t.Fatalf("client createdAt replaced server time: %s -> %s", original.CreatedAt, got.CreatedAt)
 	}
 }
 

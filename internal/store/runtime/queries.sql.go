@@ -53,15 +53,6 @@ func (q *Queries) CountProjects(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const deleteAllDSNEntries = `-- name: DeleteAllDSNEntries :exec
-DELETE FROM container_dsn_entries
-`
-
-func (q *Queries) DeleteAllDSNEntries(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteAllDSNEntries)
-	return err
-}
-
 const deleteAllMCPConnections = `-- name: DeleteAllMCPConnections :exec
 DELETE FROM mcp_connections
 `
@@ -80,30 +71,67 @@ func (q *Queries) DeleteAllNodelets(ctx context.Context) error {
 	return err
 }
 
-const deleteAllProjectExclusions = `-- name: DeleteAllProjectExclusions :exec
-DELETE FROM project_excluded_containers
+const deleteDSNEntriesForContainer = `-- name: DeleteDSNEntriesForContainer :exec
+DELETE FROM container_dsn_entries
+WHERE nodelet_id = ? AND container_id = ?
 `
 
-func (q *Queries) DeleteAllProjectExclusions(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteAllProjectExclusions)
+type DeleteDSNEntriesForContainerParams struct {
+	NodeletID   string `json:"nodelet_id"`
+	ContainerID string `json:"container_id"`
+}
+
+func (q *Queries) DeleteDSNEntriesForContainer(ctx context.Context, arg DeleteDSNEntriesForContainerParams) error {
+	_, err := q.db.ExecContext(ctx, deleteDSNEntriesForContainer, arg.NodeletID, arg.ContainerID)
 	return err
 }
 
-const deleteAllProjectNodelets = `-- name: DeleteAllProjectNodelets :exec
-DELETE FROM project_nodelets
+const deleteDSNEntry = `-- name: DeleteDSNEntry :exec
+DELETE FROM container_dsn_entries
+WHERE nodelet_id = ? AND container_id = ? AND key = ?
 `
 
-func (q *Queries) DeleteAllProjectNodelets(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteAllProjectNodelets)
+type DeleteDSNEntryParams struct {
+	NodeletID   string `json:"nodelet_id"`
+	ContainerID string `json:"container_id"`
+	Key         string `json:"key"`
+}
+
+func (q *Queries) DeleteDSNEntry(ctx context.Context, arg DeleteDSNEntryParams) error {
+	_, err := q.db.ExecContext(ctx, deleteDSNEntry, arg.NodeletID, arg.ContainerID, arg.Key)
 	return err
 }
 
-const deleteAllProjects = `-- name: DeleteAllProjects :exec
+const deleteProject = `-- name: DeleteProject :execrows
 DELETE FROM projects
+WHERE id = ?
 `
 
-func (q *Queries) DeleteAllProjects(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteAllProjects)
+func (q *Queries) DeleteProject(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProject, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteProjectExclusions = `-- name: DeleteProjectExclusions :exec
+DELETE FROM project_excluded_containers
+WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectExclusions(ctx context.Context, projectID string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectExclusions, projectID)
+	return err
+}
+
+const deleteProjectNodelets = `-- name: DeleteProjectNodelets :exec
+DELETE FROM project_nodelets
+WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectNodelets(ctx context.Context, projectID string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectNodelets, projectID)
 	return err
 }
 
@@ -115,6 +143,26 @@ func (q *Queries) GetAgentSettings(ctx context.Context) (AgentSetting, error) {
 	row := q.db.QueryRowContext(ctx, getAgentSettings)
 	var i AgentSetting
 	err := row.Scan(&i.ID, &i.MaxTurns, &i.UpdatedAt)
+	return i, err
+}
+
+const getProject = `-- name: GetProject :one
+SELECT id, name, description, github_repo, created_at, updated_at
+FROM projects
+WHERE id = ?
+`
+
+func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
+	row := q.db.QueryRowContext(ctx, getProject, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.GithubRepo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -311,6 +359,46 @@ func (q *Queries) ListDSNEntries(ctx context.Context) ([]ContainerDsnEntry, erro
 	return items, nil
 }
 
+const listDSNEntriesForContainer = `-- name: ListDSNEntriesForContainer :many
+SELECT nodelet_id, container_id, key, value
+FROM container_dsn_entries
+WHERE nodelet_id = ? AND container_id = ?
+ORDER BY key
+`
+
+type ListDSNEntriesForContainerParams struct {
+	NodeletID   string `json:"nodelet_id"`
+	ContainerID string `json:"container_id"`
+}
+
+func (q *Queries) ListDSNEntriesForContainer(ctx context.Context, arg ListDSNEntriesForContainerParams) ([]ContainerDsnEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listDSNEntriesForContainer, arg.NodeletID, arg.ContainerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ContainerDsnEntry
+	for rows.Next() {
+		var i ContainerDsnEntry
+		if err := rows.Scan(
+			&i.NodeletID,
+			&i.ContainerID,
+			&i.Key,
+			&i.Value,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMCPConnections = `-- name: ListMCPConnections :many
 SELECT
   id,
@@ -398,7 +486,7 @@ func (q *Queries) ListNodelets(ctx context.Context) ([]Nodelet, error) {
 const listProjectExclusions = `-- name: ListProjectExclusions :many
 SELECT project_id, ref
 FROM project_excluded_containers
-ORDER BY project_id, rowid
+ORDER BY project_id, ref
 `
 
 func (q *Queries) ListProjectExclusions(ctx context.Context) ([]ProjectExcludedContainer, error) {
@@ -424,10 +512,40 @@ func (q *Queries) ListProjectExclusions(ctx context.Context) ([]ProjectExcludedC
 	return items, nil
 }
 
+const listProjectExclusionsForProject = `-- name: ListProjectExclusionsForProject :many
+SELECT project_id, ref
+FROM project_excluded_containers
+WHERE project_id = ?
+ORDER BY ref
+`
+
+func (q *Queries) ListProjectExclusionsForProject(ctx context.Context, projectID string) ([]ProjectExcludedContainer, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectExclusionsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectExcludedContainer
+	for rows.Next() {
+		var i ProjectExcludedContainer
+		if err := rows.Scan(&i.ProjectID, &i.Ref); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectNodelets = `-- name: ListProjectNodelets :many
 SELECT project_id, nodelet_id, position
 FROM project_nodelets
-ORDER BY project_id, position
+ORDER BY project_id, position, nodelet_id
 `
 
 func (q *Queries) ListProjectNodelets(ctx context.Context) ([]ProjectNodelet, error) {
@@ -453,10 +571,40 @@ func (q *Queries) ListProjectNodelets(ctx context.Context) ([]ProjectNodelet, er
 	return items, nil
 }
 
+const listProjectNodeletsForProject = `-- name: ListProjectNodeletsForProject :many
+SELECT project_id, nodelet_id, position
+FROM project_nodelets
+WHERE project_id = ?
+ORDER BY position, nodelet_id
+`
+
+func (q *Queries) ListProjectNodeletsForProject(ctx context.Context, projectID string) ([]ProjectNodelet, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectNodeletsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectNodelet
+	for rows.Next() {
+		var i ProjectNodelet
+		if err := rows.Scan(&i.ProjectID, &i.NodeletID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
 SELECT id, name, description, github_repo, created_at, updated_at
 FROM projects
-ORDER BY rowid
+ORDER BY created_at, id
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -489,6 +637,34 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	return items, nil
 }
 
+const updateProject = `-- name: UpdateProject :execrows
+UPDATE projects
+SET name = ?, description = ?, github_repo = ?, updated_at = ?
+WHERE id = ?
+`
+
+type UpdateProjectParams struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	GithubRepo  string `json:"github_repo"`
+	UpdatedAt   int64  `json:"updated_at"`
+	ID          string `json:"id"`
+}
+
+func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProject,
+		arg.Name,
+		arg.Description,
+		arg.GithubRepo,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertAgentSettings = `-- name: UpsertAgentSettings :exec
 INSERT INTO agent_settings (id, max_turns, updated_at)
 VALUES ('default', ?, ?)
@@ -504,6 +680,29 @@ type UpsertAgentSettingsParams struct {
 
 func (q *Queries) UpsertAgentSettings(ctx context.Context, arg UpsertAgentSettingsParams) error {
 	_, err := q.db.ExecContext(ctx, upsertAgentSettings, arg.MaxTurns, arg.UpdatedAt)
+	return err
+}
+
+const upsertDSNEntry = `-- name: UpsertDSNEntry :exec
+INSERT INTO container_dsn_entries (nodelet_id, container_id, key, value)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(nodelet_id, container_id, key) DO UPDATE SET value = excluded.value
+`
+
+type UpsertDSNEntryParams struct {
+	NodeletID   string `json:"nodelet_id"`
+	ContainerID string `json:"container_id"`
+	Key         string `json:"key"`
+	Value       string `json:"value"`
+}
+
+func (q *Queries) UpsertDSNEntry(ctx context.Context, arg UpsertDSNEntryParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDSNEntry,
+		arg.NodeletID,
+		arg.ContainerID,
+		arg.Key,
+		arg.Value,
+	)
 	return err
 }
 

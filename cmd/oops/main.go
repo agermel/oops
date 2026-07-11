@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"oops/internal/api"
-	"oops/internal/common"
 	"oops/internal/config"
 	"oops/internal/console"
 	"oops/internal/logutil"
@@ -42,7 +41,10 @@ func main() {
 	server.Mount(mux)
 	handler := web.MountStatic(mux, "web/dist", server.TokenService, server.UserStore)
 
-	addr := common.EnvOrDefault("OOPS_ADDR", ":8081")
+	addr := os.Getenv("OOPS_ADDR")
+	if addr == "" {
+		addr = ":8081"
+	}
 
 	httpServer := &http.Server{
 		Addr:         addr,

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -285,13 +286,14 @@ func (s *Store) ListProjects(ctx context.Context) ([]ProjectRecord, error) {
 	out := make([]ProjectRecord, len(projects))
 	for i, row := range projects {
 		out[i] = ProjectRecord{
-			ID:          row.ID,
-			Name:        row.Name,
-			Description: row.Description,
-			GitHubRepo:  row.GithubRepo,
-			NodeletIDs:  []string{},
-			CreatedAt:   timeFromUnixMilli(row.CreatedAt),
-			UpdatedAt:   timeFromUnixMilli(row.UpdatedAt),
+			ID:                    row.ID,
+			Name:                  row.Name,
+			Description:           row.Description,
+			GitHubRepo:            row.GithubRepo,
+			NodeletIDs:            []string{},
+			ExcludedContainerRefs: []string{},
+			CreatedAt:             timeFromUnixMilli(row.CreatedAt),
+			UpdatedAt:             timeFromUnixMilli(row.UpdatedAt),
 		}
 		byID[row.ID] = i
 	}
@@ -308,48 +310,120 @@ func (s *Store) ListProjects(ctx context.Context) ([]ProjectRecord, error) {
 	return out, nil
 }
 
-func (s *Store) ReplaceProjects(ctx context.Context, rows []ProjectRecord) error {
+func (s *Store) GetProject(ctx context.Context, id string) (*ProjectRecord, error) {
+	project, err := s.q.GetProject(ctx, id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	nodelets, err := s.q.ListProjectNodeletsForProject(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	exclusions, err := s.q.ListProjectExclusionsForProject(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	row := ProjectRecord{
+		ID:                    project.ID,
+		Name:                  project.Name,
+		Description:           project.Description,
+		GitHubRepo:            project.GithubRepo,
+		NodeletIDs:            make([]string, len(nodelets)),
+		ExcludedContainerRefs: make([]string, len(exclusions)),
+		CreatedAt:             timeFromUnixMilli(project.CreatedAt),
+		UpdatedAt:             timeFromUnixMilli(project.UpdatedAt),
+	}
+	for i, nodelet := range nodelets {
+		row.NodeletIDs[i] = nodelet.NodeletID
+	}
+	for i, exclusion := range exclusions {
+		row.ExcludedContainerRefs[i] = exclusion.Ref
+	}
+	return &row, nil
+}
+
+func (s *Store) CreateProject(ctx context.Context, row ProjectRecord) error {
+	row = cloneProjectRecord(row)
 	return s.tx(ctx, func(q *Queries) error {
-		if err := q.DeleteAllProjectExclusions(ctx); err != nil {
+		if err := q.InsertProject(ctx, InsertProjectParams{
+			ID:          row.ID,
+			Name:        row.Name,
+			Description: row.Description,
+			GithubRepo:  row.GitHubRepo,
+			CreatedAt:   timeToUnixMilli(row.CreatedAt),
+			UpdatedAt:   timeToUnixMilli(row.UpdatedAt),
+		}); err != nil {
 			return err
 		}
-		if err := q.DeleteAllProjectNodelets(ctx); err != nil {
-			return err
-		}
-		if err := q.DeleteAllProjects(ctx); err != nil {
-			return err
-		}
-		for _, row := range rows {
-			if err := q.InsertProject(ctx, InsertProjectParams{
-				ID:          row.ID,
-				Name:        row.Name,
-				Description: row.Description,
-				GithubRepo:  row.GitHubRepo,
-				CreatedAt:   timeToUnixMilli(row.CreatedAt),
-				UpdatedAt:   timeToUnixMilli(row.UpdatedAt),
-			}); err != nil {
-				return err
-			}
-			for i, nodeletID := range row.NodeletIDs {
-				if err := q.InsertProjectNodelet(ctx, InsertProjectNodeletParams{
-					ProjectID: row.ID,
-					NodeletID: nodeletID,
-					Position:  int64(i),
-				}); err != nil {
-					return err
-				}
-			}
-			for _, ref := range row.ExcludedContainerRefs {
-				if err := q.InsertProjectExclusion(ctx, InsertProjectExclusionParams{
-					ProjectID: row.ID,
-					Ref:       ref,
-				}); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return writeProjectCollections(ctx, q, row)
 	})
+}
+
+func (s *Store) UpdateProject(ctx context.Context, row ProjectRecord) error {
+	row = cloneProjectRecord(row)
+	return s.tx(ctx, func(q *Queries) error {
+		updated, err := q.UpdateProject(ctx, UpdateProjectParams{
+			ID:          row.ID,
+			Name:        row.Name,
+			Description: row.Description,
+			GithubRepo:  row.GitHubRepo,
+			UpdatedAt:   timeToUnixMilli(row.UpdatedAt),
+		})
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return fmt.Errorf("project %q not found", row.ID)
+		}
+		if err := q.DeleteProjectNodelets(ctx, row.ID); err != nil {
+			return err
+		}
+		if err := q.DeleteProjectExclusions(ctx, row.ID); err != nil {
+			return err
+		}
+		return writeProjectCollections(ctx, q, row)
+	})
+}
+
+func (s *Store) DeleteProject(ctx context.Context, id string) error {
+	deleted, err := s.q.DeleteProject(ctx, id)
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return fmt.Errorf("project %q not found", id)
+	}
+	return nil
+}
+
+func writeProjectCollections(ctx context.Context, q *Queries, row ProjectRecord) error {
+	for i, nodeletID := range row.NodeletIDs {
+		if err := q.InsertProjectNodelet(ctx, InsertProjectNodeletParams{
+			ProjectID: row.ID,
+			NodeletID: nodeletID,
+			Position:  int64(i),
+		}); err != nil {
+			return err
+		}
+	}
+	for _, ref := range row.ExcludedContainerRefs {
+		if err := q.InsertProjectExclusion(ctx, InsertProjectExclusionParams{
+			ProjectID: row.ID,
+			Ref:       ref,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cloneProjectRecord(row ProjectRecord) ProjectRecord {
+	row.NodeletIDs = append([]string(nil), row.NodeletIDs...)
+	row.ExcludedContainerRefs = append([]string(nil), row.ExcludedContainerRefs...)
+	return row
 }
 
 func timeToUnixMilli(t time.Time) int64 {
@@ -394,24 +468,74 @@ func (s *Store) ListDSNRecords(ctx context.Context) ([]DSNRecord, error) {
 	return out, nil
 }
 
-func (s *Store) ReplaceDSNRecords(ctx context.Context, rows []DSNRecord) error {
+func (s *Store) GetDSNRecord(ctx context.Context, nodeletID, containerID string) (*DSNRecord, error) {
+	rows, err := s.q.ListDSNEntriesForContainer(ctx, ListDSNEntriesForContainerParams{
+		NodeletID:   nodeletID,
+		ContainerID: containerID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	pairs := make(map[string]string, len(rows))
+	for _, row := range rows {
+		pairs[row.Key] = row.Value
+	}
+	return &DSNRecord{NodeletID: nodeletID, ContainerID: containerID, Pairs: pairs}, nil
+}
+
+func (s *Store) SetDSNRecord(ctx context.Context, row DSNRecord) error {
+	pairs := make(map[string]string, len(row.Pairs))
+	keys := make([]string, 0, len(row.Pairs))
+	for key, value := range row.Pairs {
+		pairs[key] = value
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	return s.tx(ctx, func(q *Queries) error {
-		if err := q.DeleteAllDSNEntries(ctx); err != nil {
+		if err := q.DeleteDSNEntriesForContainer(ctx, DeleteDSNEntriesForContainerParams{
+			NodeletID:   row.NodeletID,
+			ContainerID: row.ContainerID,
+		}); err != nil {
 			return err
 		}
-		for _, row := range rows {
-			for k, v := range row.Pairs {
-				if err := q.InsertDSNEntry(ctx, InsertDSNEntryParams{
-					NodeletID:   row.NodeletID,
-					ContainerID: row.ContainerID,
-					Key:         k,
-					Value:       v,
-				}); err != nil {
-					return err
-				}
+		for _, key := range keys {
+			if err := q.InsertDSNEntry(ctx, InsertDSNEntryParams{
+				NodeletID:   row.NodeletID,
+				ContainerID: row.ContainerID,
+				Key:         key,
+				Value:       pairs[key],
+			}); err != nil {
+				return err
 			}
 		}
 		return nil
+	})
+}
+
+func (s *Store) DeleteDSNRecord(ctx context.Context, nodeletID, containerID string) error {
+	return s.q.DeleteDSNEntriesForContainer(ctx, DeleteDSNEntriesForContainerParams{
+		NodeletID:   nodeletID,
+		ContainerID: containerID,
+	})
+}
+
+func (s *Store) UpsertDSNEntry(ctx context.Context, nodeletID, containerID, key, value string) error {
+	return s.q.UpsertDSNEntry(ctx, UpsertDSNEntryParams{
+		NodeletID:   nodeletID,
+		ContainerID: containerID,
+		Key:         key,
+		Value:       value,
+	})
+}
+
+func (s *Store) DeleteDSNEntry(ctx context.Context, nodeletID, containerID, key string) error {
+	return s.q.DeleteDSNEntry(ctx, DeleteDSNEntryParams{
+		NodeletID:   nodeletID,
+		ContainerID: containerID,
+		Key:         key,
 	})
 }
 

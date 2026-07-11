@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"oops/internal/config"
 	llmtools "oops/internal/llm/tools"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
+	"oops/internal/project"
 
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
@@ -100,7 +100,7 @@ func (s *Server) mcpToolEntriesForProject(projectID string) []mcp.ConnectionTool
 	return filterMCPToolEntriesForProject(entries, projectID, s.projectStore)
 }
 
-func filterMCPToolEntriesForProject(entries []mcp.ConnectionTool, projectID string, projectStore *config.ProjectStore) []mcp.ConnectionTool {
+func filterMCPToolEntriesForProject(entries []mcp.ConnectionTool, projectID string, projectStore *project.Store) []mcp.ConnectionTool {
 	if projectID == "" || projectStore == nil {
 		return entries
 	}

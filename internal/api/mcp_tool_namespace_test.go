@@ -13,6 +13,7 @@ import (
 	llmtools "oops/internal/llm/tools"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
+	"oops/internal/project"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -103,7 +104,7 @@ func TestMCPToolHooksUseModelFacingToolName(t *testing.T) {
 
 func TestFilterMCPToolEntriesForProjectKeepsProjectNodelets(t *testing.T) {
 	projectStore := testProjectStore(t)
-	if err := projectStore.Add(config.Project{ID: "proj-1", Name: "Project", NodeletIDs: []string{"node-a"}}); err != nil {
+	if err := projectStore.Add(project.Project{ID: "proj-1", Name: "Project", NodeletIDs: []string{"node-a"}}); err != nil {
 		t.Fatalf("add project: %v", err)
 	}
 	entries := []mcp.ConnectionTool{

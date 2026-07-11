@@ -19,6 +19,7 @@ import (
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
+	"oops/internal/project"
 	runtimestore "oops/internal/store/runtime"
 
 	"go.uber.org/zap"
@@ -70,8 +71,8 @@ type Server struct {
 	llmConfig       config.LLMConfig
 	skillStore      *skills.SkillStore
 	mcpManager      *mcp.Manager
-	projectStore    *config.ProjectStore
-	dsnStore        *config.ContainerDSNStore
+	projectStore    *project.Store
+	dsnStore        *project.DSNStore
 	runtimeStore    *runtimestore.Store
 	agentRepo       *runtimesession.Repository
 	runManager      *runManager
@@ -115,13 +116,13 @@ func NewFromConfigWithConsoleHub(cfg config.Config, consoleHub *console.Hub) (*S
 		return nil, fmt.Errorf("create nodelet manager: %w", err)
 	}
 
-	projectStore, err := config.NewProjectStoreWithRuntime(runtimeStore)
+	projectStore, err := project.NewStore(runtimeStore)
 	if err != nil {
 		_ = runtimeStore.Close()
 		return nil, fmt.Errorf("create project store: %w", err)
 	}
 
-	dsnStore, err := config.NewContainerDSNStoreWithRuntime(runtimeStore)
+	dsnStore, err := project.NewDSNStore(runtimeStore)
 	if err != nil {
 		_ = runtimeStore.Close()
 		return nil, fmt.Errorf("create container DSN store: %w", err)

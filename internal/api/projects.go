@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
-	"oops/internal/config"
 	"oops/internal/docker"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
+	"oops/internal/project"
 
 	"github.com/google/uuid"
 )
@@ -28,6 +29,35 @@ type nodeletHostSummary struct {
 	Runtime       string `json:"runtime"`
 	NCPU          int    `json:"nCPU"`
 	MemTotal      int64  `json:"memTotal"`
+}
+
+// projectPayload keeps HTTP field-presence semantics at the API boundary.
+// A nil collection represents an omitted or null JSON field.
+type projectPayload struct {
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Description           string    `json:"description,omitempty"`
+	GitHubRepo            string    `json:"githubRepo,omitempty"`
+	NodeletIDs            *[]string `json:"nodeletIds"`
+	ExcludedContainerRefs *[]string `json:"excludedContainerRefs"`
+}
+
+func (p projectPayload) project(id string) project.Project {
+	return project.Project{
+		ID:                    id,
+		Name:                  p.Name,
+		Description:           p.Description,
+		GitHubRepo:            p.GitHubRepo,
+		NodeletIDs:            cloneStrings(p.NodeletIDs),
+		ExcludedContainerRefs: cloneStrings(p.ExcludedContainerRefs),
+	}
+}
+
+func cloneStrings(values *[]string) []string {
+	if values == nil {
+		return nil
+	}
+	return slices.Clone(*values)
 }
 
 // containerWithType 是带服务类型识别的容器列表项。
@@ -60,7 +90,7 @@ func projectErrorStatus(err error) int {
 // handleProjectList handles GET /api/projects.
 func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request) {
 	if s.projectStore == nil {
-		writeJSON(w, []config.Project{})
+		writeJSON(w, []project.Project{})
 		return
 	}
 	writeJSON(w, s.projectStore.List())
@@ -72,11 +102,12 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	var p config.Project
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	var payload projectPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	p := payload.project(strings.TrimSpace(payload.ID))
 	p.ID = strings.TrimSpace(p.ID)
 	if p.ID == "" {
 		p.ID = "project-" + uuid.NewString()
@@ -118,12 +149,12 @@ func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "project store not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	var p config.Project
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	var payload projectPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	p.ID = projectID
+	p := payload.project(projectID)
 	p.Name = strings.TrimSpace(p.Name)
 	p.Description = strings.TrimSpace(p.Description)
 	p.GitHubRepo = strings.TrimSpace(p.GitHubRepo)
