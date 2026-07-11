@@ -232,6 +232,30 @@ func TestServerCloseCanResumeWaitingAfterCallerDeadline(t *testing.T) {
 	closeServerForTest(t, server)
 }
 
+func TestServerCloseShutsDownMCPManager(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	manager, err := mcp.NewManagerWithRuntime(runtime, nil)
+	if err != nil {
+		_ = runtime.Close()
+		t.Fatalf("new MCP manager: %v", err)
+	}
+	server := New(Options{})
+	server.mcpManager = manager
+
+	closeServerForTest(t, server)
+	if err := manager.Add(mcp.ConnectionConfig{ID: "after-close", Name: "after-close", Type: "redis", NodeletID: "node-1"}); err == nil {
+		t.Fatal("MCP manager accepted a connection after Server.Close")
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("close runtime: %v", err)
+	}
+}
+
 func TestServerCloseClosesOwnedConsoleHub(t *testing.T) {
 	server := New(Options{})
 	hub := server.consoleHub

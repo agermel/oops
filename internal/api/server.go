@@ -325,7 +325,9 @@ func (s *Server) closeResources() {
 		s.consoleHub.Close()
 	}
 	if s.mcpManager != nil {
-		s.mcpManager.Close()
+		if err := s.mcpManager.Shutdown(context.Background()); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
 	}
 	if s.skillStore != nil {
 		s.skillStore.Close()
