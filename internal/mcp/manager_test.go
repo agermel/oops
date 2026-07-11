@@ -863,6 +863,91 @@ func TestManagerShutdownClosesAdmissionBeforeBackgroundDrain(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownReleasesMutationLockBeforeCallbackDrain(t *testing.T) {
+	ignoreExisting := goleak.IgnoreCurrent()
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer func() { _ = runtime.Close() }()
+
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackMutation := make(chan error, 1)
+	var callbackOnce sync.Once
+	var manager *Manager
+	manager, err = NewManagerWithRuntime(runtime, func([]ConnectionTool) {
+		callbackOnce.Do(func() {
+			close(callbackEntered)
+			<-releaseCallback
+			callbackMutation <- manager.Add(testMCPConnectionConfig("callback-mutation", false))
+		})
+	})
+	if err != nil {
+		t.Fatalf("NewManagerWithRuntime: %v", err)
+	}
+	manager.startProc = func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error) {
+		return &managedProcess{
+			tools:  []tool.BaseTool{toolBaseForTest{name: "inspect", desc: "inspect state"}},
+			closer: func() {},
+		}, nil
+	}
+	if err := manager.Add(testMCPConnectionConfig("callback-close", true)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	select {
+	case <-callbackEntered:
+	case <-time.After(time.Second):
+		t.Fatal("tool callback did not start")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- manager.Shutdown(context.Background())
+	}()
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		manager.notificationMu.Lock()
+		stopped := manager.notificationStop
+		manager.notificationMu.Unlock()
+		if stopped && manager.mutationMu.TryLock() {
+			manager.mutationMu.Unlock()
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("Shutdown held mutationMu while waiting for the notification callback")
+		}
+	}
+
+	close(releaseCallback)
+	select {
+	case err := <-callbackMutation:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("callback mutation error = %v, want closed manager", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("callback mutation did not return")
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not return after callback mutation")
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("close runtime: %v", err)
+	}
+	goleak.VerifyNone(t, ignoreExisting)
+}
+
 func TestManagerShutdownDrainsLeasedToolAfterDeadline(t *testing.T) {
 	ignoreExisting := goleak.IgnoreCurrent()
 	releaseCall := make(chan struct{})

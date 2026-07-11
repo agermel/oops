@@ -977,8 +977,11 @@ func (m *Manager) closeResources() {
 	m.visibleTools = nil
 	m.mu.Unlock()
 
-	m.closeNotificationDispatcher()
+	notificationDone := m.stopNotificationDispatcher()
 	m.mutationMu.Unlock()
+	if notificationDone != nil {
+		<-notificationDone
+	}
 	for _, hub := range logHubs {
 		hub.Close()
 	}

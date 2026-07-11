@@ -54,15 +54,17 @@ func (m *Manager) enqueueToolChange(change *toolChange) {
 	}
 }
 
-func (m *Manager) closeNotificationDispatcher() {
+// stopNotificationDispatcher prevents future notification work and returns the
+// running dispatcher's completion signal. Callers must wait only after
+// releasing mutationMu because callbacks may re-enter Manager mutations.
+func (m *Manager) stopNotificationDispatcher() <-chan struct{} {
 	if m.notificationCh == nil {
-		return
+		return nil
 	}
 	m.notificationMu.Lock()
+	defer m.notificationMu.Unlock()
 	m.notificationStop = true
 	m.pendingChange = nil
 	close(m.notificationCh)
-	m.notificationMu.Unlock()
-	<-m.notificationDone
-	m.notificationCh = nil
+	return m.notificationDone
 }
