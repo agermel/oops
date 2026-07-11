@@ -18,14 +18,23 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /oops ./cmd/
 # Stage 3: Build Go-based MCP servers from pinned source.
 FROM --platform=$BUILDPLATFORM golang:1.25.5-alpine AS mcp-go-builder
 ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY scripts/verify-artifacts.sh scripts/verify-artifacts.sh
+COPY mcp-servers/artifacts-manifest.json mcp-servers/artifacts-manifest.json
+COPY mcp-servers/etcd/ mcp-servers/etcd/
+RUN apk add --no-cache bash jq
 WORKDIR /src/mcp-servers/etcd
-COPY mcp-servers/etcd/go.mod mcp-servers/etcd/go.sum ./
 RUN go mod download
-COPY mcp-servers/etcd/ ./
 RUN mkdir -p /out && \
+    cd /src && \
+    ./scripts/verify-artifacts.sh --artifact etcd-mcp-server && \
+    ./scripts/verify-artifacts.sh --artifact mysql-mcp-server && \
+    mysql_module="$(jq -er '[.artifacts[] | select(.artifact == "mysql-mcp-server")][0].module' mcp-servers/artifacts-manifest.json)" && \
+    mysql_version="$(jq -er '[.artifacts[] | select(.artifact == "mysql-mcp-server")][0].version' mcp-servers/artifacts-manifest.json)" && \
+    cd /src/mcp-servers/etcd && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/etcd-mcp-server . && \
-    go mod download github.com/askdba/mysql-mcp-server@v1.7.1 && \
-    cd "$(go env GOMODCACHE)/github.com/askdba/mysql-mcp-server@v1.7.1" && \
+    go mod download "$mysql_module@$mysql_version" && \
+    cd "$(go env GOMODCACHE)/$mysql_module@$mysql_version" && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/mysql-mcp-server ./cmd/mysql-mcp-server
 
 # Stage 4: Preinstall Node-based MCP servers

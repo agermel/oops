@@ -98,9 +98,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/oops" ./cmd/oops
           GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/oops-nodelet" ./cmd/oops-nodelet
+          ./scripts/verify-artifacts.sh --artifact etcd-mcp-server
+          ./scripts/verify-artifacts.sh --artifact mysql-mcp-server
           (
             cd mcp-servers/etcd
             GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/etcd-mcp-server" .
+          )
+          mysql_module="$(jq -er '[.artifacts[] | select(.artifact == "mysql-mcp-server")][0].module' mcp-servers/artifacts-manifest.json)"
+          mysql_version="$(jq -er '[.artifacts[] | select(.artifact == "mysql-mcp-server")][0].version' mcp-servers/artifacts-manifest.json)"
+          go mod download "$mysql_module@$mysql_version"
+          (
+            cd "$(go env GOMODCACHE)/$mysql_module@$mysql_version"
+            GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/mysql-mcp-server" ./cmd/mysql-mcp-server
           )
 
   mcp-wrappers:
