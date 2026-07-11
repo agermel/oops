@@ -1,0 +1,134 @@
+name: Backend quality
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25.5"
+  OOPS_SENSITIVE_PATTERN: ${{ vars.OOPS_SENSITIVE_PATTERN }}
+
+jobs:
+  artifacts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate artifact manifest and tracked files
+        run: ./scripts/verify-artifacts.sh
+      - name: Reject forbidden upstream names
+        shell: bash
+        run: |
+          : "${OOPS_SENSITIVE_PATTERN:?OOPS_SENSITIVE_PATTERN must be set}"
+          set +e
+          rg -n -i -- "$OOPS_SENSITIVE_PATTERN" --hidden \
+            --glob '!.omx/**' --glob '!AGENTS.md' --glob '!.git/**' .
+          status=$?
+          set -e
+          case "$status" in
+            0)
+              echo "forbidden name found" >&2
+              exit 1
+              ;;
+            1) ;;
+            *) exit "$status" ;;
+          esac
+
+  go-quality:
+    needs: artifacts
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: root
+            directory: .
+          - name: etcd
+            directory: mcp-servers/etcd
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            mcp-servers/etcd/go.sum
+      - name: Install fixed Go quality tools
+        run: |
+          GOBIN="$RUNNER_TEMP/go-bin" go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          GOBIN="$RUNNER_TEMP/go-bin" go install golang.org/x/tools/cmd/deadcode@v0.48.0
+          GOBIN="$RUNNER_TEMP/go-bin" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          echo "$RUNNER_TEMP/go-bin" >> "$GITHUB_PATH"
+      - name: Test and analyze ${{ matrix.name }}
+        working-directory: ${{ matrix.directory }}
+        run: |
+          go test -race -count=1 ./...
+          go vet ./...
+          go mod tidy -diff
+          staticcheck ./...
+          deadcode -test ./...
+          govulncheck ./...
+      - name: Check generated SQLC code
+        if: matrix.name == 'root'
+        run: |
+          ./scripts/fetch-sqlc.sh linux/amd64 "$RUNNER_TEMP/sqlc-bin"
+          "$RUNNER_TEMP/sqlc-bin/sqlc" generate
+          git diff --exit-code -- internal/store/runtime
+
+  go-cross-build:
+    needs: artifacts
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            mcp-servers/etcd/go.sum
+      - name: Build Linux/${{ matrix.arch }} binaries
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/oops" ./cmd/oops
+          GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/oops-nodelet" ./cmd/oops-nodelet
+          (
+            cd mcp-servers/etcd
+            GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/etcd-mcp-server" .
+          )
+
+  mcp-wrappers:
+    needs: artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install fixed uv release
+        run: |
+          ./scripts/fetch-uv.sh linux/amd64 "$RUNNER_TEMP/uv-bin"
+          echo "$RUNNER_TEMP/uv-bin" >> "$GITHUB_PATH"
+      - name: Validate locked wrapper environments
+        shell: bash
+        run: |
+          for wrapper in nacos redis elasticsearch; do
+            directory="mcp-servers/$wrapper"
+            uv lock --directory "$directory" --check
+            UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/mcp-venvs/$wrapper" uv sync --directory "$directory" --locked
+            if uv export --help | rg -q 'requirements-txt'; then
+              uv export --directory "$directory" --locked --format requirements-txt --generate-hashes > "$RUNNER_TEMP/$wrapper-requirements.txt"
+            else
+              uv export --directory "$directory" --locked --format requirements.txt > "$RUNNER_TEMP/$wrapper-requirements.txt"
+            fi
+          done
+      - name: Smoke wrapper help without credentials
+        env:
+          OOPS_MCP_VENV_ROOT: ${{ runner.temp }}/mcp-venvs
+        run: |
+          ./mcp-servers/nacos/nacos-mcp-server --help
+          ./mcp-servers/redis/redis-mcp-server --help
+          ./mcp-servers/elasticsearch/elasticsearch-mcp-server --help

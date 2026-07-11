@@ -98,9 +98,6 @@ func Error(msg string, fields ...zap.Field) { L().Error(msg, fields...) }
 // Debug logs at debug level.
 func Debug(msg string, fields ...zap.Field) { L().Debug(msg, fields...) }
 
-// Fatal logs at fatal level and calls os.Exit(1).
-func Fatal(msg string, fields ...zap.Field) { L().Fatal(msg, fields...) }
-
 // ---- printf-style ----
 
 // Infof logs a formatted info message.

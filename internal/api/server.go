@@ -97,11 +97,6 @@ type Server struct {
 	closeErr  error
 }
 
-// NewFromConfig 使用配置创建中心端 API 服务。
-func NewFromConfig(cfg config.Config) (*Server, error) {
-	return NewFromConfigWithConsoleHub(cfg, nil)
-}
-
 // NewFromConfigWithConsoleHub builds the API service with the process-owned
 // console hub supplied by the composition root.
 func NewFromConfigWithConsoleHub(cfg config.Config, consoleHub *console.Hub) (*Server, error) {

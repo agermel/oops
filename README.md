@@ -296,7 +296,7 @@ color: blue
 
 常用分层检查：
 
-`OOPS_SENSITIVE_PATTERN` 使用 `AGENTS.md` 中 Naming Rule 的本地敏感词清单。
+仓库 CI 读取 GitHub Actions variable `OOPS_SENSITIVE_PATTERN`；变量为空、匹配到敏感词或扫描命令异常都会使门禁失败。
 
 ```bash
 go test -count=1 ./internal/llm/ai/protocol ./internal/llm/core/agent ./internal/llm/core/toolruntime ./internal/llm/runtime/session ./internal/llm/runtime/harness ./internal/api
