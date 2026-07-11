@@ -220,7 +220,7 @@ sasl_mechanism: PLAIN
 
 ### MCP 供应链
 
-架构相关可执行文件不纳入 Git。etcd 和 MySQL 使用固定源码版本构建，三个 Python wrapper 使用 Python 3.12、独立环境和 `uv.lock`：
+架构相关可执行文件不纳入 Git。etcd 使用可复算源码树摘要构建，MySQL 使用固定 Go module revision 和 zip SHA-256 构建。三个 Python wrapper 各自使用隔离环境、`uv.lock` 和精确的 CPython 3.12.13；Docker 构建基镜像使用固定 OCI index 摘要：
 
 ```bash
 ./mcp-servers/etcd/build.sh
@@ -229,7 +229,7 @@ OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./scripts/sync-mcp-wrapper.sh redis
 OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./mcp-servers/redis/redis-mcp-server --help
 ```
 
-`mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。`scripts/verify-artifacts.sh` 校验清单结构、wrapper 与 lockfile 的哈希关联、uv 获取脚本的哈希关联，并拒绝 Git 索引中的架构二进制；CI 的锁定同步校验实际下载内容。
+`mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。`scripts/verify-artifacts.sh` 校验清单结构、Go 源码或 module 输入、wrapper 与 lockfile 的哈希关联、uv 和 CPython 获取脚本、Docker 基镜像摘要，并拒绝 Git 索引中的架构二进制；CI 在固定解释器上执行锁定同步和无凭据 `--help` smoke。
 
 ---
 
