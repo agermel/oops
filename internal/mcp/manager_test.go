@@ -837,6 +837,32 @@ func TestManagerShutdownCanResumeAfterCallbackDeadline(t *testing.T) {
 	goleak.VerifyNone(t, ignoreExisting)
 }
 
+func TestManagerShutdownClosesAdmissionBeforeBackgroundDrain(t *testing.T) {
+	manager, _ := newMCPManagerForTest(t, nil)
+	manager.mutationMu.Lock()
+
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	shutdownErr := manager.Shutdown(shortCtx)
+	cancelShort()
+	manager.mu.Lock()
+	closed := manager.closed
+	manager.mu.Unlock()
+	manager.mutationMu.Unlock()
+
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown while drain is blocked = %v, want context deadline exceeded", shutdownErr)
+	}
+	if !closed {
+		t.Fatal("Shutdown left mutation admission open while background drain was blocked")
+	}
+
+	longCtx, cancelLong := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLong()
+	if err := manager.Shutdown(longCtx); err != nil {
+		t.Fatalf("Shutdown after drain unblocked: %v", err)
+	}
+}
+
 func TestManagerShutdownDrainsLeasedToolAfterDeadline(t *testing.T) {
 	ignoreExisting := goleak.IgnoreCurrent()
 	releaseCall := make(chan struct{})

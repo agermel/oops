@@ -922,6 +922,15 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 	m.closeOnce.Do(func() {
 		m.closeDone = make(chan struct{})
+		// Stop admitting mutations before the asynchronous drain begins. A caller
+		// whose deadline expires can therefore safely treat the manager as closed
+		// while in-flight work continues draining in the background.
+		m.mu.Lock()
+		m.closed = true
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.mu.Unlock()
 		go m.closeResources()
 	})
 
