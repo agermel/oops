@@ -52,8 +52,37 @@ verify_wrapper_lock() {
 		echo "manifest version does not match $wrapper wrapper" >&2
 		return 1
 	fi
-	if ! rg -Fq "sha256:$hash" "$root/mcp-servers/$wrapper/uv.lock"; then
-		echo "manifest hash missing from $wrapper lockfile" >&2
+	if ! awk \
+		-v package="$package" \
+		-v version="$version" \
+		-v hash="$hash" '
+		function check() {
+			if (name == package && lockedVersion == version && hasHash) {
+				matched = 1
+			}
+		}
+		/^\[\[package\]\]$/ {
+			check()
+			name = ""
+			lockedVersion = ""
+			hasHash = 0
+			next
+		}
+		$0 == "name = \"" package "\"" {
+			name = package
+		}
+		$0 == "version = \"" version "\"" {
+			lockedVersion = version
+		}
+		index($0, "sha256:" hash) {
+			hasHash = 1
+		}
+		END {
+			check()
+			exit !matched
+		}
+	' "$root/mcp-servers/$wrapper/uv.lock"; then
+		echo "manifest hash missing from $wrapper package wheel" >&2
 		return 1
 	fi
 }
