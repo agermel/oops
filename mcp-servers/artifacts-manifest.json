@@ -1,0 +1,84 @@
+{
+  "artifacts": [
+    {
+      "artifact": "etcd-mcp-server",
+      "source": "mcp-servers/etcd",
+      "version": "1.0.0",
+      "platform": "darwin/arm64",
+      "sha256": "61be64d288f85379e5db6220d3c44965aae3a61dab033efa0a2e02abe574f3b4",
+      "license": "MIT",
+      "build_or_fetch": "./mcp-servers/etcd/build.sh",
+      "verify": "./mcp-servers/etcd/build.sh --verify"
+    },
+    {
+      "artifact": "mysql-mcp-server",
+      "source": "https://github.com/askdba/mysql-mcp-server",
+      "version": "v1.7.1+99345cce253393a9c51b62d57d6cd97f7c50ed96",
+      "platform": "darwin/arm64",
+      "sha256": "6b6ab29ac4f219ec36465d02a5eb13162022fad7cde169be6f04c9aa9dc06b86",
+      "license": "Apache-2.0",
+      "build_or_fetch": "./mcp-servers/mysql/build.sh",
+      "verify": "./mcp-servers/mysql/build.sh --verify"
+    },
+    {
+      "artifact": "nacos-mcp-router-wheel",
+      "source": "https://pypi.org/project/nacos-mcp-router/0.2.2/",
+      "version": "0.2.2",
+      "platform": "any/any",
+      "sha256": "fbc3bca7a6354fd797047fcb93e00f9e05f4e1af08f3bdeaa4bc2af876ed818f",
+      "license": "Apache-2.0",
+      "build_or_fetch": "./scripts/sync-mcp-wrapper.sh nacos",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "redis-mcp-server-wheel",
+      "source": "https://pypi.org/project/redis-mcp-server/0.5.0/",
+      "version": "0.5.0",
+      "platform": "any/any",
+      "sha256": "46bfcca673b6d7a4a81702672d7161f0a92f5b998bdf2dbbb00b86c09e0bb196",
+      "license": "MIT",
+      "build_or_fetch": "./scripts/sync-mcp-wrapper.sh redis",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "elasticsearch-mcp-server-wheel",
+      "source": "https://pypi.org/project/elasticsearch-mcp-server/2.1.2/",
+      "version": "2.1.2",
+      "platform": "any/any",
+      "sha256": "cda935f2cdbf1d4d9c88e13a85a3418715e4b4bb5cce1e18eae82b87edf5053a",
+      "license": "Apache-2.0",
+      "build_or_fetch": "./scripts/sync-mcp-wrapper.sh elasticsearch",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "uv",
+      "source": "https://github.com/astral-sh/uv/releases/tag/0.11.28",
+      "version": "0.11.28",
+      "platform": "linux/amd64",
+      "sha256": "e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224",
+      "license": "MIT OR Apache-2.0",
+      "build_or_fetch": "./scripts/fetch-uv.sh linux/amd64",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "uv",
+      "source": "https://github.com/astral-sh/uv/releases/tag/0.11.28",
+      "version": "0.11.28",
+      "platform": "linux/arm64",
+      "sha256": "03e9fe0a81b0718d0bc84625de3885df6cc3f89a8b6af6121d6b9f6113fb6533",
+      "license": "MIT OR Apache-2.0",
+      "build_or_fetch": "./scripts/fetch-uv.sh linux/arm64",
+      "verify": "./scripts/verify-artifacts.sh"
+    },
+    {
+      "artifact": "uv",
+      "source": "https://github.com/astral-sh/uv/releases/tag/0.11.28",
+      "version": "0.11.28",
+      "platform": "darwin/arm64",
+      "sha256": "33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232",
+      "license": "MIT OR Apache-2.0",
+      "build_or_fetch": "./scripts/fetch-uv.sh darwin/arm64",
+      "verify": "./scripts/verify-artifacts.sh"
+    }
+  ]
+}

@@ -1,6 +1,27 @@
-#!/bin/bash
-# Nacos MCP Router wrapper
-# Uses the official Nacos MCP Router package.
-# Configure via env: NACOS_ADDR, NACOS_USERNAME, NACOS_PASSWORD, NACOS_NAMESPACE.
-# uvx downloads and caches on first run; subsequent runs are fast.
-exec uvx --from nacos-mcp-router@latest nacos-mcp-router "$@"
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [[ -n "${OOPS_MCP_VENV_ROOT:-}" ]]; then
+	export UV_PROJECT_ENVIRONMENT="$OOPS_MCP_VENV_ROOT/nacos"
+fi
+
+case "${1:-}" in
+	-h|--help)
+		cat <<'EOF'
+Usage: nacos-mcp-server
+
+Required environment:
+  NACOS_PASSWORD
+
+Optional environment:
+  NACOS_ADDR (default: 127.0.0.1:8848)
+  NACOS_USERNAME (default: nacos)
+  NACOS_NAMESPACE
+  NACOS_SERVER_SCHEMA (default: http)
+EOF
+		exit 0
+		;;
+esac
+
+exec uv run --directory "$root" --locked nacos-mcp-router "$@"

@@ -1,0 +1,8 @@
+.git/
+.omx/
+data/
+web/node_modules/
+web/dist/
+mcp-servers/*/.venv/
+mcp-servers/etcd/etcd-mcp-server
+mcp-servers/mysql/mysql-mcp-server

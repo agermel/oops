@@ -22,9 +22,10 @@
 }
 ```
 
-## 更新
+## 构建
 
 ```bash
-brew upgrade mysql-mcp-server
-# 或从 GitHub Releases 下载最新二进制替换
+./mcp-servers/mysql/build.sh
 ```
+
+脚本固定构建 `v1.7.1`，来源、许可、平台与校验记录见 `mcp-servers/artifacts-manifest.json`。

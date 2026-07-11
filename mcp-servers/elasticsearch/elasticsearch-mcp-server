@@ -1,6 +1,9 @@
-#!/bin/bash
-# Elasticsearch MCP Server wrapper
-# Uses the community elasticsearch-mcp-server (Python, Apache 2.0).
-# uvx downloads and caches on first run; subsequent runs are fast.
-# https://pypi.org/project/elasticsearch-mcp-server/
-exec uvx --python 3.12 --from elasticsearch-mcp-server elasticsearch-mcp-server "$@"
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [[ -n "${OOPS_MCP_VENV_ROOT:-}" ]]; then
+	export UV_PROJECT_ENVIRONMENT="$OOPS_MCP_VENV_ROOT/elasticsearch"
+fi
+
+exec uv run --directory "$root" --locked elasticsearch-mcp-server "$@"

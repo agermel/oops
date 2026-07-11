@@ -14,7 +14,7 @@ services:
     volumes:
       # 配置文件目录（config.yaml, mcp_connections.json）
       - ../config:/opt/oops/config
-      # MCP Server 二进制/脚本目录 —— 用户可自行添加新的 MCP Server
+      # MCP Server 源码/脚本目录 —— 用户可自行添加新的 MCP Server
       - ../mcp-servers:/opt/oops/mcp-servers:ro
       # 数据持久化
       - ./oops-data:/var/lib/oops

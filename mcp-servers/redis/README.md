@@ -2,7 +2,7 @@
 
 第三方 MCP server，来自 [redis/mcp-redis](https://github.com/redis/mcp-redis)（MIT）。
 
-一个 Redis MCP server（Python 编写），通过 `uvx` 运行，自动下载和缓存。
+一个 Redis MCP server（Python 编写），通过独立 Python 3.12 环境和固定 `uv.lock` 运行。
 
 ## 工具
 
@@ -25,8 +25,11 @@
 }
 ```
 
-## 更新
+## 同步与校验
 
 ```bash
-uvx --from redis-mcp-server@latest redis-mcp-server
+./scripts/sync-mcp-wrapper.sh redis
+OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./mcp-servers/redis/redis-mcp-server --help
 ```
+
+包装器固定 `redis-mcp-server==0.5.0`。来源、许可证与 wheel SHA-256 记录见 `mcp-servers/artifacts-manifest.json`。

@@ -204,7 +204,7 @@ docker compose -f docker-compose.nodelet.yml up -d
 
 在 `deployment/docker-compose.yml` 的 `oops.environment` 中取消 `OOPS_MCP_ALLOWED_COMMANDS` 一行的注释，填入允许执行的 MCP 命令白名单（逗号分隔）。同时取消 `OOPS_LLM_API_KEY` 的注释并填入 API Key。
 
-在 Web UI 的 MCP 管理面板中添加连接即可使用。MCP Server 二进制文件放在 `mcp-servers/<name>/` 目录下，该目录会以只读方式挂载到 Ops Plane 容器内。
+在 Web UI 的 MCP 管理面板中添加连接即可使用。`mcp-servers/<name>/` 保存源码、固定依赖和启动脚本；Docker 会挂载该目录到 Ops Plane 容器内。
 
 Kafka 使用 Confluent 官方 MCP Server（`@confluentinc/mcp-confluent`）。默认 Docker 镜像会在构建阶段预装并编译 Kafka MCP 依赖，运行时直接使用 `/opt/oops/mcp-confluent/node_modules/.bin/mcp-confluent`。裸机 Linux 部署时请安装 Node.js 22 LTS 和 npm，或通过 `OOPS_MCP_NODE_BIN` / `OOPS_MCP_NPX_BIN` 指向 Node 22 的二进制。
 
@@ -217,6 +217,18 @@ password: <secret>
 security_protocol: sasl_plaintext
 sasl_mechanism: PLAIN
 ```
+
+### MCP 供应链
+
+架构相关可执行文件不纳入 Git。etcd 和 MySQL 使用固定源码版本构建，三个 Python wrapper 使用 Python 3.12、独立环境和 `uv.lock`：
+
+```bash
+./mcp-servers/etcd/build.sh
+./mcp-servers/mysql/build.sh
+OOPS_MCP_VENV_ROOT="$PWD/.mcp-venvs" ./mcp-servers/redis/redis-mcp-server --help
+```
+
+`mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。`scripts/verify-artifacts.sh` 校验清单结构并拒绝 Git 索引中的架构二进制。
 
 ---
 
@@ -246,7 +258,7 @@ oops/
 │   └── src/components/        # UI 组件（30+ 组件）
 ├── config/                    # 配置文件、Skills、LLM Prompts
 ├── deployment/                # Nodelet Dockerfile 与 docker-compose
-├── mcp-servers/               # 预构建 MCP Server 二进制文件与源码
+├── mcp-servers/               # MCP Server 源码、固定 wrapper 与供应链清单
 │   ├── mysql/                 # MySQL MCP Server
 │   ├── redis/                 # Redis MCP Server
 │   ├── elasticsearch/         # Elasticsearch MCP Server
@@ -276,9 +288,9 @@ color: blue
 
 ### 添加新 MCP Server
 
-1. 将 MCP Server 二进制放入 `mcp-servers/<name>/`
-2. 在 Web UI 的 MCP 管理面板中添加连接，配置会写入 `data/runtime.db`
-3. MCP 连接支持 `stdio`（本地子进程）和 `sse`（远程）两种传输模式
+1. 将源码、固定版本的 wrapper 或构建脚本放入 `mcp-servers/<name>/`，不要提交架构相关二进制。
+2. 在 `mcp-servers/artifacts-manifest.json` 记录来源、版本、平台、SHA-256、许可证、构建和校验命令。
+3. 在 Web UI 的 MCP 管理面板中添加连接，配置会写入 `data/runtime.db`；连接支持 `stdio`（本地子进程）和 `sse`（远程）两种传输模式。
 
 ## 质量门禁
 
