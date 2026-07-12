@@ -212,6 +212,7 @@ func TestServerCloseCanResumeWaitingAfterCallerDeadline(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	server := New(Options{})
+	hub := server.consoleHub
 	reservation, err := server.runManager.reserve()
 	if err != nil {
 		t.Fatalf("reserve run: %v", err)
@@ -226,9 +227,64 @@ func TestServerCloseCanResumeWaitingAfterCallerDeadline(t *testing.T) {
 	if err := server.Close(shortCtx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("close with active run = %v, want context deadline exceeded", err)
 	}
+	entries, cancelEntries, err := hub.Subscribe()
+	if err != nil {
+		t.Fatalf("subscribe after close deadline: %v", err)
+	}
 
 	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
 	run.finishExecution()
+	select {
+	case _, ok := <-entries:
+		if !ok {
+			t.Fatal("close continued into later resource stages after caller deadline")
+		}
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancelEntries()
+	closeServerForTest(t, server)
+	if _, _, err := hub.Subscribe(); !errors.Is(err, loghub.ErrClosed) {
+		t.Fatalf("owned console hub after resumed close = %v, want ErrClosed", err)
+	}
+}
+
+func TestServerCloseStepResumesAfterCallerDeadline(t *testing.T) {
+	server := New(Options{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	wantErr := errors.New("close result")
+	closeCalls := 0
+	closeFn := func() error {
+		closeCalls++
+		close(started)
+		<-release
+		return wantErr
+	}
+
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelShort()
+	if err := server.runCloseStep(shortCtx, closeFn); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close step before release = %v, want context deadline exceeded", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("close step did not start")
+	}
+
+	close(release)
+	longCtx, cancelLong := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLong()
+	if err := server.runCloseStep(longCtx, func() error {
+		t.Fatal("resumed close step started twice")
+		return nil
+	}); !errors.Is(err, wantErr) {
+		t.Fatalf("resumed close step = %v, want %v", err, wantErr)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close step calls = %d, want 1", closeCalls)
+	}
+
 	closeServerForTest(t, server)
 }
 

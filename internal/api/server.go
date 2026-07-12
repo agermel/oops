@@ -62,6 +62,22 @@ type Options struct {
 	ConsoleHub        *console.Hub
 }
 
+type serverClosePhase uint8
+
+const (
+	serverCloseWaitRequests serverClosePhase = iota
+	serverCloseWaitStreams
+	serverCloseRuns
+	serverCloseMCP
+	serverCloseHTTPRateLimiter
+	serverCloseLoginLimiter
+	serverCloseSkills
+	serverCloseNodeletProber
+	serverCloseRuntimeStore
+	serverCloseConsoleHub
+	serverCloseDone
+)
+
 // Server 保存中心端 API 服务运行所需的配置和依赖。
 type Server struct {
 	nodeletManager  *nodelet.NodeletManager
@@ -92,10 +108,12 @@ type Server struct {
 	streamWG        sync.WaitGroup
 	quiesceOnce     sync.Once
 
-	closeMu   sync.Mutex
-	closing   bool
-	closeDone chan struct{}
-	closeErr  error
+	closeMu       sync.Mutex
+	closeGate     chan struct{}
+	closePhase    serverClosePhase
+	closeErr      error
+	closeStepDone chan struct{}
+	closeStepErr  error
 }
 
 // NewFromConfigWithConsoleHub builds the API service with the process-owned
@@ -213,7 +231,6 @@ func New(options Options) *Server {
 		tokenTTL:        options.TokenTTL,
 		lifecycle:       lifecycle,
 		cancelLifecycle: cancelLifecycle,
-		closeDone:       make(chan struct{}),
 		httpRateLimiter: httpRateLimiter,
 		loginLimiter:    newLoginLimiter(nil),
 		consoleHub:      consoleHub,
@@ -281,70 +298,122 @@ func (s *Server) Close(ctx context.Context) error {
 	s.Quiesce()
 
 	s.closeMu.Lock()
-	if !s.closing {
-		s.closing = true
-		if s.closeDone == nil {
-			s.closeDone = make(chan struct{})
-		}
-		go s.closeResources()
+	if s.closeGate == nil {
+		s.closeGate = make(chan struct{}, 1)
+		s.closeGate <- struct{}{}
 	}
-	done := s.closeDone
+	gate := s.closeGate
 	s.closeMu.Unlock()
 
 	select {
-	case <-done:
-		s.closeMu.Lock()
-		err := s.closeErr
-		s.closeMu.Unlock()
+	case <-gate:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { gate <- struct{}{} }()
+
+	return s.closeResources(ctx)
+}
+
+func (s *Server) closeResources(ctx context.Context) error {
+	for s.closePhase != serverCloseDone {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(s.closeErr, err)
+		}
+
+		switch s.closePhase {
+		case serverCloseWaitRequests:
+			if err := s.waitForRequests(ctx); err != nil {
+				return errors.Join(s.closeErr, err)
+			}
+		case serverCloseWaitStreams:
+			if err := s.waitForStreams(ctx); err != nil {
+				return errors.Join(s.closeErr, err)
+			}
+		case serverCloseRuns:
+			if s.runManager != nil {
+				if err := s.runManager.close(ctx); err != nil {
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return errors.Join(s.closeErr, err)
+					}
+					s.closeErr = errors.Join(s.closeErr, err)
+				}
+			}
+		case serverCloseMCP:
+			if s.mcpManager != nil {
+				if err := s.mcpManager.Shutdown(ctx); err != nil {
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return errors.Join(s.closeErr, err)
+					}
+					s.closeErr = errors.Join(s.closeErr, err)
+				}
+			}
+		case serverCloseHTTPRateLimiter:
+			if s.httpRateLimiter != nil {
+				s.httpRateLimiter.Close()
+			}
+		case serverCloseLoginLimiter:
+			if s.loginLimiter != nil {
+				s.loginLimiter.Close()
+			}
+		case serverCloseSkills:
+			if s.skillStore != nil {
+				if err := s.runCloseStep(ctx, func() error {
+					s.skillStore.Close()
+					return nil
+				}); err != nil {
+					return errors.Join(s.closeErr, err)
+				}
+			}
+		case serverCloseNodeletProber:
+			if s.nodeletProber != nil {
+				if err := s.runCloseStep(ctx, func() error {
+					s.nodeletProber.Stop()
+					return nil
+				}); err != nil {
+					return errors.Join(s.closeErr, err)
+				}
+			}
+		case serverCloseRuntimeStore:
+			if s.runtimeStore != nil {
+				if err := s.runCloseStep(ctx, s.runtimeStore.Close); err != nil {
+					if ctx.Err() != nil {
+						return errors.Join(s.closeErr, err)
+					}
+					s.closeErr = errors.Join(s.closeErr, err)
+				}
+			}
+		case serverCloseConsoleHub:
+			if s.ownsConsoleHub && s.consoleHub != nil {
+				s.consoleHub.Close()
+			}
+		}
+		s.closePhase++
+	}
+	return s.closeErr
+}
+
+// runCloseStep starts one blocking resource close at most once. A caller
+// deadline stops only the wait; a later Close call resumes on the same step.
+func (s *Server) runCloseStep(ctx context.Context, closeFn func() error) error {
+	if s.closeStepDone == nil {
+		done := make(chan struct{})
+		s.closeStepDone = done
+		go func() {
+			s.closeStepErr = closeFn()
+			close(done)
+		}()
+	}
+
+	select {
+	case <-s.closeStepDone:
+		err := s.closeStepErr
+		s.closeStepDone = nil
+		s.closeStepErr = nil
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func (s *Server) closeResources() {
-	var closeErr error
-	if err := s.waitForRequests(context.Background()); err != nil {
-		closeErr = errors.Join(closeErr, err)
-	}
-	if err := s.waitForStreams(context.Background()); err != nil {
-		closeErr = errors.Join(closeErr, err)
-	}
-	if s.httpRateLimiter != nil {
-		s.httpRateLimiter.Close()
-	}
-	if s.loginLimiter != nil {
-		s.loginLimiter.Close()
-	}
-	if s.runManager != nil {
-		if err := s.runManager.close(context.Background()); err != nil {
-			closeErr = errors.Join(closeErr, err)
-		}
-	}
-	if s.ownsConsoleHub && s.consoleHub != nil {
-		s.consoleHub.Close()
-	}
-	if s.mcpManager != nil {
-		if err := s.mcpManager.Shutdown(context.Background()); err != nil {
-			closeErr = errors.Join(closeErr, err)
-		}
-	}
-	if s.skillStore != nil {
-		s.skillStore.Close()
-	}
-	if s.nodeletProber != nil {
-		s.nodeletProber.Stop()
-	}
-	if s.runtimeStore != nil {
-		if err := s.runtimeStore.Close(); err != nil {
-			closeErr = errors.Join(closeErr, err)
-		}
-	}
-
-	s.closeMu.Lock()
-	s.closeErr = closeErr
-	close(s.closeDone)
-	s.closeMu.Unlock()
 }
 
 func (s *Server) beginRequest(requestCtx context.Context) (context.Context, func(), bool) {

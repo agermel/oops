@@ -22,7 +22,6 @@ import (
 func main() {
 	// 初始化结构化日志：同时输出到 stderr 和 web 控制台 hub。
 	consoleHub := console.NewHub()
-	defer consoleHub.Close()
 	logutil.Init(true, zapcore.AddSync(consoleHub), "")
 
 	cfg, err := config.LoadRuntime()
@@ -66,6 +65,13 @@ func main() {
 	select {
 	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), cfg.Run.WithDefaults().CloseTimeout)
+			closeErr := server.Close(closeCtx)
+			cancelClose()
+			if closeErr != nil {
+				logutil.Error("close API server", zap.Error(closeErr))
+			}
+			closeConsoleAfterServerDrain(consoleHub, closeErr)
 			return
 		}
 		httpCloseErr, closeErr := shutdownAPIServer(httpServer, server, cfg.Run.WithDefaults().CloseTimeout)
@@ -75,7 +81,7 @@ func main() {
 		if closeErr != nil {
 			logutil.Error("close API server", zap.Error(closeErr))
 		}
-		consoleHub.Close()
+		closeConsoleAfterServerDrain(consoleHub, closeErr)
 		logutil.Fatalf("server: %v", err)
 	case <-shutdownSignal.Done():
 		httpCloseErr, closeErr := shutdownAPIServer(httpServer, server, cfg.Run.WithDefaults().CloseTimeout)
@@ -85,6 +91,15 @@ func main() {
 		if closeErr != nil {
 			logutil.Error("close API server", zap.Error(closeErr))
 		}
+		closeConsoleAfterServerDrain(consoleHub, closeErr)
+	}
+}
+
+// closeConsoleAfterServerDrain preserves the process close deadline. A timed
+// out drain leaves the hub open until process exit; the OS then reclaims it.
+func closeConsoleAfterServerDrain(consoleHub *console.Hub, closeErr error) {
+	if consoleHub != nil && closeErr == nil {
+		consoleHub.Close()
 	}
 }
 

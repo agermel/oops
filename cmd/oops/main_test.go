@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"oops/internal/api"
+	"oops/internal/console"
+	"oops/internal/loghub"
 
 	"go.uber.org/goleak"
 )
@@ -19,6 +21,30 @@ type singleConnectionListener struct {
 	closed     chan struct{}
 	acceptOnce sync.Once
 	closeOnce  sync.Once
+}
+
+func TestCloseConsoleAfterServerDrain(t *testing.T) {
+	t.Run("completed drain", func(t *testing.T) {
+		hub := console.NewHub()
+		closeConsoleAfterServerDrain(hub, nil)
+		if _, _, err := hub.Subscribe(); !errors.Is(err, loghub.ErrClosed) {
+			t.Fatalf("Subscribe() error = %v, want ErrClosed", err)
+		}
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		hub := console.NewHub()
+		defer hub.Close()
+		closeConsoleAfterServerDrain(hub, context.DeadlineExceeded)
+		entries, cancel, err := hub.Subscribe()
+		if err != nil {
+			t.Fatalf("Subscribe() after deadline: %v", err)
+		}
+		cancel()
+		if entries == nil {
+			t.Fatal("Subscribe() after deadline returned nil entries")
+		}
+	})
 }
 
 func newSingleConnectionListener(conn net.Conn) *singleConnectionListener {
