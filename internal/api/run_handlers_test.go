@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"oops/internal/llm/agent"
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/runtime/harness"
+	runtimesession "oops/internal/llm/runtime/session"
 	runtimestore "oops/internal/store/runtime"
 )
 
@@ -201,6 +204,131 @@ func TestHandleRunCreateRejectsAtCapacityWithRetryAfter(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "1" {
 		t.Fatalf("Retry-After = %q, want 1", got)
+	}
+}
+
+func TestHandleRunCreateRejectsBusySession(t *testing.T) {
+	manager := newRunManagerForTest(t)
+	lease, err := manager.acquireSession("sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.release()
+	server := &Server{
+		llmClient:  &agent.Client{},
+		runManager: manager,
+		agentRepo:  runtimesession.NewRepository(nil),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello","session_id":"sess-1"}`))
+	recorder := httptest.NewRecorder()
+
+	server.handleRunCreate(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusConflict, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "session is busy") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestHandleRunCreateRejectsInvalidSessionID(t *testing.T) {
+	for _, sessionID := range []string{"../outside", "SESS-1"} {
+		t.Run(sessionID, func(t *testing.T) {
+			server := &Server{
+				llmClient:  &agent.Client{},
+				runManager: newRunManagerForTest(t),
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(fmt.Sprintf(`{"text":"hello","session_id":%q}`, sessionID)))
+			recorder := httptest.NewRecorder()
+
+			server.handleRunCreate(recorder, request)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), "invalid session id") {
+				t.Fatalf("body = %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleRunCreateRejectsPersistedProjectConflict(t *testing.T) {
+	manager := newRunManagerForTest(t)
+	repo := runtimesession.NewRepository(nil)
+	createRuntimeSession(t, repo, "sess-project", "project-a", "hello")
+	server := &Server{
+		llmClient:  &agent.Client{},
+		runManager: manager,
+		agentRepo:  repo,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello","session_id":"sess-project","project_id":"project-b"}`))
+	recorder := httptest.NewRecorder()
+
+	server.handleRunCreate(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusConflict, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "session belongs to another project") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	lease, err := manager.acquireSession("sess-project")
+	if err != nil {
+		t.Fatalf("session lease was not released: %v", err)
+	}
+	lease.release()
+}
+
+func TestHandleRunCreateRejectsMissingSessionWithoutCreatingFile(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := runtimesession.NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRunManagerForTest(t)
+	repo := runtimesession.NewRepository(storage)
+	server := &Server{
+		llmClient:  &agent.Client{},
+		runManager: manager,
+		agentRepo:  repo,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello","session_id":"missing-session"}`))
+	recorder := httptest.NewRecorder()
+
+	server.handleRunCreate(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusNotFound, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "session not found") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	if _, ok := repo.Get("missing-session"); ok {
+		t.Fatal("missing session remained in repository cache")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing-session.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("session file stat error = %v, want not exist", err)
+	}
+	lease, err := manager.acquireSession("missing-session")
+	if err != nil {
+		t.Fatalf("session lease was not released: %v", err)
+	}
+	lease.release()
+}
+
+func TestResolveRunProjectIDUsesPersistedProject(t *testing.T) {
+	repo := runtimesession.NewRepository(nil)
+	createRuntimeSession(t, repo, "sess-project", "project-a", "hello")
+	server := &Server{agentRepo: repo}
+
+	projectID, err := server.resolveRunProjectID("sess-project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectID != "project-a" {
+		t.Fatalf("project id = %q, want project-a", projectID)
 	}
 }
 

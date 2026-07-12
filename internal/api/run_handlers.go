@@ -11,6 +11,7 @@ import (
 	"time"
 
 	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/google/uuid"
 
 	"oops/internal/llm/ai/protocol"
 	"oops/internal/llm/ai/provider"
@@ -28,6 +29,11 @@ const (
 )
 
 var runIDCounter atomic.Uint64
+
+var (
+	errSessionNotFound        = errors.New("session not found")
+	errSessionProjectConflict = errors.New("session belongs to another project")
+)
 
 type runCreateRequest struct {
 	Text      string `json:"text"`
@@ -53,6 +59,9 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 	req.Text = strings.TrimSpace(req.Text)
 	if req.Text == "" {
 		writeJSONError(w, "text is required", http.StatusBadRequest)
+		return
+	}
+	if req.SessionID != "" && !validateRuntimeSessionID(w, req.SessionID) {
 		return
 	}
 	expanded, err := s.expandSkillCommand(req.Text)
@@ -83,6 +92,40 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 			reservation.release()
 		}
 	}()
+	leaseSessionID := req.SessionID
+	newSessionID := ""
+	if leaseSessionID == "" {
+		newSessionID = "session_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		leaseSessionID = newSessionID
+	}
+	if err := reservation.claimSession(leaseSessionID); err != nil {
+		if errors.Is(err, ErrSessionBusy) {
+			writeJSONError(w, ErrSessionBusy.Error(), http.StatusConflict)
+			return
+		}
+		if errors.Is(err, ErrRunManagerQuiescing) {
+			w.Header().Set("Retry-After", s.runManager.retryAfterHeader())
+			writeJSONError(w, "run capacity unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		sanitizedError(w, "claim run session", err, http.StatusInternalServerError)
+		return
+	}
+	if req.SessionID != "" {
+		req.ProjectID, err = s.resolveRunProjectID(req.SessionID, req.ProjectID)
+		if err != nil {
+			if errors.Is(err, errSessionNotFound) {
+				writeJSONError(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, errSessionProjectConflict) {
+				writeJSONError(w, err.Error(), http.StatusConflict)
+				return
+			}
+			sanitizedError(w, "resolve run project", err, http.StatusInternalServerError)
+			return
+		}
+	}
 
 	setupCtx, cancelSetup := context.WithCancel(s.runManager.context())
 	stopRequestCancel := context.AfterFunc(r.Context(), cancelSetup)
@@ -90,7 +133,7 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		stopRequestCancel()
 		cancelSetup()
 	}()
-	agentSession, err := s.newRunAgentSession(setupCtx, req)
+	agentSession, err := s.newRunAgentSession(setupCtx, req, newSessionID)
 	if err != nil {
 		sanitizedError(w, "run create", err, http.StatusInternalServerError)
 		return
@@ -110,6 +153,10 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 	run, err := reservation.activate(runID, snapshot.SessionID, req.ProjectID, cancelRun)
 	if err != nil {
 		cancelRun()
+		if errors.Is(err, ErrSessionBusy) {
+			writeJSONError(w, ErrSessionBusy.Error(), http.StatusConflict)
+			return
+		}
 		if errors.Is(err, ErrRunManagerQuiescing) {
 			w.Header().Set("Retry-After", s.runManager.retryAfterHeader())
 			writeJSONError(w, "run capacity unavailable", http.StatusServiceUnavailable)
@@ -152,6 +199,23 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, runCreateResponse{RunID: runID, SessionID: snapshot.SessionID})
+}
+
+func (s *Server) resolveRunProjectID(sessionID, requestedProjectID string) (string, error) {
+	if sessionID == "" {
+		return requestedProjectID, nil
+	}
+	info, ok, err := s.runtimeSessionInfoByID(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", errSessionNotFound
+	}
+	if requestedProjectID != "" && requestedProjectID != info.ProjectID {
+		return "", errSessionProjectConflict
+	}
+	return info.ProjectID, nil
 }
 
 func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +265,7 @@ func (s *Server) handleRunAbort(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"aborted": aborted})
 }
 
-func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (*harness.AgentSession, error) {
+func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest, newSessionID string) (*harness.AgentSession, error) {
 	rawTools, inventory := s.chatToolsAndInventory(ctx, req.ProjectID)
 	runtimeTools, modelTools, err := s.runToolSets(ctx, rawTools)
 	if err != nil {
@@ -230,6 +294,7 @@ func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest) (
 		return runtime.Resume(ctx, req.SessionID)
 	}
 	return runtime.NewSession(ctx, harness.NewSessionOptions{
+		ID:        newSessionID,
 		Model:     s.llmConfig.Model,
 		Provider:  runProviderLabel,
 		ProjectID: req.ProjectID,

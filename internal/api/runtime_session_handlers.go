@@ -35,6 +35,37 @@ type runtimeSessionUpdateRequest struct {
 	Title string `json:"title"`
 }
 
+func (s *Server) beginSessionMutation(w http.ResponseWriter, sessionID string) (*sessionLease, bool) {
+	if !validateRuntimeSessionID(w, sessionID) {
+		return nil, false
+	}
+	if s.runManager == nil {
+		return nil, true
+	}
+	lease, err := s.runManager.acquireSession(sessionID)
+	if err == nil {
+		return lease, true
+	}
+	if errors.Is(err, ErrSessionBusy) {
+		writeJSONError(w, ErrSessionBusy.Error(), http.StatusConflict)
+		return nil, false
+	}
+	if errors.Is(err, ErrRunManagerQuiescing) {
+		writeJSONError(w, "server is shutting down", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	sanitizedError(w, "claim session mutation", err, http.StatusInternalServerError)
+	return nil, false
+}
+
+func validateRuntimeSessionID(w http.ResponseWriter, sessionID string) bool {
+	if err := runtimesession.ValidateID(sessionID); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if s.agentRepo == nil {
@@ -46,6 +77,11 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	lease, ok := s.beginSessionMutation(w, id)
+	if !ok {
+		return
+	}
+	defer lease.release()
 	agentSession, ok, err := s.runtimeAgentSession(r.Context(), id, "")
 	if err != nil {
 		sanitizedError(w, "load runtime session", err, http.StatusInternalServerError)
@@ -208,7 +244,7 @@ func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID s
 	}
 	if s.llmClient != nil {
 		req := runCreateRequest{SessionID: sessionID, ProjectID: effectiveProjectID}
-		agentSession, err := s.newRunAgentSession(ctx, req)
+		agentSession, err := s.newRunAgentSession(ctx, req, "")
 		if err != nil {
 			return nil, false, err
 		}

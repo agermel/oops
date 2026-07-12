@@ -118,6 +118,72 @@ func TestRuntimeSessionHandlersRename(t *testing.T) {
 	}
 }
 
+func TestRuntimeSessionMutationsRejectBusySession(t *testing.T) {
+	repo := runtimesession.NewRepository(nil)
+	server, jwtToken := newRuntimeSessionTestServer(t, repo)
+	createRuntimeSession(t, repo, "rt-busy", "proj-1", "hello")
+	lease, err := server.runManager.acquireSession("rt-busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.release()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "branch", method: http.MethodPost, path: "/api/sessions/rt-busy/branch", body: `{"leafId":"entry"}`},
+		{name: "rename", method: http.MethodPatch, path: "/api/sessions/rt-busy", body: `{"title":"busy"}`},
+		{name: "delete", method: http.MethodDelete, path: "/api/sessions/rt-busy"},
+		{name: "project rename", method: http.MethodPatch, path: "/api/projects/proj-1/sessions/rt-busy", body: `{"title":"busy"}`},
+		{name: "project delete", method: http.MethodDelete, path: "/api/projects/proj-1/sessions/rt-busy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := serveAuthed(t, server, jwtToken, tt.method, tt.path, tt.body)
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want %d, body = %s", resp.Code, http.StatusConflict, resp.Body.String())
+			}
+			if !strings.Contains(resp.Body.String(), "session is busy") {
+				t.Fatalf("body = %s", resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestRuntimeSessionHandlersRejectInvalidSessionID(t *testing.T) {
+	repo := runtimesession.NewRepository(nil)
+	server, jwtToken := newRuntimeSessionTestServer(t, repo)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "get", method: http.MethodGet, path: "/api/sessions/bad%20id"},
+		{name: "uppercase alias", method: http.MethodGet, path: "/api/sessions/RT-BUSY"},
+		{name: "branch", method: http.MethodPost, path: "/api/sessions/bad%20id/branch", body: `{"leafId":"entry"}`},
+		{name: "rename", method: http.MethodPatch, path: "/api/sessions/bad%20id", body: `{"title":"title"}`},
+		{name: "delete", method: http.MethodDelete, path: "/api/sessions/bad%20id"},
+		{name: "project get", method: http.MethodGet, path: "/api/projects/project-1/sessions/bad%20id"},
+		{name: "project rename", method: http.MethodPatch, path: "/api/projects/project-1/sessions/bad%20id", body: `{"title":"title"}`},
+		{name: "project delete", method: http.MethodDelete, path: "/api/projects/project-1/sessions/bad%20id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := serveAuthed(t, server, jwtToken, tt.method, tt.path, tt.body)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d, body = %s", resp.Code, http.StatusBadRequest, resp.Body.String())
+			}
+			if !strings.Contains(resp.Body.String(), "invalid session id") {
+				t.Fatalf("body = %s", resp.Body.String())
+			}
+		})
+	}
+}
+
 func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
 	repo := runtimesession.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)

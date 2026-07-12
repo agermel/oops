@@ -449,6 +449,47 @@ func TestRunManagerReleasesCapacityAfterExecutionFinishes(t *testing.T) {
 	second.release()
 }
 
+func TestRunManagerAllowsOneWriterPerSessionUntilExecutionFinishes(t *testing.T) {
+	manager := newRunManagerForTest(t)
+	first, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve first run: %v", err)
+	}
+	if err := first.claimSession("sess-1"); err != nil {
+		t.Fatalf("claim first session: %v", err)
+	}
+	run, err := first.activate("run-1", "sess-1", "project-1", func() {})
+	if err != nil {
+		t.Fatalf("activate first run: %v", err)
+	}
+
+	second, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve second run: %v", err)
+	}
+	if err := second.claimSession("sess-1"); !errors.Is(err, ErrSessionBusy) {
+		second.release()
+		t.Fatalf("claim session during active run = %v, want ErrSessionBusy", err)
+	}
+	second.release()
+
+	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+	if lease, err := manager.acquireSession("sess-1"); !errors.Is(err, ErrSessionBusy) {
+		lease.release()
+		t.Fatalf("claim session before execution finished = %v, want ErrSessionBusy", err)
+	}
+	run.finishExecution()
+	third, err := manager.reserve()
+	if err != nil {
+		t.Fatalf("reserve third run: %v", err)
+	}
+	if err := third.claimSession("sess-1"); err != nil {
+		third.release()
+		t.Fatalf("claim session after terminal: %v", err)
+	}
+	third.release()
+}
+
 func TestRunManagerBoundsTerminalSnapshotAndExpiresCompletedRun(t *testing.T) {
 	limits := config.DefaultRunLimits()
 	limits.MaxTerminalBytes = 512
