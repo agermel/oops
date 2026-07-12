@@ -71,6 +71,32 @@ jobs:
           staticcheck ./...
           deadcode -test ./...
           govulncheck ./...
+      - name: Enforce coverage floors
+        if: matrix.name == 'root'
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_coverage() {
+            local package="$1"
+            local minimum="$2"
+            local output actual
+            output="$(go test -count=1 -cover "./$package")"
+            printf '%s\n' "$output"
+            actual="$(awk '/coverage:/ { for (i = 1; i <= NF; i++) if ($i == "coverage:") { gsub("%", "", $(i + 1)); print $(i + 1); exit } }' <<<"$output")"
+            if [[ -z "$actual" ]]; then
+              echo "coverage output missing for $package" >&2
+              exit 1
+            fi
+            awk -v package="$package" -v actual="$actual" -v minimum="$minimum" 'BEGIN {
+              if (actual + 0 < minimum + 0) {
+                printf "%s coverage %s%% is below %s%%\\n", package, actual, minimum > "/dev/stderr"
+                exit 1
+              }
+            }'
+          }
+          check_coverage internal/api 50
+          check_coverage internal/mcp 50
+          check_coverage internal/llm/tools 40
       - name: Check generated SQLC code
         if: matrix.name == 'root'
         run: |
