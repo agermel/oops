@@ -391,6 +391,35 @@ func TestFileStorageRejectsLegacyJSONL(t *testing.T) {
 	}
 }
 
+func TestFileStorageRejectsVersionThree(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s1.jsonl")
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	validMessage := `{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}`
+	raw := `{"type":"message","version":3,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}` + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(storage)
+	if _, err := repo.Load("s1"); err == nil {
+		t.Fatal("Load() error = nil, want version three rejection")
+	} else {
+		for _, want := range []string{"s1.jsonl:1", "session entry version 3, want 1"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load() error = %q, want %q", err, want)
+			}
+		}
+	}
+	if _, ok := repo.Get("s1"); ok {
+		t.Fatal("failed version three load populated repository cache")
+	}
+}
+
 func TestFileStorageRejectsSessionIDsOutsideAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	storage, err := NewFileStorage(dir)
@@ -509,25 +538,64 @@ func TestFileStorageRootRejectsEscapingSymlink(t *testing.T) {
 	}
 }
 
-func TestEntryUnmarshalRejectsNonV3OrIncompleteWire(t *testing.T) {
+func TestEntryJSONUsesVersionOne(t *testing.T) {
+	entry := mustAppendMessage(t, New("s1"), "hello")
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Version != 1 {
+		t.Fatalf("version = %d, want 1", wire.Version)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	validMessage := `{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}`
+	var decoded Entry
+	if err := json.Unmarshal([]byte(`{"type":"message","version":1,"id":"m1","timestamp":"`+now+`","message":`+validMessage+`}`), &decoded); err != nil {
+		t.Fatalf("json.Unmarshal(v1 entry): %v", err)
+	}
+	if decoded.Version != 1 {
+		t.Fatalf("decoded version = %d, want 1", decoded.Version)
+	}
+}
+
+func TestEntryUnmarshalRejectsUnsupportedVersionOrIncompleteWire(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	validMessage := `{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}`
 	tests := []struct {
-		name string
-		raw  string
+		name    string
+		raw     string
+		wantErr string
 	}{
-		{name: "missing version", raw: `{"type":"message","id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`},
-		{name: "old version", raw: `{"type":"message","version":2,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`},
-		{name: "legacy entry type", raw: `{"type":"session","version":3,"id":"header","timestamp":"` + now + `"}`},
-		{name: "missing id", raw: `{"type":"session_info","version":3,"timestamp":"` + now + `"}`},
-		{name: "missing timestamp", raw: `{"type":"session_info","version":3,"id":"header"}`},
-		{name: "legacy message shape", raw: `{"type":"message","version":3,"id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`},
+		{name: "missing version", raw: `{"type":"message","id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`, wantErr: "session entry version 0, want 1"},
+		{name: "zero version", raw: `{"type":"message","version":0,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`, wantErr: "session entry version 0, want 1"},
+		{name: "version two", raw: `{"type":"message","version":2,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`, wantErr: "session entry version 2, want 1"},
+		{name: "version three", raw: `{"type":"message","version":3,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`, wantErr: "session entry version 3, want 1"},
+		{name: "future version", raw: `{"type":"message","version":99,"id":"m1","timestamp":"` + now + `","message":` + validMessage + `}`, wantErr: "session entry version 99, want 1"},
+		{name: "missing version before message", raw: `{"type":"message","id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`, wantErr: "session entry version 0, want 1"},
+		{name: "version two before message", raw: `{"type":"message","version":2,"id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`, wantErr: "session entry version 2, want 1"},
+		{name: "version three before message", raw: `{"type":"message","version":3,"id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`, wantErr: "session entry version 3, want 1"},
+		{name: "entry type before message", raw: `{"type":"unknown","version":1,"id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`, wantErr: `unknown session entry type "unknown"`},
+		{name: "legacy entry type", raw: `{"type":"session","version":1,"id":"header","timestamp":"` + now + `"}`, wantErr: `unknown session entry type "session"`},
+		{name: "missing id", raw: `{"type":"session_info","version":1,"timestamp":"` + now + `"}`, wantErr: "session entry requires id"},
+		{name: "missing timestamp", raw: `{"type":"session_info","version":1,"id":"header"}`, wantErr: "session entry requires timestamp"},
+		{name: "legacy message shape", raw: `{"type":"message","version":1,"id":"m1","timestamp":"` + now + `","message":{"role":"user","content":"hello"}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var entry Entry
-			if err := json.Unmarshal([]byte(tt.raw), &entry); err == nil {
+			err := json.Unmarshal([]byte(tt.raw), &entry)
+			if err == nil {
 				t.Fatalf("json.Unmarshal(%s) error = nil", tt.raw)
+			}
+			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("json.Unmarshal(%s) error = %q, want %q", tt.raw, err, tt.wantErr)
 			}
 		})
 	}
@@ -567,12 +635,14 @@ func TestRepositoryListDoesNotPartiallyPopulateCache(t *testing.T) {
 	if err := storage.Append("valid", valid); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "invalid.jsonl"), []byte(`{"type":"session_info","version":3}\n`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "invalid.jsonl"), []byte(`{"type":"session_info","version":1}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	repo := NewRepository(storage)
 	if _, err := repo.List(); err == nil {
 		t.Fatal("List() error = nil, want invalid file rejection")
+	} else if !strings.Contains(err.Error(), "invalid.jsonl:1: session entry requires id") {
+		t.Fatalf("List() error = %q, want filename, line, and missing id", err)
 	}
 	if _, ok := repo.Get("valid"); ok {
 		t.Fatal("failed List() partially populated valid cache entry")

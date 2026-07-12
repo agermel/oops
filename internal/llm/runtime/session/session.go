@@ -327,7 +327,7 @@ func (s *Session) prepareEntryLocked(entry *Entry) error {
 		entry.ID = newEntryID()
 	}
 	if entry.Version == 0 {
-		entry.Version = Version
+		entry.Version = formatVersion
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()

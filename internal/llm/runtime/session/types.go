@@ -11,7 +11,7 @@ import (
 	"oops/internal/llm/ai/protocol"
 )
 
-const Version = 3
+const formatVersion = 1
 
 type EntryType string
 
@@ -127,6 +127,12 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
+	if wire.Version != formatVersion {
+		return fmt.Errorf("session entry version %d, want %d", wire.Version, formatVersion)
+	}
+	if err := validateEntryType(wire.Type); err != nil {
+		return err
+	}
 	var message protocol.AgentMessage
 	if len(wire.Message) > 0 {
 		parsed, err := protocol.UnmarshalMessage(wire.Message)
@@ -163,23 +169,17 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 }
 
 func (e Entry) Validate() error {
-	if e.Type == "" {
-		return errors.New("session entry requires type")
+	if err := validateEntryType(e.Type); err != nil {
+		return err
 	}
-	if e.Version != Version {
-		return fmt.Errorf("session entry version %d, want %d", e.Version, Version)
+	if e.Version != formatVersion {
+		return fmt.Errorf("session entry version %d, want %d", e.Version, formatVersion)
 	}
 	if e.ID == "" {
 		return errors.New("session entry requires id")
 	}
 	if e.Timestamp.IsZero() {
 		return errors.New("session entry requires timestamp")
-	}
-	switch e.Type {
-	case EntrySessionInfo, EntryMessage, EntryModelChange, EntryThinkingLevelChange, EntryActiveToolsChange,
-		EntryCompaction, EntryBranchSummary, EntryCustom, EntryCustomMessage, EntryLabel, EntryLeaf:
-	default:
-		return fmt.Errorf("unknown session entry type %q", e.Type)
 	}
 	if e.Message != nil {
 		if err := e.Message.Validate(); err != nil {
@@ -199,6 +199,19 @@ func (e Entry) Validate() error {
 		return errors.New("branch summary entry requires summary")
 	}
 	return nil
+}
+
+func validateEntryType(entryType EntryType) error {
+	if entryType == "" {
+		return errors.New("session entry requires type")
+	}
+	switch entryType {
+	case EntrySessionInfo, EntryMessage, EntryModelChange, EntryThinkingLevelChange, EntryActiveToolsChange,
+		EntryCompaction, EntryBranchSummary, EntryCustom, EntryCustomMessage, EntryLabel, EntryLeaf:
+		return nil
+	default:
+		return fmt.Errorf("unknown session entry type %q", entryType)
+	}
 }
 
 type Context struct {
