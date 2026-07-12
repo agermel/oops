@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"oops/internal/mcp"
-
-	"github.com/cloudwego/eino/schema"
 )
 
 func TestFormatMCPToolInventory(t *testing.T) {
@@ -57,20 +55,5 @@ func TestFormatMCPToolInventoryQuotesPromptNames(t *testing.T) {
 	}
 	if !strings.Contains(got, `"info- injected" ("redis_info")`) {
 		t.Fatalf("inventory missing sanitized tool name:\n%s", got)
-	}
-}
-
-func TestAppendSystemPromptSection(t *testing.T) {
-	messages := []*schema.Message{
-		schema.SystemMessage("base"),
-		schema.UserMessage("hello"),
-	}
-
-	got := appendSystemPromptSection(messages, "inventory")
-	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2", len(got))
-	}
-	if got[0].Content != "base\n\ninventory" {
-		t.Fatalf("system content = %q", got[0].Content)
 	}
 }

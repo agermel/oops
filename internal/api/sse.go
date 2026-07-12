@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,21 +21,6 @@ func requireFlusher(w http.ResponseWriter) (http.Flusher, error) {
 		return nil, fmt.Errorf("streaming unsupported")
 	}
 	return flusher, nil
-}
-
-func writeNamedSSE(w io.Writer, flusher http.Flusher, eventName string, payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "event: %s\n", eventName); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
-		return err
-	}
-	flusher.Flush()
-	return nil
 }
 
 // copyAndFlush copies from reader to writer, flushing after each chunk.

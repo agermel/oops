@@ -7,8 +7,6 @@ import (
 	"unicode"
 
 	"oops/internal/mcp"
-
-	"github.com/cloudwego/eino/schema"
 )
 
 func formatMCPToolInventory(entries []mcp.ConnectionTool) string {
@@ -68,20 +66,4 @@ func promptQuotedName(s string) string {
 		s = string(runes[:maxRunes])
 	}
 	return strconv.Quote(s)
-}
-
-func appendSystemPromptSection(messages []*schema.Message, section string) []*schema.Message {
-	if section == "" {
-		return messages
-	}
-	for _, msg := range messages {
-		if msg.Role == schema.System {
-			msg.Content = msg.Content + "\n\n" + section
-			return messages
-		}
-	}
-	out := make([]*schema.Message, 0, len(messages)+1)
-	out = append(out, schema.SystemMessage(section))
-	out = append(out, messages...)
-	return out
 }

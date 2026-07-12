@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -30,36 +29,6 @@ func (t namedRunTool) Info(context.Context) (*schema.ToolInfo, error) {
 
 func (t namedRunTool) InvokableRun(context.Context, string, ...einotool.Option) (string, error) {
 	return "", nil
-}
-
-func TestStreamRunItemsUsesNamedSSEOrder(t *testing.T) {
-	events := make(chan runStreamItem, 2)
-	events <- runStreamItem{
-		name:    string(protocol.AgentEventAgentStart),
-		payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart},
-	}
-	events <- runStreamItem{
-		name: "run_done",
-		payload: runDoneEvent{
-			Type:    "run_done",
-			Session: harness.SessionSnapshot{SessionID: "sess-1"},
-		},
-	}
-	close(events)
-
-	recorder := httptest.NewRecorder()
-	if err := streamRunItems(recorder, recorder, events); err != nil {
-		t.Fatalf("streamRunItems() error = %v", err)
-	}
-
-	want := ":ok\n\n" +
-		"event: agent_start\n" +
-		"data: {\"type\":\"agent_start\"}\n\n" +
-		"event: run_done\n" +
-		"data: {\"type\":\"run_done\",\"session\":{\"sessionId\":\"sess-1\",\"messages\":[],\"events\":null,\"tools\":null,\"entries\":null}}\n\n"
-	if recorder.Body.String() != want {
-		t.Fatalf("SSE body = %q, want %q", recorder.Body.String(), want)
-	}
 }
 
 func TestRunManagerReplaysHistoryAndRunDone(t *testing.T) {
@@ -157,26 +126,6 @@ func newRunManagerForTest(t *testing.T, limits ...config.RunLimits) *runManager 
 		}
 	})
 	return manager
-}
-
-func TestWriteNamedSSEEscapesPayload(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	payload := map[string]string{"type": "run_error", "error": "bad\nvalue"}
-	if err := writeNamedSSE(recorder, recorder, "run_error", payload); err != nil {
-		t.Fatalf("writeNamedSSE() error = %v", err)
-	}
-	body := recorder.Body.String()
-	if !strings.HasPrefix(body, "event: run_error\ndata: ") {
-		t.Fatalf("body prefix = %q", body)
-	}
-	raw := strings.TrimSuffix(strings.TrimPrefix(body, "event: run_error\ndata: "), "\n\n")
-	var got map[string]string
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("payload json: %v", err)
-	}
-	if got["error"] != "bad\nvalue" {
-		t.Fatalf("payload = %#v", got)
-	}
 }
 
 func TestRunToolHelpersPreferReservedNames(t *testing.T) {
