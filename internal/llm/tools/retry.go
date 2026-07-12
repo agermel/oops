@@ -21,23 +21,6 @@ var DefaultRetryPolicy = RetryPolicy{
 	Backoff:    time.Second,
 }
 
-// isToolError 检查工具结果字符串是否表示工具层错误。
-// 工具在 ops 调用失败时返回 "Xxx失败: ..." 格式的内容。
-func isToolError(result string) bool {
-	prefixes := []string{
-		"查询失败",
-		"日志查询失败",
-		"连接检查失败",
-		"机器列表查询失败",
-	}
-	for _, p := range prefixes {
-		if strings.HasPrefix(result, p) {
-			return true
-		}
-	}
-	return false
-}
-
 // isRetryableError 判断 Go error 是否为瞬时性错误（可重试）。
 func isRetryableError(err error) bool {
 	if err == nil {

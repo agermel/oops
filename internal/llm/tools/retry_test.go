@@ -39,26 +39,6 @@ func TestIsRetryableError(t *testing.T) {
 	}
 }
 
-func TestIsToolError(t *testing.T) {
-	tests := []struct {
-		result  string
-		isError bool
-	}{
-		{"查询失败：timeout", true},
-		{"日志查询失败：connection refused", true},
-		{"连接检查失败：something", true},
-		{"机器列表查询失败：oops", true},
-		{"该 Nodelet 上没有容器。", false},
-		{"[{\"id\": \"local\"}]", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		if got := isToolError(tt.result); got != tt.isError {
-			t.Errorf("isToolError(%q) = %v, want %v", tt.result, got, tt.isError)
-		}
-	}
-}
-
 func TestRetryOpsCall_Success(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
