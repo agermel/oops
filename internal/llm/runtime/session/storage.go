@@ -14,19 +14,30 @@ type FileStorage struct {
 	dir string
 }
 
+const maxSessionIDLength = 128
+
 func NewFileStorage(dir string) (*FileStorage, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	root, err := filepath.Abs(dir)
+	if err != nil {
 		return nil, err
 	}
-	return &FileStorage{dir: dir}, nil
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return nil, err
+	}
+	return &FileStorage{dir: root}, nil
 }
 
 func (s *FileStorage) Append(sessionID string, entry Entry) error {
-	if sessionID == "" {
-		return fmt.Errorf("session id is required")
+	name, err := sessionFilename(sessionID)
+	if err != nil {
+		return err
 	}
-	path := filepath.Join(s.dir, sessionID+".jsonl")
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	file, err := openAppendFile(root, name)
 	if err != nil {
 		return err
 	}
@@ -42,11 +53,23 @@ func (s *FileStorage) Append(sessionID string, entry Entry) error {
 }
 
 func (s *FileStorage) Load(sessionID string) ([]Entry, error) {
-	if sessionID == "" {
-		return nil, fmt.Errorf("session id is required")
+	name, err := sessionFilename(sessionID)
+	if err != nil {
+		return nil, err
 	}
-	path := filepath.Join(s.dir, sessionID+".jsonl")
-	file, err := os.Open(path)
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	exact, err := hasExactEntry(root, name)
+	if err != nil {
+		return nil, err
+	}
+	if !exact {
+		return nil, nil
+	}
+	file, err := root.Open(name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -67,21 +90,31 @@ func (s *FileStorage) Load(sessionID string) ([]Entry, error) {
 		}
 		var entry Entry
 		if err := json.Unmarshal([]byte(text), &entry); err != nil {
-			return nil, fmt.Errorf("%s:%d: %w", filepath.Base(path), line, err)
+			return nil, fmt.Errorf("%s:%d: %w", name, line, err)
 		}
 		if err := candidate.loadEntryLocked(entry); err != nil {
-			return nil, fmt.Errorf("%s:%d: %w", filepath.Base(path), line, err)
+			return nil, fmt.Errorf("%s:%d: %w", name, line, err)
 		}
 		entries = append(entries, entry)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("%s:%d: %w", filepath.Base(path), line, err)
+		return nil, fmt.Errorf("%s:%d: %w", name, line, err)
 	}
 	return entries, nil
 }
 
 func (s *FileStorage) List() ([]string, error) {
-	entries, err := os.ReadDir(s.dir)
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	dir, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -90,22 +123,123 @@ func (s *FileStorage) List() ([]string, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		ids = append(ids, strings.TrimSuffix(entry.Name(), ".jsonl"))
+		id := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if !validSessionID(id) {
+			continue
+		}
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	return ids, nil
 }
 
 func (s *FileStorage) Delete(sessionID string) (bool, error) {
-	if sessionID == "" {
-		return false, fmt.Errorf("session id is required")
+	name, err := sessionFilename(sessionID)
+	if err != nil {
+		return false, err
 	}
-	path := filepath.Join(s.dir, sessionID+".jsonl")
-	if err := os.Remove(path); err != nil {
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	exact, err := hasExactEntry(root, name)
+	if err != nil {
+		return false, err
+	}
+	if !exact {
+		return false, nil
+	}
+	if err := root.Remove(name); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
 		return false, err
 	}
 	return true, nil
+}
+
+func openAppendFile(root *os.Root, name string) (*os.File, error) {
+	exact, err := hasExactEntry(root, name)
+	if err != nil {
+		return nil, err
+	}
+	if exact {
+		return root.OpenFile(name, os.O_APPEND|os.O_WRONLY, 0644)
+	}
+
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		exact, inspectErr := hasExactEntry(root, name)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if !exact {
+			return nil, fmt.Errorf("session filename conflicts with an existing directory entry")
+		}
+		return root.OpenFile(name, os.O_APPEND|os.O_WRONLY, 0644)
+	}
+
+	exact, inspectErr := hasExactEntry(root, name)
+	if inspectErr == nil && exact {
+		return file, nil
+	}
+	_ = file.Close()
+	_ = root.Remove(name)
+	if inspectErr != nil {
+		return nil, inspectErr
+	}
+	return nil, fmt.Errorf("session filename was not created exactly")
+}
+
+func hasExactEntry(root *os.Root, name string) (bool, error) {
+	dir, err := root.Open(".")
+	if err != nil {
+		return false, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.Name() == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func sessionFilename(sessionID string) (string, error) {
+	if err := ValidateID(sessionID); err != nil {
+		return "", err
+	}
+	return sessionID + ".jsonl", nil
+}
+
+// ValidateID enforces the fixed alphabet accepted by session storage.
+func ValidateID(sessionID string) error {
+	if !validSessionID(sessionID) {
+		return fmt.Errorf("invalid session id")
+	}
+	return nil
+}
+
+func validSessionID(sessionID string) bool {
+	if len(sessionID) == 0 || len(sessionID) > maxSessionIDLength {
+		return false
+	}
+	for i := range len(sessionID) {
+		char := sessionID[i]
+		if (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') ||
+			char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }

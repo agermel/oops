@@ -391,6 +391,124 @@ func TestFileStorageRejectsLegacyJSONL(t *testing.T) {
 	}
 }
 
+func TestFileStorageRejectsSessionIDsOutsideAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(dir), "outside.jsonl")
+	original := []byte("outside")
+	if err := os.WriteFile(outside, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustAppendMessage(t, New("valid"), "hello")
+
+	for _, sessionID := range []string{
+		"../outside",
+		"..%2foutside",
+		"nested/session",
+		`nested\session`,
+		"with space",
+		"session.jsonl",
+		"UPPERCASE",
+		"会话",
+		strings.Repeat("a", 129),
+	} {
+		t.Run(sessionID, func(t *testing.T) {
+			if err := storage.Append(sessionID, entry); err == nil {
+				t.Fatal("Append() error = nil, want invalid session id rejection")
+			}
+			if _, err := storage.Load(sessionID); err == nil {
+				t.Fatal("Load() error = nil, want invalid session id rejection")
+			}
+			if _, err := storage.Delete(sessionID); err == nil {
+				t.Fatal("Delete() error = nil, want invalid session id rejection")
+			}
+		})
+	}
+
+	got, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("outside file = %q, want %q", got, original)
+	}
+}
+
+func TestFileStorageRequiresExactFilenameCase(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upperPath := filepath.Join(dir, "UPPER.jsonl")
+	original := []byte("invalid uppercase file")
+	if err := os.WriteFile(upperPath, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := storage.Load("upper")
+	if err != nil {
+		t.Fatalf("Load lowercase alias: %v", err)
+	}
+	if entries != nil {
+		t.Fatalf("Load lowercase alias = %#v, want nil", entries)
+	}
+	deleted, err := storage.Delete("upper")
+	if err != nil {
+		t.Fatalf("Delete lowercase alias: %v", err)
+	}
+	if deleted {
+		t.Fatal("Delete lowercase alias removed an inexact directory entry")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "upper.jsonl")); err == nil {
+		entry := mustAppendMessage(t, New("upper"), "hello")
+		if err := storage.Append("upper", entry); err == nil {
+			t.Fatal("Append lowercase alias succeeded on a case-insensitive filesystem")
+		}
+	}
+	got, err := os.ReadFile(upperPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("uppercase file = %q, want unchanged", got)
+	}
+}
+
+func TestFileStorageRootRejectsEscapingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewFileStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(dir), "outside.jsonl")
+	if err := os.WriteFile(outside, []byte("outside"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := storage.Load("linked"); err == nil {
+		t.Fatal("Load() error = nil, want root escape rejection")
+	}
+	entry := mustAppendMessage(t, New("linked"), "hello")
+	if err := storage.Append("linked", entry); err == nil {
+		t.Fatal("Append() error = nil, want root escape rejection")
+	}
+	got, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "outside" {
+		t.Fatalf("outside file = %q, want unchanged", got)
+	}
+}
+
 func TestEntryUnmarshalRejectsNonV3OrIncompleteWire(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	validMessage := `{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}`
