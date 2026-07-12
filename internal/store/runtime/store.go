@@ -388,6 +388,96 @@ func (s *Store) UpdateProject(ctx context.Context, row ProjectRecord) error {
 	})
 }
 
+func (s *Store) AddProjectNodelet(ctx context.Context, projectID, nodeletID string, updatedAt time.Time) error {
+	return s.tx(ctx, func(q *Queries) error {
+		if err := updateProjectTimestamp(ctx, q, projectID, updatedAt); err != nil {
+			return err
+		}
+		inserted, err := q.AddProjectNodelet(ctx, AddProjectNodeletParams{
+			ProjectID: projectID,
+			NodeletID: nodeletID,
+		})
+		if err != nil {
+			return err
+		}
+		if inserted == 0 {
+			return fmt.Errorf("nodelet %q already in project %q", nodeletID, projectID)
+		}
+		return nil
+	})
+}
+
+func (s *Store) RemoveProjectNodelet(ctx context.Context, projectID, nodeletID string, updatedAt time.Time) error {
+	return s.tx(ctx, func(q *Queries) error {
+		if err := updateProjectTimestamp(ctx, q, projectID, updatedAt); err != nil {
+			return err
+		}
+		removed, err := q.RemoveProjectNodelet(ctx, RemoveProjectNodeletParams{
+			ProjectID: projectID,
+			NodeletID: nodeletID,
+		})
+		if err != nil {
+			return err
+		}
+		if removed == 0 {
+			return fmt.Errorf("nodelet %q not found in project %q", nodeletID, projectID)
+		}
+		return nil
+	})
+}
+
+func (s *Store) AddProjectExclusion(ctx context.Context, projectID, ref string, updatedAt time.Time) error {
+	return s.tx(ctx, func(q *Queries) error {
+		if err := updateProjectTimestamp(ctx, q, projectID, updatedAt); err != nil {
+			return err
+		}
+		inserted, err := q.AddProjectExclusion(ctx, AddProjectExclusionParams{
+			ProjectID: projectID,
+			Ref:       ref,
+		})
+		if err != nil {
+			return err
+		}
+		if inserted == 0 {
+			return fmt.Errorf("container ref %q already excluded from project %q", ref, projectID)
+		}
+		return nil
+	})
+}
+
+func (s *Store) RemoveProjectExclusion(ctx context.Context, projectID, ref string, updatedAt time.Time) error {
+	return s.tx(ctx, func(q *Queries) error {
+		if err := updateProjectTimestamp(ctx, q, projectID, updatedAt); err != nil {
+			return err
+		}
+		removed, err := q.RemoveProjectExclusion(ctx, RemoveProjectExclusionParams{
+			ProjectID: projectID,
+			Ref:       ref,
+		})
+		if err != nil {
+			return err
+		}
+		if removed == 0 {
+			return fmt.Errorf("container ref %q not found in project %q exclusions", ref, projectID)
+		}
+		return nil
+	})
+}
+
+func updateProjectTimestamp(ctx context.Context, q *Queries, projectID string, updatedAt time.Time) error {
+	updated, err := q.TouchProject(ctx, TouchProjectParams{
+		UpdatedAt: timeToUnixMilli(updatedAt),
+		ID:        projectID,
+	})
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		return fmt.Errorf("project %q not found", projectID)
+	}
+	return nil
+}
+
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
 	deleted, err := s.q.DeleteProject(ctx, id)
 	if err != nil {

@@ -88,6 +88,11 @@ UPDATE projects
 SET name = ?, description = ?, github_repo = ?, updated_at = ?
 WHERE id = ?;
 
+-- name: TouchProject :execrows
+UPDATE projects
+SET updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
+
 -- name: DeleteProject :execrows
 DELETE FROM projects
 WHERE id = ?;
@@ -111,6 +116,29 @@ VALUES (?, ?, ?);
 -- name: InsertProjectExclusion :exec
 INSERT INTO project_excluded_containers (project_id, ref)
 VALUES (?, ?);
+
+-- name: AddProjectNodelet :execrows
+INSERT INTO project_nodelets (project_id, nodelet_id, position)
+SELECT
+  sqlc.arg(project_id),
+  sqlc.arg(nodelet_id),
+  COALESCE(MAX(position) + 1, 0)
+FROM project_nodelets
+WHERE project_id = sqlc.arg(project_id)
+ON CONFLICT(project_id, nodelet_id) DO NOTHING;
+
+-- name: RemoveProjectNodelet :execrows
+DELETE FROM project_nodelets
+WHERE project_id = sqlc.arg(project_id) AND nodelet_id = sqlc.arg(nodelet_id);
+
+-- name: AddProjectExclusion :execrows
+INSERT INTO project_excluded_containers (project_id, ref)
+VALUES (sqlc.arg(project_id), sqlc.arg(ref))
+ON CONFLICT(project_id, ref) DO NOTHING;
+
+-- name: RemoveProjectExclusion :execrows
+DELETE FROM project_excluded_containers
+WHERE project_id = sqlc.arg(project_id) AND ref = sqlc.arg(ref);
 
 -- name: CountDSNEntries :one
 SELECT COUNT(*) FROM container_dsn_entries;

@@ -2,7 +2,11 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -136,6 +140,220 @@ func TestRuntimeStoreProjectUpdateRollsBack(t *testing.T) {
 	}
 	if got.Name != "Original" || len(got.NodeletIDs) != 1 || got.NodeletIDs[0] != "nodelet-1" {
 		t.Fatalf("transaction leaked partial update: %+v", got)
+	}
+}
+
+func TestRuntimeStoreProjectRowMutationsPreserveOtherRowsAndPersist(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	createdAt := time.UnixMilli(1000)
+	if err := store.CreateProject(ctx, ProjectRecord{
+		ID:                    "p1",
+		Name:                  "Project",
+		NodeletIDs:            []string{"keep", "remove"},
+		ExcludedContainerRefs: []string{"keep/ref", "remove/ref"},
+		CreatedAt:             createdAt,
+		UpdatedAt:             createdAt,
+	}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TRIGGER reject_nodelet_collection_rewrite
+		BEFORE DELETE ON project_nodelets
+		WHEN OLD.nodelet_id = 'keep'
+		BEGIN
+			SELECT RAISE(ABORT, 'keep nodelet row');
+		END;
+		CREATE TRIGGER reject_exclusion_collection_rewrite
+		BEFORE DELETE ON project_excluded_containers
+		WHEN OLD.ref = 'keep/ref'
+		BEGIN
+			SELECT RAISE(ABORT, 'keep exclusion row');
+		END`); err != nil {
+		t.Fatalf("create rewrite guards: %v", err)
+	}
+
+	if err := store.AddProjectNodelet(ctx, "p1", "added", time.UnixMilli(2000)); err != nil {
+		t.Fatalf("AddProjectNodelet: %v", err)
+	}
+	if err := store.AddProjectExclusion(ctx, "p1", "added/ref", time.UnixMilli(3000)); err != nil {
+		t.Fatalf("AddProjectExclusion: %v", err)
+	}
+	if err := store.RemoveProjectNodelet(ctx, "p1", "remove", time.UnixMilli(4000)); err != nil {
+		t.Fatalf("RemoveProjectNodelet: %v", err)
+	}
+	if err := store.RemoveProjectExclusion(ctx, "p1", "remove/ref", time.UnixMilli(5000)); err != nil {
+		t.Fatalf("RemoveProjectExclusion: %v", err)
+	}
+
+	for name, test := range map[string]struct {
+		call func() error
+		want string
+	}{
+		"duplicate nodelet": {
+			call: func() error { return store.AddProjectNodelet(ctx, "p1", "added", time.Now()) },
+			want: `nodelet "added" already in project "p1"`,
+		},
+		"missing nodelet": {
+			call: func() error { return store.RemoveProjectNodelet(ctx, "p1", "missing", time.Now()) },
+			want: `nodelet "missing" not found in project "p1"`,
+		},
+		"duplicate exclusion": {
+			call: func() error { return store.AddProjectExclusion(ctx, "p1", "added/ref", time.Now()) },
+			want: `container ref "added/ref" already excluded from project "p1"`,
+		},
+		"missing exclusion": {
+			call: func() error { return store.RemoveProjectExclusion(ctx, "p1", "missing/ref", time.Now()) },
+			want: `container ref "missing/ref" not found in project "p1" exclusions`,
+		},
+		"missing project": {
+			call: func() error { return store.AddProjectNodelet(ctx, "missing", "nodelet", time.Now()) },
+			want: `project "missing" not found`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := test.call()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	got, err := reopened.GetProject(ctx, "p1")
+	if err != nil {
+		t.Fatalf("GetProject after reopen: %v", err)
+	}
+	if got == nil || !slices.Equal(got.NodeletIDs, []string{"keep", "added"}) || !slices.Equal(got.ExcludedContainerRefs, []string{"added/ref", "keep/ref"}) {
+		t.Fatalf("project after reopen = %+v", got)
+	}
+	if !got.CreatedAt.Equal(createdAt) || !got.UpdatedAt.Equal(time.UnixMilli(5000)) {
+		t.Fatalf("timestamps after mutations = %s, %s", got.CreatedAt, got.UpdatedAt)
+	}
+}
+
+func TestRuntimeStoreProjectRowMutationsRollBackWithTimestamp(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	originalTime := time.UnixMilli(1000)
+	if err := store.CreateProject(ctx, ProjectRecord{
+		ID:                    "p1",
+		Name:                  "Project",
+		NodeletIDs:            []string{"keep", "remove"},
+		ExcludedContainerRefs: []string{"keep/ref", "remove/ref"},
+		CreatedAt:             originalTime,
+		UpdatedAt:             originalTime,
+	}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TRIGGER reject_nodelet_add
+		BEFORE INSERT ON project_nodelets
+		WHEN NEW.nodelet_id = 'added'
+		BEGIN
+			SELECT RAISE(ABORT, 'reject nodelet add');
+		END;
+		CREATE TRIGGER reject_nodelet_remove
+		BEFORE DELETE ON project_nodelets
+		WHEN OLD.nodelet_id = 'remove'
+		BEGIN
+			SELECT RAISE(ABORT, 'reject nodelet remove');
+		END;
+		CREATE TRIGGER reject_exclusion_add
+		BEFORE INSERT ON project_excluded_containers
+		WHEN NEW.ref = 'added/ref'
+		BEGIN
+			SELECT RAISE(ABORT, 'reject exclusion add');
+		END;
+		CREATE TRIGGER reject_exclusion_remove
+		BEFORE DELETE ON project_excluded_containers
+		WHEN OLD.ref = 'remove/ref'
+		BEGIN
+			SELECT RAISE(ABORT, 'reject exclusion remove');
+		END`); err != nil {
+		t.Fatalf("create row mutation guards: %v", err)
+	}
+
+	mutations := []struct {
+		name string
+		call func() error
+	}{
+		{name: "add nodelet", call: func() error { return store.AddProjectNodelet(ctx, "p1", "added", time.Now()) }},
+		{name: "remove nodelet", call: func() error { return store.RemoveProjectNodelet(ctx, "p1", "remove", time.Now()) }},
+		{name: "add exclusion", call: func() error { return store.AddProjectExclusion(ctx, "p1", "added/ref", time.Now()) }},
+		{name: "remove exclusion", call: func() error { return store.RemoveProjectExclusion(ctx, "p1", "remove/ref", time.Now()) }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if err := mutation.call(); err == nil {
+				t.Fatal("mutation succeeded, want row failure")
+			}
+		})
+	}
+
+	got, err := store.GetProject(ctx, "p1")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got == nil || !slices.Equal(got.NodeletIDs, []string{"keep", "remove"}) || !slices.Equal(got.ExcludedContainerRefs, []string{"keep/ref", "remove/ref"}) || !got.UpdatedAt.Equal(originalTime) {
+		t.Fatalf("row mutation leaked after rollback: %+v", got)
+	}
+}
+
+func TestRuntimeStoreConcurrentProjectRowMutations(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+	if err := store.CreateProject(ctx, ProjectRecord{ID: "p1", Name: "Project"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	const count = 16
+	var wg sync.WaitGroup
+	for i := range count {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := store.AddProjectNodelet(ctx, "p1", fmt.Sprintf("nodelet-%02d", i), time.Now()); err != nil {
+				t.Errorf("AddProjectNodelet: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := store.AddProjectExclusion(ctx, "p1", fmt.Sprintf("nodelet-%02d/container", i), time.Now()); err != nil {
+				t.Errorf("AddProjectExclusion: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	got, err := store.GetProject(ctx, "p1")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got == nil || len(got.NodeletIDs) != count || len(got.ExcludedContainerRefs) != count {
+		t.Fatalf("concurrent row mutations lost data: %+v", got)
 	}
 }
 

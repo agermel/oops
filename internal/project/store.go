@@ -136,82 +136,28 @@ func (s *Store) Remove(id string) error {
 func (s *Store) AddNodelet(projectID, nodeletID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	project, err := s.projectLocked(projectID)
-	if err != nil {
-		return err
-	}
-	if slices.Contains(project.NodeletIDs, nodeletID) {
-		return fmt.Errorf("nodelet %q already in project %q", nodeletID, projectID)
-	}
-	project.NodeletIDs = append(project.NodeletIDs, nodeletID)
-	project.UpdatedAt = time.Now()
-	return s.runtime.UpdateProject(context.Background(), projectRecord(*project))
+	return s.runtime.AddProjectNodelet(context.Background(), projectID, nodeletID, time.Now())
 }
 
 // RemoveNodelet 从项目中移除服务器。
 func (s *Store) RemoveNodelet(projectID, nodeletID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	project, err := s.projectLocked(projectID)
-	if err != nil {
-		return err
-	}
-	index := slices.Index(project.NodeletIDs, nodeletID)
-	if index < 0 {
-		return fmt.Errorf("nodelet %q not found in project %q", nodeletID, projectID)
-	}
-	project.NodeletIDs = slices.Delete(project.NodeletIDs, index, index+1)
-	project.UpdatedAt = time.Now()
-	return s.runtime.UpdateProject(context.Background(), projectRecord(*project))
+	return s.runtime.RemoveProjectNodelet(context.Background(), projectID, nodeletID, time.Now())
 }
 
 // ExcludeContainer 将容器加入项目排除列表。
 func (s *Store) ExcludeContainer(projectID, ref string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	project, err := s.projectLocked(projectID)
-	if err != nil {
-		return err
-	}
-	if slices.Contains(project.ExcludedContainerRefs, ref) {
-		return fmt.Errorf("container ref %q already excluded from project %q", ref, projectID)
-	}
-	project.ExcludedContainerRefs = append(project.ExcludedContainerRefs, ref)
-	project.UpdatedAt = time.Now()
-	return s.runtime.UpdateProject(context.Background(), projectRecord(*project))
+	return s.runtime.AddProjectExclusion(context.Background(), projectID, ref, time.Now())
 }
 
 // IncludeContainer 从项目排除列表移除容器。
 func (s *Store) IncludeContainer(projectID, ref string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	project, err := s.projectLocked(projectID)
-	if err != nil {
-		return err
-	}
-	index := slices.Index(project.ExcludedContainerRefs, ref)
-	if index < 0 {
-		return fmt.Errorf("container ref %q not found in project %q exclusions", ref, projectID)
-	}
-	project.ExcludedContainerRefs = slices.Delete(project.ExcludedContainerRefs, index, index+1)
-	project.UpdatedAt = time.Now()
-	return s.runtime.UpdateProject(context.Background(), projectRecord(*project))
-}
-
-func (s *Store) projectLocked(id string) (*Project, error) {
-	row, err := s.runtime.GetProject(context.Background(), id)
-	if err != nil {
-		return nil, err
-	}
-	if row == nil {
-		return nil, fmt.Errorf("project %q not found", id)
-	}
-	project := projectFromRecord(*row)
-	return &project, nil
+	return s.runtime.RemoveProjectExclusion(context.Background(), projectID, ref, time.Now())
 }
 
 func (s *Store) ensureUniqueNameLocked(id, name string) error {

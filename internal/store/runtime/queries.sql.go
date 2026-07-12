@@ -9,6 +9,49 @@ import (
 	"context"
 )
 
+const addProjectExclusion = `-- name: AddProjectExclusion :execrows
+INSERT INTO project_excluded_containers (project_id, ref)
+VALUES (?1, ?2)
+ON CONFLICT(project_id, ref) DO NOTHING
+`
+
+type AddProjectExclusionParams struct {
+	ProjectID string `json:"project_id"`
+	Ref       string `json:"ref"`
+}
+
+func (q *Queries) AddProjectExclusion(ctx context.Context, arg AddProjectExclusionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, addProjectExclusion, arg.ProjectID, arg.Ref)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const addProjectNodelet = `-- name: AddProjectNodelet :execrows
+INSERT INTO project_nodelets (project_id, nodelet_id, position)
+SELECT
+  ?1,
+  ?2,
+  COALESCE(MAX(position) + 1, 0)
+FROM project_nodelets
+WHERE project_id = ?1
+ON CONFLICT(project_id, nodelet_id) DO NOTHING
+`
+
+type AddProjectNodeletParams struct {
+	ProjectID string `json:"project_id"`
+	NodeletID string `json:"nodelet_id"`
+}
+
+func (q *Queries) AddProjectNodelet(ctx context.Context, arg AddProjectNodeletParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, addProjectNodelet, arg.ProjectID, arg.NodeletID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countDSNEntries = `-- name: CountDSNEntries :one
 SELECT COUNT(*) FROM container_dsn_entries
 `
@@ -635,6 +678,61 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeProjectExclusion = `-- name: RemoveProjectExclusion :execrows
+DELETE FROM project_excluded_containers
+WHERE project_id = ?1 AND ref = ?2
+`
+
+type RemoveProjectExclusionParams struct {
+	ProjectID string `json:"project_id"`
+	Ref       string `json:"ref"`
+}
+
+func (q *Queries) RemoveProjectExclusion(ctx context.Context, arg RemoveProjectExclusionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, removeProjectExclusion, arg.ProjectID, arg.Ref)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const removeProjectNodelet = `-- name: RemoveProjectNodelet :execrows
+DELETE FROM project_nodelets
+WHERE project_id = ?1 AND nodelet_id = ?2
+`
+
+type RemoveProjectNodeletParams struct {
+	ProjectID string `json:"project_id"`
+	NodeletID string `json:"nodelet_id"`
+}
+
+func (q *Queries) RemoveProjectNodelet(ctx context.Context, arg RemoveProjectNodeletParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, removeProjectNodelet, arg.ProjectID, arg.NodeletID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const touchProject = `-- name: TouchProject :execrows
+UPDATE projects
+SET updated_at = ?1
+WHERE id = ?2
+`
+
+type TouchProjectParams struct {
+	UpdatedAt int64  `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) TouchProject(ctx context.Context, arg TouchProjectParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, touchProject, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateProject = `-- name: UpdateProject :execrows
