@@ -56,10 +56,19 @@ func (f fakeHostProvider) ContainerLogsStream(_ *http.Request, _ string) (<-chan
 	return logs, nil
 }
 
+func newNodeletHTTPServer(t *testing.T, provider Provider, token string) *Server {
+	t.Helper()
+	server, err := NewServerWithTokenAndTrustedProxies(provider, token, nil)
+	if err != nil {
+		t.Fatalf("NewServerWithTokenAndTrustedProxies: %v", err)
+	}
+	t.Cleanup(server.Shutdown)
+	return server
+}
+
 // TestServerHealth 验证 Nodelet 存活接口。
 func TestServerHealth(t *testing.T) {
-	server := NewServer(fakeHostProvider{})
-	t.Cleanup(server.Shutdown)
+	server := newNodeletHTTPServer(t, fakeHostProvider{}, "")
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
 	response := httptest.NewRecorder()
 
@@ -93,7 +102,7 @@ func TestServerClientIPUsesForwardedAddressOnlyForTrustedProxy(t *testing.T) {
 
 // TestServerHost 验证 Nodelet 机器信息接口需要鉴权。
 func TestServerHost(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{host: Host{
+	server := newNodeletHTTPServer(t, fakeHostProvider{host: Host{
 		ID:        "host-1",
 		Name:      "prod-api-01",
 		Available: true,
@@ -111,7 +120,7 @@ func TestServerHost(t *testing.T) {
 
 // TestServerHostWithToken 验证 Nodelet 数据接口接受正确 Token。
 func TestServerHostWithToken(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{host: Host{
+	server := newNodeletHTTPServer(t, fakeHostProvider{host: Host{
 		ID:        "host-1",
 		Name:      "prod-api-01",
 		Available: true,
@@ -129,7 +138,7 @@ func TestServerHostWithToken(t *testing.T) {
 
 // TestServerHostUnauthorized 验证 Nodelet 数据接口拒绝错误 Token。
 func TestServerHostUnauthorized(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{}, "secret")
+	server := newNodeletHTTPServer(t, fakeHostProvider{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	request.Header.Set("Authorization", "Bearer wrong")
 	response := httptest.NewRecorder()
@@ -143,10 +152,10 @@ func TestServerHostUnauthorized(t *testing.T) {
 
 // TestServerHostNoTokenConfigured 验证未配置 Token 时受保护接口返回 503。
 func TestServerHostNoTokenConfigured(t *testing.T) {
-	server := NewServer(fakeHostProvider{host: Host{
+	server := newNodeletHTTPServer(t, fakeHostProvider{host: Host{
 		ID:   "host-1",
 		Name: "prod-api-01",
-	}})
+	}}, "")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	response := httptest.NewRecorder()
 
@@ -159,7 +168,7 @@ func TestServerHostNoTokenConfigured(t *testing.T) {
 
 // TestServerHealthWithoutToken 验证 Nodelet 存活接口无需 Token。
 func TestServerHealthWithoutToken(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{}, "secret")
+	server := newNodeletHTTPServer(t, fakeHostProvider{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HealthPath, nil)
 	response := httptest.NewRecorder()
 
@@ -172,7 +181,7 @@ func TestServerHealthWithoutToken(t *testing.T) {
 
 // TestServerContainers 验证 Nodelet 容器列表接口。
 func TestServerContainers(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{containers: []Container{
+	server := newNodeletHTTPServer(t, fakeHostProvider{containers: []Container{
 		{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Name: "api"},
 	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainersPath, nil)
@@ -188,7 +197,7 @@ func TestServerContainers(t *testing.T) {
 
 // TestServerContainersUnavailable 验证容器列表读取失败时返回 503。
 func TestServerContainersUnavailable(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{err: errors.New("docker unavailable")}, "secret")
+	server := newNodeletHTTPServer(t, fakeHostProvider{err: errors.New("docker unavailable")}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainersPath, nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
@@ -202,7 +211,7 @@ func TestServerContainersUnavailable(t *testing.T) {
 
 // TestServerContainerLogs 验证 Nodelet 容器日志接口。
 func TestServerContainerLogs(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{logs: []LogEntry{
+	server := newNodeletHTTPServer(t, fakeHostProvider{logs: []LogEntry{
 		{ContainerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Stream: "stdout", Message: "started"},
 	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainerLogsPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
@@ -218,7 +227,7 @@ func TestServerContainerLogs(t *testing.T) {
 
 // TestServerContainerLogsStream 验证 Nodelet 容器日志 SSE 接口。
 func TestServerContainerLogsStream(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{streamLogs: []LogEntry{
+	server := newNodeletHTTPServer(t, fakeHostProvider{streamLogs: []LogEntry{
 		{ContainerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Stream: "stdout", Message: "started"},
 	}}, "secret")
 	request := httptest.NewRequest(http.MethodGet, ContainerLogsStreamPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
@@ -240,7 +249,7 @@ func TestServerContainerLogsStream(t *testing.T) {
 
 // TestServerHostUnavailable 验证机器信息读取失败时返回 503。
 func TestServerHostUnavailable(t *testing.T) {
-	server := NewServerWithToken(fakeHostProvider{err: errors.New("docker unavailable")}, "secret")
+	server := newNodeletHTTPServer(t, fakeHostProvider{err: errors.New("docker unavailable")}, "secret")
 	request := httptest.NewRequest(http.MethodGet, HostPath, nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()

@@ -21,7 +21,7 @@ func TestHandleMCPLogs(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = runtime.Close() })
 
-	manager, err := mcp.NewManagerWithRuntime(runtime, nil)
+	manager, err := mcp.NewManagerWithRuntimeAndConsole(runtime, nil, nil)
 	if err != nil {
 		t.Fatalf("NewManagerWithRuntime: %v", err)
 	}

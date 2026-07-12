@@ -167,11 +167,6 @@ type Manager struct {
 	closed           bool
 }
 
-// NewManagerWithRuntime loads MCP connections from SQLite.
-func NewManagerWithRuntime(runtime *runtimestore.Store, onChange func([]ConnectionTool)) (*Manager, error) {
-	return NewManagerWithRuntimeAndConsole(runtime, nil, onChange)
-}
-
 // NewManagerWithRuntimeAndConsole loads MCP connections and writes process-level
 // messages to the composition-root console hub.
 func NewManagerWithRuntimeAndConsole(runtime *runtimestore.Store, consoleHub *console.Hub, onChange func([]ConnectionTool)) (*Manager, error) {

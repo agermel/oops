@@ -183,7 +183,7 @@ func TestServerQuiesceTerminatesMCPLogSSE(t *testing.T) {
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer runtime.Close()
-	manager, err := mcp.NewManagerWithRuntime(runtime, nil)
+	manager, err := mcp.NewManagerWithRuntimeAndConsole(runtime, nil, nil)
 	if err != nil {
 		t.Fatalf("new MCP manager: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestServerCloseShutsDownMCPManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
-	manager, err := mcp.NewManagerWithRuntime(runtime, nil)
+	manager, err := mcp.NewManagerWithRuntimeAndConsole(runtime, nil, nil)
 	if err != nil {
 		_ = runtime.Close()
 		t.Fatalf("new MCP manager: %v", err)

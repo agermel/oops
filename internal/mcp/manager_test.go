@@ -44,7 +44,7 @@ func TestManagerRuntimeLoadsSQLiteConnections(t *testing.T) {
 		t.Fatalf("seed runtime mcp connection: %v", err)
 	}
 
-	manager, err := NewManagerWithRuntime(runtime, nil)
+	manager, err := NewManagerWithRuntimeAndConsole(runtime, nil, nil)
 	if err != nil {
 		t.Fatalf("NewManagerWithRuntime: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestManagerRuntimePreservesAndDisablesGlobalConnections(t *testing.T) {
 		t.Fatalf("seed runtime mcp connections: %v", err)
 	}
 
-	manager, err := NewManagerWithRuntime(runtime, nil)
+	manager, err := NewManagerWithRuntimeAndConsole(runtime, nil, nil)
 	if err != nil {
 		t.Fatalf("NewManagerWithRuntime: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestManagerRejectsGlobalConnection(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	manager, err := NewManagerWithRuntime(runtime, nil)
+	manager, err := NewManagerWithRuntimeAndConsole(runtime, nil, nil)
 	if err != nil {
 		t.Fatalf("NewManagerWithRuntime: %v", err)
 	}
@@ -348,7 +348,7 @@ func newMCPManagerForTest(t *testing.T, onChange func([]ConnectionTool)) (*Manag
 	}
 	t.Cleanup(func() { _ = runtime.Close() })
 
-	manager, err := NewManagerWithRuntime(runtime, onChange)
+	manager, err := NewManagerWithRuntimeAndConsole(runtime, nil, onChange)
 	if err != nil {
 		t.Fatalf("NewManagerWithRuntime: %v", err)
 	}
@@ -876,7 +876,7 @@ func TestManagerShutdownReleasesMutationLockBeforeCallbackDrain(t *testing.T) {
 	callbackMutation := make(chan error, 1)
 	var callbackOnce sync.Once
 	var manager *Manager
-	manager, err = NewManagerWithRuntime(runtime, func([]ConnectionTool) {
+	manager, err = NewManagerWithRuntimeAndConsole(runtime, nil, func([]ConnectionTool) {
 		callbackOnce.Do(func() {
 			close(callbackEntered)
 			<-releaseCallback

@@ -44,18 +44,6 @@ func (b *StderrBuffer) String() string {
 	return strings.TrimRight(s, "\n")
 }
 
-// Connect connects to an MCP server as configured in cfg, initializes the
-// session, and returns every tool the server exposes. The returned closer
-// function should be called to tear down the connection.
-//
-// Two transports are supported:
-//
-//	transport: "stdio"  → launches a child process (command + args)
-//	transport: "sse"    → connects to a remote SSE endpoint (url)
-func Connect(ctx context.Context, cfg config.MCPConfig) (MCPSession, []tool.BaseTool, func(), error) {
-	return ConnectWithLog(ctx, cfg, nil)
-}
-
 // ConnectWithLog connects to an MCP server and mirrors transport logs to logWriter.
 func ConnectWithLog(ctx context.Context, cfg config.MCPConfig, logWriter io.Writer) (MCPSession, []tool.BaseTool, func(), error) {
 	switch cfg.Transport {

@@ -62,13 +62,13 @@ done
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, tools, closer, err := Connect(ctx, config.MCPConfig{
+	_, tools, closer, err := ConnectWithLog(ctx, config.MCPConfig{
 		Transport: "stdio",
 		Command:   "../../mcp-servers/kafka/kafka-mcp",
 		Env: append(kafkaWrapperEnv(),
 			"OOPS_MCP_CONFLUENT_BIN="+fakeBin,
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

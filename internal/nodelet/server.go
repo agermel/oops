@@ -44,24 +44,6 @@ type Server struct {
 	limiter  *httprate.Limiter
 }
 
-// NewServer 创建不带鉴权的 Nodelet HTTP 服务（仅用于测试）。
-func NewServer(provider Provider) *Server {
-	server, err := NewServerWithTokenAndTrustedProxies(provider, "", nil)
-	if err != nil {
-		panic(err)
-	}
-	return server
-}
-
-// NewServerWithToken 创建带强制鉴权的 Nodelet HTTP 服务。token 为空时所有受保护接口返回 503。
-func NewServerWithToken(provider Provider, token string) *Server {
-	server, err := NewServerWithTokenAndTrustedProxies(provider, token, nil)
-	if err != nil {
-		panic(err)
-	}
-	return server
-}
-
 // NewServerWithTokenAndTrustedProxies creates a Nodelet server with an
 // explicit proxy trust boundary for rate limiting and request logs.
 func NewServerWithTokenAndTrustedProxies(provider Provider, token string, trustedProxyCIDRs []string) (*Server, error) {
