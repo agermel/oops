@@ -440,16 +440,11 @@ func (e statusCodeError) StatusCode() int {
 	return e.status
 }
 
-func TestManagerNotificationCoalescesBlockedCallbacks(t *testing.T) {
+func TestManagerNotificationDeliversBlockedRevisionsInOrder(t *testing.T) {
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
-	secondEntered := make(chan struct{})
-	releaseSecond := make(chan struct{})
 	var releaseOnce sync.Once
-	defer func() {
-		releaseOnce.Do(func() { close(releaseFirst) })
-		close(releaseSecond)
-	}()
+	defer func() { releaseOnce.Do(func() { close(releaseFirst) }) }()
 
 	var callsMu sync.Mutex
 	var calls [][]ConnectionTool
@@ -461,10 +456,6 @@ func TestManagerNotificationCoalescesBlockedCallbacks(t *testing.T) {
 		if callCount == 1 {
 			close(firstEntered)
 			<-releaseFirst
-		}
-		if callCount == 2 {
-			close(secondEntered)
-			<-releaseSecond
 		}
 	})
 	manager.startProc = func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error) {
@@ -497,31 +488,150 @@ func TestManagerNotificationCoalescesBlockedCallbacks(t *testing.T) {
 		defer manager.mu.Unlock()
 		return manager.toolRevision == 3
 	})
-	manager.notificationMu.Lock()
-	pending := manager.pendingChange
-	if pending == nil || pending.revision != 3 || len(pending.tools) != 1 {
-		manager.notificationMu.Unlock()
-		t.Fatalf("pending change = %#v, want revision 3 with one tool", pending)
-	}
-	manager.notificationMu.Unlock()
 
 	releaseOnce.Do(func() { close(releaseFirst) })
 	waitForMCP(t, func() bool {
 		callsMu.Lock()
 		defer callsMu.Unlock()
-		return len(calls) == 2
+		return len(calls) == 3
 	})
+
+	callsMu.Lock()
+	got := []int{len(calls[0]), len(calls[1]), len(calls[2])}
+	callsMu.Unlock()
+	if !slices.Equal(got, []int{1, 0, 1}) {
+		t.Fatalf("notification snapshot sizes = %v, want [1 0 1]", got)
+	}
+}
+
+func TestManagerNotificationQueueAppliesBackpressure(t *testing.T) {
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	defer func() { releaseOnce.Do(func() { close(releaseFirst) }) }()
+
+	var callbackOnce sync.Once
+	manager, _ := newMCPManagerForTest(t, func([]ConnectionTool) {
+		callbackOnce.Do(func() {
+			close(firstEntered)
+			<-releaseFirst
+		})
+	})
+
+	enqueue := func(revision int64) {
+		manager.mutationMu.Lock()
+		manager.enqueueToolChange(&toolChange{revision: revision})
+		manager.mutationMu.Unlock()
+	}
+	enqueue(1)
 	select {
-	case <-secondEntered:
+	case <-firstEntered:
 	case <-time.After(time.Second):
-		t.Fatal("coalesced tool notification did not arrive")
+		t.Fatal("first tool notification did not arrive")
+	}
+
+	for revision := int64(2); revision <= notificationQueueCapacity+1; revision++ {
+		enqueue(revision)
+	}
+	extraDone := make(chan struct{})
+	go func() {
+		enqueue(notificationQueueCapacity + 2)
+		close(extraDone)
+	}()
+
+	select {
+	case <-extraDone:
+		t.Fatal("notification enqueue bypassed queue backpressure")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(releaseFirst) })
+	select {
+	case <-extraDone:
+	case <-time.After(time.Second):
+		t.Fatal("notification enqueue did not resume after queue drain")
+	}
+}
+
+func TestManagerNotificationShutdownDrainsCommittedRevisions(t *testing.T) {
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	defer func() { releaseOnce.Do(func() { close(releaseFirst) }) }()
+
+	var callsMu sync.Mutex
+	var revisions []string
+	var manager *Manager
+	manager, _ = newMCPManagerForTest(t, func(tools []ConnectionTool) {
+		_ = manager.List()
+		_ = manager.GetConnectionToolEntries()
+		callsMu.Lock()
+		revisions = append(revisions, tools[0].OriginalName)
+		callCount := len(revisions)
+		callsMu.Unlock()
+		if callCount == 1 {
+			close(firstEntered)
+			<-releaseFirst
+		}
+	})
+
+	manager.mutationMu.Lock()
+	manager.enqueueToolChange(&toolChange{revision: 1, tools: []ConnectionTool{{OriginalName: "1"}}})
+	manager.mutationMu.Unlock()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first tool notification did not arrive")
+	}
+	for revision := int64(2); revision <= notificationQueueCapacity+1; revision++ {
+		manager.mutationMu.Lock()
+		manager.enqueueToolChange(&toolChange{revision: revision, tools: []ConnectionTool{{OriginalName: fmt.Sprint(revision)}}})
+		manager.mutationMu.Unlock()
+	}
+	blockedProducerDone := make(chan struct{})
+	go func() {
+		manager.mutationMu.Lock()
+		revision := int64(notificationQueueCapacity + 2)
+		manager.enqueueToolChange(&toolChange{revision: revision, tools: []ConnectionTool{{OriginalName: fmt.Sprint(revision)}}})
+		manager.mutationMu.Unlock()
+		close(blockedProducerDone)
+	}()
+	select {
+	case <-blockedProducerDone:
+		t.Fatal("producer did not block on the full notification queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- manager.Shutdown(context.Background()) }()
+	waitForMCP(t, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		return manager.closed
+	})
+	releaseOnce.Do(func() { close(releaseFirst) })
+	select {
+	case <-blockedProducerDone:
+	case <-time.After(time.Second):
+		t.Fatal("notification producer did not resume while Shutdown drained the queue")
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not finish after callback release")
 	}
 
 	callsMu.Lock()
-	got := []int{len(calls[0]), len(calls[1])}
-	callsMu.Unlock()
-	if !slices.Equal(got, []int{1, 1}) {
-		t.Fatalf("notification snapshot sizes = %v, want [1 1]", got)
+	defer callsMu.Unlock()
+	want := make([]string, notificationQueueCapacity+2)
+	for i := range want {
+		want[i] = fmt.Sprint(i + 1)
+	}
+	if !slices.Equal(revisions, want) {
+		t.Fatalf("notification revisions = %v, want %v", revisions, want)
 	}
 }
 
@@ -863,7 +973,7 @@ func TestManagerShutdownClosesAdmissionBeforeBackgroundDrain(t *testing.T) {
 	}
 }
 
-func TestManagerShutdownReleasesMutationLockBeforeCallbackDrain(t *testing.T) {
+func TestManagerShutdownReleasesMutationLockBeforeNotificationDrain(t *testing.T) {
 	ignoreExisting := goleak.IgnoreCurrent()
 	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
 	if err != nil {
@@ -873,14 +983,14 @@ func TestManagerShutdownReleasesMutationLockBeforeCallbackDrain(t *testing.T) {
 
 	callbackEntered := make(chan struct{})
 	releaseCallback := make(chan struct{})
-	callbackMutation := make(chan error, 1)
 	var callbackOnce sync.Once
 	var manager *Manager
 	manager, err = NewManagerWithRuntimeAndConsole(runtime, nil, func([]ConnectionTool) {
 		callbackOnce.Do(func() {
 			close(callbackEntered)
 			<-releaseCallback
-			callbackMutation <- manager.Add(testMCPConnectionConfig("callback-mutation", false))
+			_ = manager.List()
+			_ = manager.GetConnectionToolEntries()
 		})
 	})
 	if err != nil {
@@ -926,14 +1036,6 @@ func TestManagerShutdownReleasesMutationLockBeforeCallbackDrain(t *testing.T) {
 	}
 
 	close(releaseCallback)
-	select {
-	case err := <-callbackMutation:
-		if err == nil || !strings.Contains(err.Error(), "closed") {
-			t.Fatalf("callback mutation error = %v, want closed manager", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("callback mutation did not return")
-	}
 	select {
 	case err := <-shutdownDone:
 		if err != nil {

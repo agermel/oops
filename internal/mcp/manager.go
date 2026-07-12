@@ -157,10 +157,9 @@ type Manager struct {
 	startProc        func(context.Context, ConnectionConfig, *ConnectionLogHub) (*managedProcess, error)
 	lifecycle        context.Context
 	cancel           context.CancelFunc
-	notificationCh   chan struct{}
+	notificationCh   chan *toolChange
 	notificationDone chan struct{}
 	notificationMu   sync.Mutex
-	pendingChange    *toolChange
 	notificationStop bool
 	closeOnce        sync.Once
 	closeDone        chan struct{}
@@ -168,7 +167,8 @@ type Manager struct {
 }
 
 // NewManagerWithRuntimeAndConsole loads MCP connections and writes process-level
-// messages to the composition-root console hub.
+// messages to the composition-root console hub. onChange is a serial, read-only
+// sink: it may call Manager query methods and must not call mutation methods.
 func NewManagerWithRuntimeAndConsole(runtime *runtimestore.Store, consoleHub *console.Hub, onChange func([]ConnectionTool)) (*Manager, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime store is required")
