@@ -15,7 +15,7 @@ import (
 )
 
 // sessionInfo 是 HTTP 会话列表和重命名响应的稳定 DTO。
-// Runtime Session 的领域对象不会穿透到 HTTP 边界。
+// Session 的领域对象不会穿透到 HTTP 边界。
 type sessionInfo struct {
 	ID           string `json:"id"`
 	ProjectID    string `json:"projectId,omitempty"`
@@ -84,7 +84,7 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 	defer lease.release()
 	agentSession, ok, err := s.runtimeAgentSession(r.Context(), id, "")
 	if err != nil {
-		sanitizedError(w, "load runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "load session", err, http.StatusInternalServerError)
 		return
 	}
 	if !ok {

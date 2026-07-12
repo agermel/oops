@@ -81,7 +81,7 @@ graph TB
     ToolRunner --> OpsTools["Ops Tools<br/>nodelets / containers / logs"]
     ToolRunner --> MCPTools["MCP Tools"]
 
-    AgentSession --> RuntimeSession["Runtime Session<br/>JSONL v3 tree"]
+    AgentSession --> RuntimeSession["Session<br/>JSONL v1 tree"]
     RuntimeSession --> Context["Leaf Context<br/>messages + model + tools<br/>compaction + branch summary"]
     Context --> AgentSession
 
@@ -96,7 +96,7 @@ graph TB
 3. **Agent Loop** — `runAgentLoop` 追加用户消息，请求 Provider，流式接收 assistant message，执行工具，再把 tool result message 按原始 tool call 顺序写回上下文。
 4. **Provider 与工具** — Provider 通过 Eino 绑定模型工具 schema；本地执行走 `toolruntime`，覆盖 workspace 工具、运维工具和 MCP 工具。
 5. **事件投影** — `AgentEvent` 通过 SSE 推给前端；消息是会话事实来源，事件是运行过程投影。`run_done` 返回完整 session snapshot 覆盖前端增量状态。
-6. **持久化** — `message_end` 写入消息，`turn_end` flush pending session writes，`agent_end` 标记 settled。JSONL v3 保留原始 tree、compaction details 和 branch summary details。
+6. **持久化** — `message_end` 写入消息，`turn_end` flush pending session writes，`agent_end` 标记 settled。Session JSONL v1 保留原始 tree、compaction details 和 branch summary details。
 
 **核心组件：**
 
@@ -106,10 +106,10 @@ graph TB
 | Provider | [`internal/llm/ai/provider`](internal/llm/ai/provider) | Eino 模型创建与流式事件 adapter |
 | Agent Core | [`internal/llm/core/agent`](internal/llm/core/agent) | Agent 状态机、队列、abort、`runAgentLoop` |
 | Tool Runtime | [`internal/llm/core/toolruntime`](internal/llm/core/toolruntime) | tool registry、schema 校验、顺序/并行执行、hook |
-| Runtime Session | [`internal/llm/runtime/session`](internal/llm/runtime/session) | JSONL v3 tree、leaf context、compaction、branch summary |
+| Session | [`internal/llm/runtime/session`](internal/llm/runtime/session) | Session JSONL v1 tree、leaf context、compaction、branch summary |
 | Harness | [`internal/llm/runtime/harness`](internal/llm/runtime/harness) | AgentSession、资源加载、消息持久化、settled lifecycle |
 | Run API | [`internal/api/run_handlers.go`](internal/api/run_handlers.go) | `/api/runs`、事件订阅、abort |
-| Session API | [`internal/api/runtime_session_handlers.go`](internal/api/runtime_session_handlers.go) | runtime session list/detail/delete/branch |
+| Session API | [`internal/api/runtime_session_handlers.go`](internal/api/runtime_session_handlers.go) | session list/detail/delete/branch |
 | Workspace Tools | [`internal/llm/runtime/tools`](internal/llm/runtime/tools) | read、ls、grep、find、bash、write、edit |
 | Ops Tools | [`internal/llm/tools`](internal/llm/tools) | 运维查询、仓库读取、skill 元工具 |
 | MCP Manager | [`internal/mcp/manager.go`](internal/mcp/manager.go) | MCP 连接生命周期、工具动态注册、保活 |
@@ -249,7 +249,7 @@ oops/
 │   ├── console/               # 集中化日志控制台（SSE 推送至浏览器）
 │   ├── docker/                # Docker 客户端、22 种服务检测、DSN 提取
 │   ├── exec/                  # 沙盒命令执行：超时 + 输出截断 + 结构化结果（Nodelet 侧）
-│   ├── llm/                   # AI Protocol、Agent Core、Runtime Session、Provider、工具、Skills
+│   ├── llm/                   # AI Protocol、Agent Core、Session、Provider、工具、Skills
 │   ├── logutil/               # 结构化日志（zap + lumberjack 轮转）
 │   ├── mcp/                   # MCP 管理器、客户端、工具注册、保活
 │   ├── nodelet/               # Nodelet HTTP 服务端、客户端、管理器、探活
@@ -316,9 +316,9 @@ rg -n -i "$OOPS_SENSITIVE_PATTERN" --hidden --glob '!.omx/**' --glob '!AGENTS.md
 | Protocol | JSON snapshot 覆盖 message、content、tool、AgentEvent |
 | Agent Core | mock stream 覆盖 tool call、tool error、parallel order、max turns、abort |
 | Tool Runtime | schema 校验、hook、顺序/并行、workspace path guard |
-| Session | JSONL v3、leaf context、compaction details、branch summary、文件读取 |
+| Session | Session JSONL v1、leaf context、compaction details、branch summary、文件读取 |
 | Harness | message persistence、pending writes、settled lifecycle、session resume/fork |
-| API | `/api/runs` SSE 顺序、runtime session API、abort |
+| API | `/api/runs` SSE 顺序、Session API、abort |
 | Frontend | AgentEvent reducer、Session Tree、工具列表、构建产物 |
 
 ## License

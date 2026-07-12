@@ -9,7 +9,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("project_id")
 	infos, err := s.runtimeSessionInfos(projectID)
 	if err != nil {
-		sanitizedError(w, "list runtime sessions", err, http.StatusInternalServerError)
+		sanitizedError(w, "list sessions", err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, infos)
@@ -23,7 +23,7 @@ func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, ok, err := s.runtimeSessionSnapshot(r.Context(), id, "")
 	if err != nil {
-		sanitizedError(w, "get runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "get session", err, http.StatusInternalServerError)
 		return
 	}
 	if !ok {
@@ -48,7 +48,7 @@ func (s *Server) handleSessionUpdate(w http.ResponseWriter, r *http.Request) {
 	defer lease.release()
 	info, found, err := s.renameRuntimeSession(id, "", title)
 	if err != nil {
-		sanitizedError(w, "update runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "update session", err, http.StatusInternalServerError)
 		return
 	}
 	if found {
@@ -72,7 +72,7 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	defer lease.release()
 	deleted, err := s.agentRepo.Delete(id)
 	if err != nil {
-		sanitizedError(w, "delete runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "delete session", err, http.StatusInternalServerError)
 		return
 	}
 	if !deleted {
@@ -87,7 +87,7 @@ func (s *Server) handleProjectSessions(w http.ResponseWriter, r *http.Request) {
 	pid := r.PathValue("pid")
 	infos, err := s.runtimeSessionInfos(pid)
 	if err != nil {
-		sanitizedError(w, "list project runtime sessions", err, http.StatusInternalServerError)
+		sanitizedError(w, "list project sessions", err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, infos)
@@ -102,7 +102,7 @@ func (s *Server) handleProjectSessionGet(w http.ResponseWriter, r *http.Request)
 	}
 	snapshot, ok, err := s.runtimeSessionSnapshot(r.Context(), id, pid)
 	if err != nil {
-		sanitizedError(w, "get project runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "get project session", err, http.StatusInternalServerError)
 		return
 	}
 	if !ok {
@@ -128,7 +128,7 @@ func (s *Server) handleProjectSessionUpdate(w http.ResponseWriter, r *http.Reque
 	defer lease.release()
 	info, found, err := s.renameRuntimeSession(id, pid, title)
 	if err != nil {
-		sanitizedError(w, "update project runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "update project session", err, http.StatusInternalServerError)
 		return
 	}
 	if found {
@@ -149,7 +149,7 @@ func (s *Server) handleProjectSessionDelete(w http.ResponseWriter, r *http.Reque
 	defer lease.release()
 	info, ok, err := s.runtimeSessionInfoByID(id)
 	if err != nil {
-		sanitizedError(w, "delete project runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "delete project session", err, http.StatusInternalServerError)
 		return
 	}
 	if !ok || info.ProjectID != pid || s.agentRepo == nil {
@@ -158,7 +158,7 @@ func (s *Server) handleProjectSessionDelete(w http.ResponseWriter, r *http.Reque
 	}
 	deleted, err := s.agentRepo.Delete(id)
 	if err != nil {
-		sanitizedError(w, "delete project runtime session", err, http.StatusInternalServerError)
+		sanitizedError(w, "delete project session", err, http.StatusInternalServerError)
 		return
 	}
 	if !deleted {
