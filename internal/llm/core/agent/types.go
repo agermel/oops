@@ -11,9 +11,7 @@ import (
 const defaultMaxTurns = 15
 
 var (
-	ErrContinueEmptyContext  = errors.New("continue requires existing context")
-	ErrContinueFromAssistant = errors.New("continue requires pending tool result or user context")
-	ErrMissingStream         = errors.New("agent loop requires stream function")
+	ErrMissingStream = errors.New("agent loop requires stream function")
 )
 
 type EventSink func(context.Context, protocol.AgentEvent) error
@@ -46,8 +44,6 @@ type AgentLoopConfig struct {
 	ConvertToLLM        func(context.Context, protocol.MessageList) (protocol.MessageList, error)
 	PrepareNextTurn     func(context.Context, TurnContext) (TurnUpdate, error)
 	ShouldStopAfterTurn func(context.Context, TurnContext) (bool, error)
-	GetSteeringMessages func(context.Context) (protocol.MessageList, error)
-	GetFollowUpMessages func(context.Context) (protocol.MessageList, error)
 }
 
 type TurnContext struct {

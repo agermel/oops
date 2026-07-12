@@ -5,7 +5,6 @@ import (
 	"errors"
 	"reflect"
 	"testing"
-	"time"
 
 	"oops/internal/llm/ai/protocol"
 )
@@ -79,128 +78,6 @@ func TestAgentBusyAndAgentEndListenerSettlement(t *testing.T) {
 	}
 	if phase := agent.State().Phase; phase != AgentPhaseIdle {
 		t.Fatalf("phase after settlement = %s, want idle", phase)
-	}
-}
-
-func TestAgentIdleSteeringContinueDrainsAssistantTail(t *testing.T) {
-	streams := &requestRecorder{streams: []*protocol.AssistantMessageEventStream{textStream("steered")}}
-	agent := NewAgent(AgentOptions{
-		Context: AgentContext{Messages: protocol.MessageList{assistantTextMessage("done")}},
-		Config:  AgentLoopConfig{Stream: streams.stream},
-	})
-	if err := agent.Steer(protocol.MessageList{userMessage("steer")}); err != nil {
-		t.Fatalf("Steer() error = %v", err)
-	}
-	if !agent.HasQueuedMessages() {
-		t.Fatal("HasQueuedMessages() = false, want true")
-	}
-	result, err := agent.Continue(context.Background())
-	if err != nil {
-		t.Fatalf("Continue() error = %v", err)
-	}
-	assertRoles(t, result, protocol.RoleUser, protocol.RoleAssistant)
-	if len(streams.requests) != 1 {
-		t.Fatalf("stream requests = %d, want 1", len(streams.requests))
-	}
-	assertRoles(t, streams.requests[0].Context.Messages, protocol.RoleAssistant, protocol.RoleUser)
-}
-
-func TestAgentIdleFollowUpContinueDrainsAssistantTail(t *testing.T) {
-	streams := &requestRecorder{streams: []*protocol.AssistantMessageEventStream{textStream("followed")}}
-	agent := NewAgent(AgentOptions{
-		Context: AgentContext{Messages: protocol.MessageList{assistantTextMessage("done")}},
-		Config:  AgentLoopConfig{Stream: streams.stream},
-	})
-	if err := agent.FollowUp(protocol.MessageList{userMessage("follow")}); err != nil {
-		t.Fatalf("FollowUp() error = %v", err)
-	}
-	_, err := agent.Continue(context.Background())
-	if err != nil {
-		t.Fatalf("Continue() error = %v", err)
-	}
-	assertRoles(t, streams.requests[0].Context.Messages, protocol.RoleAssistant, protocol.RoleUser)
-}
-
-func TestAgentContinueGuards(t *testing.T) {
-	agent := NewAgent(AgentOptions{Config: AgentLoopConfig{Stream: queueStreams(textStream("done"))}})
-	if _, err := agent.Continue(context.Background()); !errors.Is(err, ErrContinueEmptyContext) {
-		t.Fatalf("empty continue error = %v", err)
-	}
-
-	agent = NewAgent(AgentOptions{
-		Context: AgentContext{Messages: protocol.MessageList{assistantTextMessage("done")}},
-		Config:  AgentLoopConfig{Stream: queueStreams(textStream("done"))},
-	})
-	if _, err := agent.Continue(context.Background()); !errors.Is(err, ErrContinueFromAssistant) {
-		t.Fatalf("assistant continue error = %v", err)
-	}
-}
-
-func TestAgentQueueModesAndClears(t *testing.T) {
-	streams := &requestRecorder{streams: []*protocol.AssistantMessageEventStream{textStream("done")}}
-	agent := NewAgent(AgentOptions{
-		Context:      AgentContext{Messages: protocol.MessageList{assistantTextMessage("done")}},
-		Config:       AgentLoopConfig{Stream: streams.stream},
-		SteeringMode: QueueModeAll,
-	})
-	if err := agent.Steer(protocol.MessageList{userMessage("one"), userMessage("two")}); err != nil {
-		t.Fatalf("Steer() error = %v", err)
-	}
-	if _, err := agent.Continue(context.Background()); err != nil {
-		t.Fatalf("Continue() error = %v", err)
-	}
-	assertRoles(t, streams.requests[0].Context.Messages, protocol.RoleAssistant, protocol.RoleUser, protocol.RoleUser)
-
-	if err := agent.FollowUp(protocol.MessageList{userMessage("queued")}); err != nil {
-		t.Fatalf("FollowUp() error = %v", err)
-	}
-	agent.ClearAllQueues()
-	if agent.HasQueuedMessages() {
-		t.Fatal("queue still has messages")
-	}
-}
-
-func TestAgentAbortDuringStream(t *testing.T) {
-	started := make(chan struct{})
-	stream := func(context.Context, StreamRequest) (*protocol.AssistantMessageEventStream, error) {
-		close(started)
-		return emptyOpenStream(), nil
-	}
-	agent := NewAgent(AgentOptions{Config: AgentLoopConfig{Stream: stream}})
-	done := make(chan struct {
-		result protocol.MessageList
-		err    error
-	}, 1)
-	go func() {
-		result, err := agent.Prompt(context.Background(), protocol.MessageList{userMessage("hello")})
-		done <- struct {
-			result protocol.MessageList
-			err    error
-		}{result: result, err: err}
-	}()
-	<-started
-	if ok := agent.Abort(); !ok {
-		t.Fatal("Abort() = false, want true")
-	}
-	if phase := agent.State().Phase; phase != AgentPhaseAborted {
-		t.Fatalf("phase = %s, want aborted", phase)
-	}
-	select {
-	case output := <-done:
-		if output.err != nil {
-			t.Fatalf("Prompt() error = %v", output.err)
-		}
-		if got := lastAssistant(t, output.result).StopReason; got != protocol.StopReasonAborted {
-			t.Fatalf("stop reason = %q, want aborted", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Prompt() did not settle")
-	}
-	if err := agent.WaitForIdle(context.Background()); err != nil {
-		t.Fatalf("WaitForIdle() error = %v", err)
-	}
-	if phase := agent.State().Phase; phase != AgentPhaseIdle {
-		t.Fatalf("phase after abort = %s, want idle", phase)
 	}
 }
 

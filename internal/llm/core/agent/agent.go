@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"oops/internal/llm/ai/protocol"
@@ -11,10 +12,8 @@ import (
 var ErrAgentBusy = errors.New("agent is busy")
 
 type AgentOptions struct {
-	Context      AgentContext
-	Config       AgentLoopConfig
-	SteeringMode QueueMode
-	FollowUpMode QueueMode
+	Context AgentContext
+	Config  AgentLoopConfig
 }
 
 type AgentListener func(context.Context, protocol.AgentEvent, AgentState) error
@@ -27,9 +26,6 @@ type Agent struct {
 	state  AgentState
 	config AgentLoopConfig
 
-	steeringQueue messageQueue
-	followUpQueue messageQueue
-
 	nextListenerID int
 	listenerOrder  []int
 	listeners      map[int]AgentListener
@@ -38,10 +34,6 @@ type Agent struct {
 }
 
 type activeRun struct {
-	cancel           context.CancelFunc
-	done             chan struct{}
-	result           protocol.MessageList
-	err              error
 	observedAgentEnd bool
 }
 
@@ -53,20 +45,10 @@ func (e listenerDispatchError) Error() string { return e.err.Error() }
 func (e listenerDispatchError) Unwrap() error { return e.err }
 
 func NewAgent(options AgentOptions) *Agent {
-	steeringMode := options.SteeringMode
-	if steeringMode == "" {
-		steeringMode = QueueModeOneAtATime
-	}
-	followUpMode := options.FollowUpMode
-	if followUpMode == "" {
-		followUpMode = QueueModeOneAtATime
-	}
 	return &Agent{
-		state:         newAgentState(options.Context, options.Config),
-		config:        options.Config,
-		steeringQueue: newMessageQueue(steeringMode),
-		followUpQueue: newMessageQueue(followUpMode),
-		listeners:     map[int]AgentListener{},
+		state:     newAgentState(options.Context, options.Config),
+		config:    options.Config,
+		listeners: map[int]AgentListener{},
 	}
 }
 
@@ -108,123 +90,30 @@ func (a *Agent) Prompt(ctx context.Context, messages protocol.MessageList) (prot
 	if err != nil {
 		return nil, err
 	}
-	return a.runPrompt(ctx, prompts, false)
+	return a.runPrompt(ctx, prompts)
 }
 
-func (a *Agent) Continue(ctx context.Context) (protocol.MessageList, error) {
+func (a *Agent) runPrompt(ctx context.Context, messages protocol.MessageList) (protocol.MessageList, error) {
 	a.mu.Lock()
 	if a.active != nil {
 		a.mu.Unlock()
 		return nil, ErrAgentBusy
 	}
-	if len(a.state.Messages) == 0 {
-		a.mu.Unlock()
-		return nil, ErrContinueEmptyContext
-	}
-	last := a.state.Messages[len(a.state.Messages)-1]
-	if last.MessageRole() == protocol.RoleAssistant {
-		if queued := a.steeringQueue.drain(); len(queued) > 0 {
-			return a.runPromptLocked(ctx, queued, true)
-		}
-		if queued := a.followUpQueue.drain(); len(queued) > 0 {
-			return a.runPromptLocked(ctx, queued, false)
-		}
-		a.mu.Unlock()
-		return nil, ErrContinueFromAssistant
-	}
-	return a.runContinueLocked(ctx)
+	return a.runPromptLocked(ctx, messages)
 }
 
-func (a *Agent) Steer(messages protocol.MessageList) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.steeringQueue.enqueue(messages)
-}
-
-func (a *Agent) FollowUp(messages protocol.MessageList) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.followUpQueue.enqueue(messages)
-}
-
-func (a *Agent) ClearAllQueues() {
-	a.mu.Lock()
-	a.steeringQueue.clear()
-	a.followUpQueue.clear()
-	a.mu.Unlock()
-}
-
-func (a *Agent) HasQueuedMessages() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.steeringQueue.hasItems() || a.followUpQueue.hasItems()
-}
-
-func (a *Agent) Abort() bool {
-	a.mu.Lock()
-	active := a.active
-	if active == nil {
-		a.mu.Unlock()
-		return false
-	}
-	a.state.Phase = AgentPhaseAborted
-	a.state.IsStreaming = true
-	cancel := active.cancel
-	a.mu.Unlock()
-	cancel()
-	return true
-}
-
-func (a *Agent) WaitForIdle(ctx context.Context) error {
-	a.mu.Lock()
-	active := a.active
-	if active == nil {
-		a.mu.Unlock()
-		return nil
-	}
-	done := active.done
+func (a *Agent) runPromptLocked(ctx context.Context, messages protocol.MessageList) (protocol.MessageList, error) {
+	active, snapshot, config, emit := a.beginRunLocked()
 	a.mu.Unlock()
 
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (a *Agent) runPrompt(ctx context.Context, messages protocol.MessageList, skipInitialSteeringPoll bool) (protocol.MessageList, error) {
-	a.mu.Lock()
-	if a.active != nil {
-		a.mu.Unlock()
-		return nil, ErrAgentBusy
-	}
-	return a.runPromptLocked(ctx, messages, skipInitialSteeringPoll)
-}
-
-func (a *Agent) runPromptLocked(ctx context.Context, messages protocol.MessageList, skipInitialSteeringPoll bool) (protocol.MessageList, error) {
-	active, runCtx, snapshot, config, emit := a.beginRunLocked(ctx, skipInitialSteeringPoll)
-	a.mu.Unlock()
-
-	result, err := RunAgentLoop(runCtx, messages, snapshot, config, emit)
-	result, err = a.maybeEmitFailure(runCtx, emit, config, result, err)
-	a.finishRun(active, result, err)
+	result, err := RunAgentLoop(ctx, messages, snapshot, config, emit)
+	result, err = a.maybeEmitFailure(ctx, emit, config, result, err)
+	a.finishRun(active)
 	return cloneMessages(result), err
 }
 
-func (a *Agent) runContinueLocked(ctx context.Context) (protocol.MessageList, error) {
-	active, runCtx, snapshot, config, emit := a.beginRunLocked(ctx, false)
-	a.mu.Unlock()
-
-	result, err := RunAgentLoopContinue(runCtx, snapshot, config, emit)
-	result, err = a.maybeEmitFailure(runCtx, emit, config, result, err)
-	a.finishRun(active, result, err)
-	return cloneMessages(result), err
-}
-
-func (a *Agent) beginRunLocked(ctx context.Context, skipInitialSteeringPoll bool) (*activeRun, context.Context, AgentContext, AgentLoopConfig, EventSink) {
-	runCtx, cancel := context.WithCancel(ctx)
-	active := &activeRun{cancel: cancel, done: make(chan struct{})}
+func (a *Agent) beginRunLocked() (*activeRun, AgentContext, AgentLoopConfig, EventSink) {
+	active := &activeRun{}
 	a.active = active
 	a.state.IsStreaming = true
 	a.state.Phase = AgentPhaseStreaming
@@ -232,9 +121,9 @@ func (a *Agent) beginRunLocked(ctx context.Context, skipInitialSteeringPoll bool
 	a.state.PendingToolCalls = nil
 	a.state.ErrorMessage = ""
 	snapshot := a.contextSnapshotLocked()
-	config := a.loopConfigForRunLocked(skipInitialSteeringPoll)
+	config := a.loopConfigForRunLocked()
 	emit := a.eventSink()
-	return active, runCtx, snapshot, config, emit
+	return active, snapshot, config, emit
 }
 
 func (a *Agent) contextSnapshotLocked() AgentContext {
@@ -245,37 +134,24 @@ func (a *Agent) contextSnapshotLocked() AgentContext {
 	}
 }
 
-func (a *Agent) loopConfigForRunLocked(skipInitialSteeringPoll bool) AgentLoopConfig {
+func (a *Agent) loopConfigForRunLocked() AgentLoopConfig {
 	config := a.config
 	config.Model = a.state.Model
 	config.Provider = a.state.Provider
 	config.Reasoning = a.state.Reasoning
-	originalSteering := config.GetSteeringMessages
-	originalFollowUp := config.GetFollowUpMessages
-	skipSteering := skipInitialSteeringPoll
-	config.GetSteeringMessages = func(ctx context.Context) (protocol.MessageList, error) {
-		if skipSteering {
-			skipSteering = false
-			return nil, nil
-		}
-		a.mu.Lock()
-		messages := a.steeringQueue.drain()
-		a.mu.Unlock()
-		if len(messages) > 0 || originalSteering == nil {
-			return messages, nil
-		}
-		return originalSteering(ctx)
-	}
-	config.GetFollowUpMessages = func(ctx context.Context) (protocol.MessageList, error) {
-		a.mu.Lock()
-		messages := a.followUpQueue.drain()
-		a.mu.Unlock()
-		if len(messages) > 0 || originalFollowUp == nil {
-			return messages, nil
-		}
-		return originalFollowUp(ctx)
-	}
 	return config
+}
+
+func cloneValidatedMessages(messages protocol.MessageList) (protocol.MessageList, error) {
+	for _, message := range messages {
+		if message == nil {
+			return nil, fmt.Errorf("message list contains nil message")
+		}
+		if err := message.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return cloneMessages(messages), nil
 }
 
 func (a *Agent) eventSink() EventSink {
@@ -352,7 +228,7 @@ func (a *Agent) maybeEmitFailure(ctx context.Context, emit EventSink, config Age
 	return cloneMessages(newMessages), err
 }
 
-func (a *Agent) finishRun(active *activeRun, result protocol.MessageList, err error) {
+func (a *Agent) finishRun(active *activeRun) {
 	a.mu.Lock()
 	a.state.IsStreaming = false
 	a.state.Phase = AgentPhaseIdle
@@ -361,8 +237,5 @@ func (a *Agent) finishRun(active *activeRun, result protocol.MessageList, err er
 	if a.active == active {
 		a.active = nil
 	}
-	active.result = cloneMessages(result)
-	active.err = err
-	close(active.done)
 	a.mu.Unlock()
 }

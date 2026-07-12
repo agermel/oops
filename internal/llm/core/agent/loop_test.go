@@ -398,39 +398,6 @@ func TestRunAgentLoopMaxTurns(t *testing.T) {
 	}
 }
 
-func TestRunAgentLoopContinueGuards(t *testing.T) {
-	_, err := RunAgentLoopContinue(context.Background(), AgentContext{}, AgentLoopConfig{Stream: queueStreams(textStream("done"))}, nil)
-	if !errors.Is(err, ErrContinueEmptyContext) {
-		t.Fatalf("empty context error = %v, want ErrContinueEmptyContext", err)
-	}
-
-	_, err = RunAgentLoopContinue(
-		context.Background(),
-		AgentContext{Messages: protocol.MessageList{assistantTextMessage("done")}},
-		AgentLoopConfig{Stream: queueStreams(textStream("done"))},
-		nil,
-	)
-	if !errors.Is(err, ErrContinueFromAssistant) {
-		t.Fatalf("assistant tail error = %v, want ErrContinueFromAssistant", err)
-	}
-}
-
-func TestRunAgentLoopContinueReturnsOnlyNewMessages(t *testing.T) {
-	newMessages, err := RunAgentLoopContinue(
-		context.Background(),
-		AgentContext{Messages: protocol.MessageList{userMessage("existing")}},
-		AgentLoopConfig{Stream: queueStreams(textStream("continued"))},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("RunAgentLoopContinue() error = %v", err)
-	}
-	assertRoles(t, newMessages, protocol.RoleAssistant)
-	if got := textContent(t, newMessages[0].(protocol.AssistantMessage).Content[0]); got != "continued" {
-		t.Fatalf("continue message = %q, want continued", got)
-	}
-}
-
 func TestRunAgentLoopMissingStreamGuard(t *testing.T) {
 	events := recordEvents(t)
 	_, err := RunAgentLoop(context.Background(), protocol.MessageList{userMessage("hello")}, AgentContext{}, AgentLoopConfig{}, events.emit)
@@ -463,62 +430,6 @@ func TestRunAgentLoopEmitErrorStops(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("emit count = %d, want 3", count)
-	}
-}
-
-func TestRunAgentLoopSteeringDrainPoint(t *testing.T) {
-	streams := &requestRecorder{streams: []*protocol.AssistantMessageEventStream{textStream("first"), textStream("second")}}
-	steered := false
-	newMessages, err := RunAgentLoop(
-		context.Background(),
-		protocol.MessageList{userMessage("hello")},
-		AgentContext{},
-		AgentLoopConfig{
-			Stream: streams.stream,
-			GetSteeringMessages: func(context.Context) (protocol.MessageList, error) {
-				if steered {
-					return nil, nil
-				}
-				steered = true
-				return protocol.MessageList{userMessage("steer")}, nil
-			},
-		},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("RunAgentLoop() error = %v", err)
-	}
-	assertRoles(t, newMessages, protocol.RoleUser, protocol.RoleAssistant, protocol.RoleUser, protocol.RoleAssistant)
-	if got := textContent(t, streams.requests[1].Context.Messages[2].(protocol.UserMessage).Content[0]); got != "steer" {
-		t.Fatalf("second request steering = %q, want steer", got)
-	}
-}
-
-func TestRunAgentLoopFollowUpDrainPoint(t *testing.T) {
-	streams := &requestRecorder{streams: []*protocol.AssistantMessageEventStream{textStream("first"), textStream("second")}}
-	followed := false
-	newMessages, err := RunAgentLoop(
-		context.Background(),
-		protocol.MessageList{userMessage("hello")},
-		AgentContext{},
-		AgentLoopConfig{
-			Stream: streams.stream,
-			GetFollowUpMessages: func(context.Context) (protocol.MessageList, error) {
-				if followed {
-					return nil, nil
-				}
-				followed = true
-				return protocol.MessageList{userMessage("follow")}, nil
-			},
-		},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("RunAgentLoop() error = %v", err)
-	}
-	assertRoles(t, newMessages, protocol.RoleUser, protocol.RoleAssistant, protocol.RoleUser, protocol.RoleAssistant)
-	if got := textContent(t, streams.requests[1].Context.Messages[2].(protocol.UserMessage).Content[0]); got != "follow" {
-		t.Fatalf("second request follow-up = %q, want follow", got)
 	}
 }
 
@@ -595,21 +506,13 @@ func TestRunAgentLoopAllTerminateRunsPostTurnHooks(t *testing.T) {
 				order = append(order, "stop")
 				return false, nil
 			},
-			GetSteeringMessages: func(context.Context) (protocol.MessageList, error) {
-				order = append(order, "steering")
-				return nil, nil
-			},
-			GetFollowUpMessages: func(context.Context) (protocol.MessageList, error) {
-				order = append(order, "follow")
-				return nil, nil
-			},
 		},
 		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunAgentLoop() error = %v", err)
 	}
-	want := []string{"prepare", "stop", "steering", "follow"}
+	want := []string{"prepare", "stop"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("hook order = %v, want %v", order, want)
 	}
@@ -888,21 +791,13 @@ func TestRunAgentLoopTurnHookOrder(t *testing.T) {
 				order = append(order, "stop")
 				return false, nil
 			},
-			GetSteeringMessages: func(context.Context) (protocol.MessageList, error) {
-				order = append(order, "steering")
-				return nil, nil
-			},
-			GetFollowUpMessages: func(context.Context) (protocol.MessageList, error) {
-				order = append(order, "follow")
-				return nil, nil
-			},
 		},
 		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunAgentLoop() error = %v", err)
 	}
-	want := []string{"prepare", "stop", "steering", "follow"}
+	want := []string{"prepare", "stop"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("hook order = %v, want %v", order, want)
 	}
@@ -919,14 +814,6 @@ func TestRunAgentLoopShouldStopPriority(t *testing.T) {
 			ShouldStopAfterTurn: func(context.Context, TurnContext) (bool, error) {
 				called = append(called, "stop")
 				return true, nil
-			},
-			GetSteeringMessages: func(context.Context) (protocol.MessageList, error) {
-				called = append(called, "steering")
-				return protocol.MessageList{userMessage("steer")}, nil
-			},
-			GetFollowUpMessages: func(context.Context) (protocol.MessageList, error) {
-				called = append(called, "follow")
-				return protocol.MessageList{userMessage("follow")}, nil
 			},
 		},
 		nil,

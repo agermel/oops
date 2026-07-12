@@ -41,9 +41,7 @@ type AgentSession struct {
 
 	agent *coreagent.Agent
 
-	pending []pendingWrite
-	events  []protocol.AgentEvent
-	settled bool
+	events []protocol.AgentEvent
 }
 
 type SessionSnapshot struct {
@@ -54,14 +52,6 @@ type SessionSnapshot struct {
 	Events     []protocol.AgentEvent     `json:"events"`
 	Tools      []protocol.ToolDefinition `json:"tools"`
 	Entries    []session.Entry           `json:"entries"`
-}
-
-type pendingWrite struct {
-	kind      session.EntryType
-	provider  string
-	model     string
-	reasoning string
-	tools     []string
 }
 
 func NewAgentSession(options AgentSessionOptions) (*AgentSession, error) {
@@ -77,7 +67,6 @@ func NewAgentSession(options AgentSessionOptions) (*AgentSession, error) {
 		provider:        options.Provider,
 		reasoning:       options.Reasoning,
 		activeToolNames: cloneStrings(options.ActiveToolNames),
-		settled:         true,
 	}
 	if err := as.indexToolsLocked(); err != nil {
 		return nil, err
@@ -88,28 +77,8 @@ func NewAgentSession(options AgentSessionOptions) (*AgentSession, error) {
 	return as, nil
 }
 
-func (s *AgentSession) State() coreagent.AgentState {
-	s.mu.Lock()
-	agent := s.agent
-	s.mu.Unlock()
-	return agent.State()
-}
-
-func (s *AgentSession) SessionContext() session.Context {
-	return s.session.BuildContext()
-}
-
 func (s *AgentSession) ValidateProviderContext() error {
 	return s.session.ValidateContext()
-}
-
-func (s *AgentSession) Events() []protocol.AgentEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.events) == 0 {
-		return nil
-	}
-	return cloneAgentEvents(s.events)
 }
 
 func (s *AgentSession) Listen(listener coreagent.AgentListener) coreagent.Unsubscribe {
@@ -147,119 +116,9 @@ func (s *AgentSession) snapshotLocked(editorText string) SessionSnapshot {
 
 func (s *AgentSession) Prompt(ctx context.Context, messages protocol.MessageList) (protocol.MessageList, error) {
 	s.mu.Lock()
-	s.settled = false
 	agent := s.agent
 	s.mu.Unlock()
 	return agent.Prompt(ctx, messages)
-}
-
-func (s *AgentSession) WaitForIdle(ctx context.Context) error {
-	s.mu.Lock()
-	agent := s.agent
-	s.mu.Unlock()
-	return agent.WaitForIdle(ctx)
-}
-
-func (s *AgentSession) SetModel(provider, model string) error {
-	if model == "" {
-		return errors.New("model is required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.provider = provider
-	s.model = model
-	if s.agent.State().IsStreaming {
-		s.pending = append(s.pending, pendingWrite{kind: session.EntryModelChange, provider: provider, model: model})
-		return nil
-	}
-	entry, err := s.session.AppendModelChange(provider, model)
-	if err != nil {
-		return err
-	}
-	if err := s.saveEntryLocked(entry); err != nil {
-		return err
-	}
-	return s.rebuildAgentLocked()
-}
-
-func (s *AgentSession) SetReasoning(reasoning string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reasoning = reasoning
-	if s.agent.State().IsStreaming {
-		s.pending = append(s.pending, pendingWrite{kind: session.EntryThinkingLevelChange, reasoning: reasoning})
-		return nil
-	}
-	entry, err := s.session.AppendThinkingLevelChange(reasoning)
-	if err != nil {
-		return err
-	}
-	if err := s.saveEntryLocked(entry); err != nil {
-		return err
-	}
-	return s.rebuildAgentLocked()
-}
-
-func (s *AgentSession) SetActiveTools(names []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	names, err := s.resolveToolNamesLocked(names)
-	if err != nil {
-		return err
-	}
-	s.activeToolNames = cloneStrings(names)
-	if s.agent.State().IsStreaming {
-		s.pending = append(s.pending, pendingWrite{kind: session.EntryActiveToolsChange, tools: cloneStrings(names)})
-		return nil
-	}
-	entry, err := s.session.AppendActiveToolsChange(names)
-	if err != nil {
-		return err
-	}
-	if err := s.saveEntryLocked(entry); err != nil {
-		return err
-	}
-	return s.rebuildAgentLocked()
-}
-
-func (s *AgentSession) Compact(summary string, firstKeptEntryID string, tokensBefore int) (session.Entry, error) {
-	if err := validateCompaction(summary, firstKeptEntryID); err != nil {
-		return session.Entry{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.agent.State().IsStreaming {
-		return session.Entry{}, coreagent.ErrAgentBusy
-	}
-	protectedFirstKeptID, err := s.session.ProtectedFirstKeptEntryID(firstKeptEntryID)
-	if err != nil {
-		return session.Entry{}, err
-	}
-	details, err := s.session.SummaryDetailsBefore(protectedFirstKeptID)
-	if err != nil {
-		return session.Entry{}, err
-	}
-	entry, err := s.session.AppendCompactionWithDetails(summary, protectedFirstKeptID, tokensBefore, details)
-	if err != nil {
-		return session.Entry{}, err
-	}
-	if err := s.saveEntryLocked(entry); err != nil {
-		return session.Entry{}, err
-	}
-	if err := s.rebuildAgentLocked(); err != nil {
-		return session.Entry{}, err
-	}
-	return entry, nil
-}
-
-func (s *AgentSession) NavigateTree(leafID string) error {
-	_, err := s.navigateTree(leafID, "")
-	return err
-}
-
-func (s *AgentSession) NavigateTreeWithSummary(leafID, summary string) error {
-	_, err := s.navigateTree(leafID, summary)
-	return err
 }
 
 func (s *AgentSession) NavigateTreeSnapshot(leafID string) (SessionSnapshot, error) {
@@ -328,41 +187,8 @@ func (s *AgentSession) handleEvent(ctx context.Context, event protocol.AgentEven
 				return err
 			}
 		}
-	case protocol.AgentEventTurnEnd:
-		if err := s.flushPendingLocked(); err != nil {
-			return err
-		}
 	case protocol.AgentEventAgentEnd:
-		s.settled = true
 		if err := s.rebuildAgentLocked(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *AgentSession) flushPendingLocked() error {
-	pending := s.pending
-	s.pending = nil
-	for _, item := range pending {
-		var (
-			entry session.Entry
-			err   error
-		)
-		switch item.kind {
-		case session.EntryModelChange:
-			entry, err = s.session.AppendModelChange(item.provider, item.model)
-		case session.EntryThinkingLevelChange:
-			entry, err = s.session.AppendThinkingLevelChange(item.reasoning)
-		case session.EntryActiveToolsChange:
-			entry, err = s.session.AppendActiveToolsChange(item.tools)
-		default:
-			err = fmt.Errorf("unsupported pending write %q", item.kind)
-		}
-		if err != nil {
-			return err
-		}
-		if err := s.saveEntryLocked(entry); err != nil {
 			return err
 		}
 	}

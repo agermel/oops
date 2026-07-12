@@ -145,51 +145,6 @@ func (r *AgentSessionRuntime) Resume(ctx context.Context, sessionID string) (*Ag
 	return r.attach(ctx, sess, resources, "", "", "", nil)
 }
 
-func (r *AgentSessionRuntime) Fork(ctx context.Context, sessionID, newSessionID, leafID string) (*AgentSession, error) {
-	source, err := r.Resume(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if err := source.WaitForIdle(ctx); err != nil {
-		return nil, err
-	}
-	forked, err := source.session.Fork(newSessionID, leafID)
-	if err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	cwd := r.cwd
-	loader := r.loader
-	r.mu.Unlock()
-	forkInfo := forked.Info()
-	if _, err := forked.AppendSessionInfoWithProject(cwd, forkInfo.Name, forkInfo.ProjectID); err != nil {
-		return nil, err
-	}
-	if leafID != "" {
-		if _, err := forked.AppendLeaf(leafID); err != nil {
-			return nil, err
-		}
-	}
-	for _, entry := range forked.Entries() {
-		if err := r.repo.SaveEntry(forked.ID(), entry); err != nil {
-			return nil, err
-		}
-	}
-	r.repo.Put(forked)
-	resources, err := loader.Load(ctx, ResourceRequest{CWD: cwd, SessionID: forked.ID()})
-	if err != nil {
-		return nil, err
-	}
-	return r.attach(ctx, forked, resources, "", "", "", nil)
-}
-
-func (r *AgentSessionRuntime) SwitchCWD(_ context.Context, cwd string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cwd = cwd
-	return nil
-}
-
 func (r *AgentSessionRuntime) attach(ctx context.Context, sess *session.Session, resources ResourceSnapshot, model, provider, reasoning string, activeTools []string) (*AgentSession, error) {
 	sessionID := sess.ID()
 	r.mu.Lock()

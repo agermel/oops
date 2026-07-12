@@ -12,7 +12,6 @@ const (
 	AgentPhaseIdle           AgentPhase = "Idle"
 	AgentPhaseStreaming      AgentPhase = "Streaming"
 	AgentPhaseExecutingTools AgentPhase = "ExecutingTools"
-	AgentPhaseAborted        AgentPhase = "Aborted"
 )
 
 type AgentState struct {
@@ -55,16 +54,12 @@ func (a *Agent) reduceAgentEventLocked(event protocol.AgentEvent) {
 	switch event.Type {
 	case protocol.AgentEventAgentStart:
 		a.state.IsStreaming = true
-		if a.state.Phase != AgentPhaseAborted {
-			a.state.Phase = AgentPhaseStreaming
-		}
+		a.state.Phase = AgentPhaseStreaming
 		a.state.ErrorMessage = ""
 	case protocol.AgentEventMessageStart, protocol.AgentEventMessageUpdate:
 		a.state.StreamingMessage = protocol.CloneMessage(event.Message)
 		a.state.IsStreaming = true
-		if a.state.Phase != AgentPhaseAborted {
-			a.state.Phase = AgentPhaseStreaming
-		}
+		a.state.Phase = AgentPhaseStreaming
 	case protocol.AgentEventMessageEnd:
 		if event.Message != nil {
 			a.state.Messages = append(a.state.Messages, protocol.CloneMessage(event.Message))
@@ -73,17 +68,13 @@ func (a *Agent) reduceAgentEventLocked(event protocol.AgentEvent) {
 	case protocol.AgentEventToolExecutionStart:
 		a.addPendingToolCallLocked(event.ToolCallID)
 		a.state.IsStreaming = true
-		if a.state.Phase != AgentPhaseAborted {
-			a.state.Phase = AgentPhaseExecutingTools
-		}
+		a.state.Phase = AgentPhaseExecutingTools
 	case protocol.AgentEventToolExecutionEnd:
 		a.removePendingToolCallLocked(event.ToolCallID)
-		if a.state.Phase != AgentPhaseAborted {
-			if len(a.state.PendingToolCalls) > 0 {
-				a.state.Phase = AgentPhaseExecutingTools
-			} else {
-				a.state.Phase = AgentPhaseStreaming
-			}
+		if len(a.state.PendingToolCalls) > 0 {
+			a.state.Phase = AgentPhaseExecutingTools
+		} else {
+			a.state.Phase = AgentPhaseStreaming
 		}
 	case protocol.AgentEventTurnEnd:
 		if message, ok := event.Message.(protocol.AssistantMessage); ok && message.ErrorMessage != "" {
