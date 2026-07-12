@@ -121,7 +121,7 @@ func (l *Limiter) AllowClient(client string, policy Policy) bool {
 	return entry.limiter.AllowN(now, 1)
 }
 
-// ClientIP accepts X-Forwarded-For only from a configured trusted proxy.
+// ClientIP walks X-Forwarded-For from the trusted connection toward the client.
 func (l *Limiter) ClientIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -135,13 +135,16 @@ func (l *Limiter) ClientIP(r *http.Request) string {
 		return remote.String()
 	}
 
-	for candidate := range strings.SplitSeq(r.Header.Get("X-Forwarded-For"), ",") {
-		client, err := netip.ParseAddr(strings.TrimSpace(candidate))
-		if err == nil {
-			return client.Unmap().String()
+	client := remote
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(forwarded) - 1; i >= 0 && l.isTrustedProxy(client); i-- {
+		candidate, err := netip.ParseAddr(strings.TrimSpace(forwarded[i]))
+		if err != nil {
+			return remote.String()
 		}
+		client = candidate.Unmap()
 	}
-	return remote.String()
+	return client.String()
 }
 
 func requestRemoteAddr(remoteAddr string) netip.Addr {

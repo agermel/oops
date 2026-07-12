@@ -58,6 +58,48 @@ func TestLimiterUsesForwardedClientOnlyFromTrustedProxy(t *testing.T) {
 	}
 }
 
+func TestLimiterStripsTrustedForwardedProxiesFromRight(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	limiter, err := New(Options{TrustedProxyCIDRs: []string{"10.0.0.0/8", "192.0.2.0/24"}})
+	if err != nil {
+		t.Fatalf("new limiter: %v", err)
+	}
+	defer limiter.Close()
+
+	tests := []struct {
+		name      string
+		forwarded string
+		want      string
+	}{
+		{
+			name:      "multiple trusted proxies",
+			forwarded: "203.0.113.20, 192.0.2.4, 10.0.0.2",
+			want:      "203.0.113.20",
+		},
+		{
+			name:      "client supplied prefix",
+			forwarded: "198.51.100.99, 203.0.113.20, 10.0.0.2",
+			want:      "203.0.113.20",
+		},
+		{
+			name:      "invalid nearest hop",
+			forwarded: "198.51.100.99, invalid-address",
+			want:      "10.0.0.3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "http://example.test", nil)
+			request.RemoteAddr = "10.0.0.3:443"
+			request.Header.Set("X-Forwarded-For", tt.forwarded)
+			if got := limiter.ClientIP(request); got != tt.want {
+				t.Fatalf("client IP = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLimiterPrunesWithInjectedClock(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	now := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
