@@ -37,15 +37,6 @@ type Hub[T any] struct {
 	closed          bool
 }
 
-// New creates a hub with conservative default live-subscription bounds.
-func New[T any](historySize int) *Hub[T] {
-	return NewWithOptions[T](Options{
-		HistorySize:     historySize,
-		MaxSubscribers:  32,
-		SubscriberQueue: 128,
-	})
-}
-
 // NewWithOptions creates a hub with explicit resource bounds.
 func NewWithOptions[T any](options Options) *Hub[T] {
 	if options.HistorySize < 0 {

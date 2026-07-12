@@ -46,27 +46,6 @@ func TestDetectServiceType(t *testing.T) {
 	}
 }
 
-func TestServiceTypeLabel(t *testing.T) {
-	tests := []struct {
-		stype ServiceType
-		want  string
-	}{
-		{ServiceMySQL, "MySQL"},
-		{ServiceRedis, "Redis"},
-		{ServicePostgres, "PostgreSQL"},
-		{ServiceUnknown, "未知"},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.stype), func(t *testing.T) {
-			got := tt.stype.Label()
-			if got != tt.want {
-				t.Errorf("Label() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestServiceTypeIsDatabase(t *testing.T) {
 	if !ServiceMySQL.IsDatabase() {
 		t.Error("MySQL should be a database")

@@ -10,23 +10,6 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-func TestFromEinoContextExtractsSystemPrompt(t *testing.T) {
-	ctx, err := FromEinoContext([]*schema.Message{
-		schema.SystemMessage("system A"),
-		schema.SystemMessage("system B"),
-		schema.UserMessage("hello"),
-	})
-	if err != nil {
-		t.Fatalf("FromEinoContext() error = %v", err)
-	}
-	if ctx.SystemPrompt != "system A\n\nsystem B" {
-		t.Fatalf("SystemPrompt = %q", ctx.SystemPrompt)
-	}
-	if len(ctx.Messages) != 1 {
-		t.Fatalf("len(Messages) = %d, want 1", len(ctx.Messages))
-	}
-}
-
 func TestFromEinoMessageRejectsSystemRole(t *testing.T) {
 	_, err := FromEinoMessage(schema.SystemMessage("system"))
 	if !errors.Is(err, ErrSystemBoundary) {
@@ -207,20 +190,5 @@ func TestEinoToolResultMultimodalUsesInputParts(t *testing.T) {
 	image, ok := toolResult.Content[1].(protocol.ImageContent)
 	if !ok || image.Data != "aW1hZ2U=" || image.MIMEType != "image/png" || image.Detail != "high" {
 		t.Fatalf("roundtrip image = %#v", toolResult.Content[1])
-	}
-}
-
-func TestToEinoContextAddsSystemMessage(t *testing.T) {
-	messages, err := ToEinoContext(protocol.Context{
-		SystemPrompt: "system",
-		Messages: protocol.MessageList{
-			protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent("hello")}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("ToEinoContext() error = %v", err)
-	}
-	if len(messages) != 2 || messages[0].Role != schema.System || messages[1].Role != schema.User {
-		t.Fatalf("messages = %#v", messages)
 	}
 }

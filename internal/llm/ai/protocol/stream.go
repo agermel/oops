@@ -70,19 +70,6 @@ func (s *AssistantMessageEventStream) Push(event AssistantMessageEvent) error {
 	return nil
 }
 
-func (s *AssistantMessageEventStream) Close() {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
-	s.closed = true
-	s.finalErr = ErrStreamEndedWithoutResult
-	s.closeDoneLocked()
-	s.cond.Signal()
-	s.mu.Unlock()
-}
-
 func (s *AssistantMessageEventStream) Result(ctx context.Context) (*AssistantMessage, error) {
 	select {
 	case <-s.done:

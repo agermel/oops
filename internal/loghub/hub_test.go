@@ -6,7 +6,7 @@ import (
 )
 
 func TestHubSnapshotAndSubscribe(t *testing.T) {
-	hub := New[string](2)
+	hub := NewWithOptions[string](Options{HistorySize: 2, MaxSubscribers: 1, SubscriberQueue: 2})
 	t.Cleanup(hub.Close)
 	hub.Push("one")
 	hub.Push("two")

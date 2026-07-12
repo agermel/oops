@@ -17,7 +17,6 @@ import (
 	"oops/internal/project"
 	runtimestore "oops/internal/store/runtime"
 
-	"golang.org/x/crypto/bcrypt"
 )
 
 type fakeNodeletClient struct {
@@ -128,24 +127,26 @@ func TestNodeletRoutes(t *testing.T) {
 // 返回一个已签发的 JWT，可直接设为请求的 Cookie。
 func testAuthSetup(t *testing.T) (*auth.Store, *auth.TokenService, string) {
 	t.Helper()
-	user := &auth.User{Username: "admin", Name: "Admin", Password: hashPassword(t, "test")}
-	store := auth.NewStoreInMemory(user)
-	ts := auth.NewTokenService(user.Password, 24*time.Hour)
+	runtime, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = runtime.Close()
+	})
+	store, err := auth.NewStoreFromRuntime(runtime)
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	if err := store.Setup("admin", "Admin", "test"); err != nil {
+		t.Fatalf("setup auth store: %v", err)
+	}
+	ts := auth.NewTokenService(store.User.Password, 24*time.Hour)
 	token, err := ts.CreateToken("admin", "Admin")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 	return store, ts, token
-}
-
-// hashPassword 是 bcrypt 哈希的测试辅助函数。
-func hashPassword(t *testing.T, password string) string {
-	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	return string(hash)
 }
 
 // TestHandleNodeletLogsStream 验证中心端透传 Nodelet SSE。

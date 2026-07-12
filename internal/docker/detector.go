@@ -88,58 +88,6 @@ func DetectServiceType(image string) ServiceType {
 	return ServiceUnknown
 }
 
-// ServiceTypeLabel 返回服务类型的中文标签。
-func (s ServiceType) Label() string {
-	switch s {
-	case ServiceMySQL:
-		return "MySQL"
-	case ServiceRedis:
-		return "Redis"
-	case ServicePostgres:
-		return "PostgreSQL"
-	case ServiceMongo:
-		return "MongoDB"
-	case ServiceNginx:
-		return "Nginx"
-	case ServiceElasticsearch:
-		return "Elasticsearch"
-	case ServiceKafka:
-		return "Kafka"
-	case ServiceEtcd:
-		return "Etcd"
-	case ServiceJaeger:
-		return "Jaeger"
-	case ServiceNacos:
-		return "Nacos"
-	case ServiceRabbitMQ:
-		return "RabbitMQ"
-	case ServiceClickHouse:
-		return "ClickHouse"
-	case ServiceMinIO:
-		return "MinIO"
-	case ServiceConsul:
-		return "Consul"
-	case ServiceZooKeeper:
-		return "ZooKeeper"
-	case ServicePrometheus:
-		return "Prometheus"
-	case ServiceGrafana:
-		return "Grafana"
-	case ServiceInfluxDB:
-		return "InfluxDB"
-	case ServiceMemcached:
-		return "Memcached"
-	case ServiceCassandra:
-		return "Cassandra"
-	case ServiceNeo4j:
-		return "Neo4j"
-	case ServiceCaddy:
-		return "Caddy"
-	default:
-		return "未知"
-	}
-}
-
 // IsDatabase 判断服务类型是否为数据库。
 func (s ServiceType) IsDatabase() bool {
 	switch s {

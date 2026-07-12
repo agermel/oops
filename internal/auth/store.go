@@ -37,11 +37,6 @@ func NewStoreFromRuntime(runtime *runtimestore.Store) (*Store, error) {
 	}, nil
 }
 
-// NewStoreInMemory creates a Store with a pre-loaded user (test helper).
-func NewStoreInMemory(user *User) *Store {
-	return &Store{User: user}
-}
-
 // IsSetup 返回是否已完成初始账户设置。
 func (s *Store) IsSetup() bool {
 	return s.User != nil

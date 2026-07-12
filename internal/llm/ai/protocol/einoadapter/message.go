@@ -76,18 +76,6 @@ func ToEinoMessage(msg protocol.AgentMessage) (*schema.Message, error) {
 	}
 }
 
-func ToEinoMessages(messages protocol.MessageList) ([]*schema.Message, error) {
-	out := make([]*schema.Message, 0, len(messages))
-	for _, msg := range messages {
-		converted, err := ToEinoMessage(msg)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, converted)
-	}
-	return out, nil
-}
-
 func fromEinoUserContent(msg *schema.Message) (protocol.ContentList, error) {
 	if len(msg.UserInputMultiContent) > 0 {
 		return fromEinoInputParts(msg.UserInputMultiContent)

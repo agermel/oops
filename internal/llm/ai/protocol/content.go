@@ -81,10 +81,6 @@ type ImageContent struct {
 	Detail   string      `json:"detail,omitempty"`
 }
 
-func NewImageContent(data, mimeType string) ImageContent {
-	return ImageContent{Type: ContentTypeImage, Data: data, MIMEType: mimeType}
-}
-
 func (c ImageContent) ContentType() ContentType { return ContentTypeImage }
 
 func (c ImageContent) Validate() error {

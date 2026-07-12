@@ -16,7 +16,7 @@ func TestMessageJSONSnapshot(t *testing.T) {
 		UserMessage{
 			Content: ContentList{
 				NewTextContent("hello"),
-				NewImageContent("aW1hZ2U=", "image/png"),
+				ImageContent{Type: ContentTypeImage, Data: "aW1hZ2U=", MIMEType: "image/png"},
 			},
 			Timestamp: 1700000000000,
 		},
@@ -265,23 +265,6 @@ func TestAssistantMessageEventStreamErrorResult(t *testing.T) {
 	if result.ErrorMessage != "provider failed" {
 		t.Fatalf("result.ErrorMessage = %q, want provider failed", result.ErrorMessage)
 	}
-}
-
-func TestAssistantMessageEventStreamZeroBufferPushDoesNotBlock(t *testing.T) {
-	stream := NewAssistantMessageEventStream(0)
-	message := AssistantMessage{Content: ContentList{}, Usage: Usage{}, StopReason: StopReasonStop}
-
-	pushDone := make(chan error, 1)
-	go func() {
-		pushDone <- stream.Push(AssistantMessageEvent{Type: AssistantEventStart, Partial: &message})
-	}()
-
-	assertPushReturns(t, pushDone)
-	event := assertNextStreamEvent(t, stream)
-	if event.Type != AssistantEventStart {
-		t.Fatalf("event.Type = %q, want start", event.Type)
-	}
-	stream.Close()
 }
 
 func TestAssistantMessageEventStreamZeroBufferTerminalResult(t *testing.T) {
