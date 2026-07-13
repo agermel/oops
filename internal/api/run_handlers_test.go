@@ -68,6 +68,54 @@ func TestRunManagerReplaysHistoryAndRunDone(t *testing.T) {
 	}
 }
 
+func TestHandleRunEventsReplaysBoundedHistoryTailAndTerminal(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxRetainedEvents = 1
+	manager := newRunManagerForTest(t, limits)
+	run := activateRunForTest(t, manager, "run-overflow-replay", "sess-1")
+	run.publish(testRunItem(1, "evicted"))
+	run.publish(testRunItem(2, "retained"))
+	run.publishTerminal(runStreamItem{
+		name: "run_done",
+		payload: runDoneEvent{
+			Type:    "run_done",
+			Session: harness.SessionSnapshot{SessionID: "sess-1"},
+		},
+	})
+	run.finishExecution()
+
+	server := &Server{runManager: manager}
+	request := httptest.NewRequest(http.MethodGet, "/api/runs/run-overflow-replay/events", nil)
+	request.SetPathValue("id", run.id)
+	recorder := httptest.NewRecorder()
+	server.handleRunEvents(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	body := recorder.Body.String()
+	for _, want := range []string{
+		":ok\n\n",
+		"event: agent_start\n",
+		`"type":"agent_start"`,
+		`"index":2`,
+		"event: run_done\n",
+		`"sessionId":"sess-1"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("SSE body missing %q: %s", want, body)
+		}
+	}
+	for _, excluded := range []string{`"index":1`, "event: run_error\n", "run event history limit reached"} {
+		if strings.Contains(body, excluded) {
+			t.Fatalf("SSE body contains %q: %s", excluded, body)
+		}
+	}
+}
+
 func TestRunManagerAbortCancelsActiveRun(t *testing.T) {
 	manager := newRunManagerForTest(t)
 	ctx, cancel := context.WithCancel(context.Background())
