@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyAgentEventToSession, EMPTY_AGENT_SESSION } from "../src/lib/session.ts";
+import {
+  applyAgentEventToSession,
+  applyTerminalSnapshotToSession,
+  EMPTY_AGENT_SESSION,
+} from "../src/lib/session.ts";
 import type { AgentEvent, AssistantMessage, ToolResultMessage } from "../src/types.ts";
 
 const emptyUsage = {
@@ -64,4 +68,34 @@ test("upserts tool results by tool call id", () => {
 
   assert.equal(ended.messages.length, 1);
   assert.deepEqual(ended.messages[0], second);
+});
+
+test("keeps streamed history when the terminal snapshot is bounded", () => {
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "answer" }],
+    usage: emptyUsage,
+    stopReason: "stop",
+    timestamp: 1,
+  };
+  const event: AgentEvent = { type: "message_end", message };
+  const current = {
+    ...EMPTY_AGENT_SESSION,
+    sessionId: "session_1",
+    leafId: "leaf_1",
+    messages: [message],
+    events: [event],
+  };
+  const terminal = {
+    ...EMPTY_AGENT_SESSION,
+    sessionId: "session_1",
+    leafId: "leaf_2",
+  };
+
+  const completed = applyTerminalSnapshotToSession(current, terminal);
+
+  assert.equal(completed.sessionId, "session_1");
+  assert.equal(completed.leafId, "leaf_2");
+  assert.deepEqual(completed.messages, [message]);
+  assert.deepEqual(completed.events, [event]);
 });

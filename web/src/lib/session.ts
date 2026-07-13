@@ -73,6 +73,22 @@ export function applyAgentEventToSession(session: SessionResponse, event: AgentE
   return next;
 }
 
+export function applyTerminalSnapshotToSession(
+  session: SessionResponse,
+  terminal: SessionResponse,
+): SessionResponse {
+  return {
+    ...session,
+    ...terminal,
+    sessionId: terminal.sessionId || session.sessionId,
+    leafId: terminal.leafId || session.leafId,
+    messages: terminal.messages.length > 0 ? terminal.messages : session.messages,
+    events: terminal.events.length > 0 ? terminal.events : session.events,
+    tools: terminal.tools.length > 0 ? terminal.tools : session.tools,
+    entries: terminal.entries.length > 0 ? terminal.entries : session.entries,
+  };
+}
+
 export function textFromContent(content: ContentBlock[] | undefined): string {
   if (!content) return "";
   return content.map(contentText).filter(Boolean).join("");

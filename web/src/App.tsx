@@ -31,6 +31,7 @@ import {
   EMPTY_AGENT_SESSION,
   RUN_EVENT_TYPES,
   applyAgentEventToSession,
+  applyTerminalSnapshotToSession,
   sessionFromAPI,
 } from "./lib/session";
 import { nextChatStateAfterCreateError } from "./lib/chatRequestState";
@@ -289,7 +290,7 @@ export function App() {
       }
       if (event.type === "run_done") {
         finished = true;
-        setAgentSession(event.session);
+        setAgentSession((current) => applyTerminalSnapshotToSession(current, event.session));
         setSessionId(event.session.sessionId);
         localStorage.setItem(SESSION_STORAGE_KEY, event.session.sessionId);
         setChatLoading(false);
@@ -302,7 +303,7 @@ export function App() {
       if (event.type === "run_error") {
         finished = true;
         setChatError(event.error);
-        setAgentSession(event.session);
+        setAgentSession((current) => applyTerminalSnapshotToSession(current, event.session));
         setSessionId(event.session.sessionId);
         if (event.session.sessionId) {
           localStorage.setItem(SESSION_STORAGE_KEY, event.session.sessionId);
