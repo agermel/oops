@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../lib/api";
-import { sessionPaths, sessionBasePaths } from "../lib/paths";
+import { projectPaths, sessionPaths } from "../lib/paths";
 import { queryKeys } from "./queries";
 import type { SessionInfo, SessionResponse } from "../types";
 
@@ -8,10 +8,8 @@ export function useSessions(projectId?: string) {
   return useQuery<SessionInfo[]>({
     queryKey: queryKeys.sessions.all(projectId),
     queryFn: async () => {
-      const url = projectId
-        ? `${sessionBasePaths.list}?project_id=${encodeURIComponent(projectId)}`
-        : sessionBasePaths.list;
-      const list = await apiRequest<SessionInfo[]>(url);
+      if (!projectId) return [];
+      const list = await apiRequest<SessionInfo[]>(projectPaths(projectId).sessions);
       return list || [];
     },
     enabled: !!projectId,

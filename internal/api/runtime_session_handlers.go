@@ -119,7 +119,7 @@ func (s *Server) runtimeSessionInfos(projectID string) ([]sessionInfo, error) {
 	}
 	out := make([]sessionInfo, 0, len(infos))
 	for _, info := range infos {
-		if projectID != "*" && info.ProjectID != projectID {
+		if info.ProjectID != projectID {
 			continue
 		}
 		out = append(out, runtimeSessionInfo(info))

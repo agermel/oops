@@ -33,10 +33,6 @@ export function sessionPaths(sessionId: string) {
   };
 }
 
-export const sessionBasePaths = {
-  list: "/api/sessions",
-} as const;
-
 // ---- Servers ----
 
 export function serverPaths(projectId: string, serverId: string) {

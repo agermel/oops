@@ -311,7 +311,6 @@ All authenticated routes pass through: `securityHeaders → rateLimit → authMi
 | `POST` | `/api/runs` | Create an agent run |
 | `GET` | `/api/runs/{id}/events` | Stream agent events (SSE) |
 | `POST` | `/api/runs/{id}/abort` | Abort an active run |
-| `GET` | `/api/sessions` | List sessions |
 | `GET` | `/api/sessions/{id}` | Get session detail |
 | `DELETE` | `/api/sessions/{id}` | Delete a session |
 

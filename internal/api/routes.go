@@ -49,7 +49,6 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/runs/{id}/abort", authed(s.handleRunAbort))
 	mux.HandleFunc("GET /api/agent-settings", authed(s.handleAgentSettingsGet))
 	mux.HandleFunc("PUT /api/agent-settings", authed(s.handleAgentSettingsUpdate))
-	mux.HandleFunc("GET /api/sessions", authed(s.handleSessions))
 	mux.HandleFunc("GET /api/sessions/{id}", authed(s.handleSessionGet))
 	mux.HandleFunc("PATCH /api/sessions/{id}", authed(s.handleSessionUpdate))
 	mux.HandleFunc("DELETE /api/sessions/{id}", authed(s.handleSessionDelete))

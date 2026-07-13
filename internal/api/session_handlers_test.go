@@ -23,28 +23,20 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	sess := createRuntimeSession(t, repo, "rt-1", "proj-1", "hello")
 	createRuntimeSession(t, repo, "rt-2", "proj-2", "other")
 
-	listResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions?project_id=proj-1", "")
+	listResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/projects/proj-1/sessions", "")
 	if listResp.Code != http.StatusOK {
-		t.Fatalf("list status = %d, want %d, body = %s", listResp.Code, http.StatusOK, listResp.Body.String())
+		t.Fatalf("project list status = %d, want %d, body = %s", listResp.Code, http.StatusOK, listResp.Body.String())
 	}
 	var infos []sessionInfo
 	if err := json.NewDecoder(listResp.Body).Decode(&infos); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
-	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 || infos[0].Summary != "hello" {
-		t.Fatalf("infos = %+v", infos)
-	}
-
-	projectListResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/projects/proj-1/sessions", "")
-	if projectListResp.Code != http.StatusOK {
-		t.Fatalf("project list status = %d, want %d, body = %s", projectListResp.Code, http.StatusOK, projectListResp.Body.String())
-	}
-	infos = nil
-	if err := json.NewDecoder(projectListResp.Body).Decode(&infos); err != nil {
 		t.Fatalf("decode project list: %v", err)
 	}
 	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 || infos[0].Summary != "hello" {
 		t.Fatalf("project infos = %+v", infos)
+	}
+	topLevelListResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions", "")
+	if topLevelListResp.Code != http.StatusNotFound {
+		t.Fatalf("top-level list status = %d, want %d, body = %s", topLevelListResp.Code, http.StatusNotFound, topLevelListResp.Body.String())
 	}
 
 	detailResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions/rt-1?include_messages=true", "")

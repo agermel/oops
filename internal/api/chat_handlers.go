@@ -4,17 +4,6 @@ import (
 	"net/http"
 )
 
-// handleSessions handles GET /api/sessions — lists global or project sessions.
-func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	projectID := r.URL.Query().Get("project_id")
-	infos, err := s.runtimeSessionInfos(projectID)
-	if err != nil {
-		sanitizedError(w, "list sessions", err, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, infos)
-}
-
 // handleSessionGet handles GET /api/sessions/{id}.
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
