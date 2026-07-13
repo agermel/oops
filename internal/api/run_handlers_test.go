@@ -100,12 +100,17 @@ func TestRunManagerAbortCancelsActiveRun(t *testing.T) {
 }
 
 func activateRunForTest(t *testing.T, manager *runManager, runID, sessionID string) *runState {
+	run, _ := activateRunWithContextForTest(t, manager, runID, sessionID)
+	return run
+}
+
+func activateRunWithContextForTest(t *testing.T, manager *runManager, runID, sessionID string) (*runState, context.Context) {
 	t.Helper()
 	reservation, err := manager.reserve()
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	_, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(t.Context())
 	run, err := reservation.activate(runID, sessionID, "", cancel)
 	if err != nil {
 		cancel()
@@ -115,7 +120,7 @@ func activateRunForTest(t *testing.T, manager *runManager, runID, sessionID stri
 		run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
 		run.finishExecution()
 	})
-	return run
+	return run, ctx
 }
 
 func newRunManagerForTest(t *testing.T, limits ...config.RunLimits) *runManager {

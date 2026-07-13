@@ -482,16 +482,20 @@ func (r *runState) publish(item runStreamItem) {
 		r.mu.Unlock()
 		return
 	}
-	if r.normalEvents+1 > r.limits.MaxRetainedEvents || r.normalBytes+frame.size() > r.limits.MaxRetainedBytes {
-		r.mu.Unlock()
-		r.fail("run event history limit reached")
-		return
-	}
 	r.nextSequence++
 	frame.sequence = r.nextSequence
-	r.history = append(r.history, frame)
-	r.normalEvents++
-	r.normalBytes += frame.size()
+	if frame.size() <= r.limits.MaxRetainedBytes {
+		for r.normalEvents+1 > r.limits.MaxRetainedEvents || r.normalBytes+frame.size() > r.limits.MaxRetainedBytes {
+			dropped := r.history[0]
+			r.history[0] = runFrame{}
+			r.history = r.history[1:]
+			r.normalEvents--
+			r.normalBytes -= dropped.size()
+		}
+		r.history = append(r.history, frame)
+		r.normalEvents++
+		r.normalBytes += frame.size()
+	}
 	r.enqueueToSubscribersLocked(frame)
 	r.mu.Unlock()
 }

@@ -164,37 +164,73 @@ func TestRunManagerAcknowledgementKeepsRemainingQueueBudget(t *testing.T) {
 	}
 }
 
-func TestRunManagerRetainsTerminalWhenEventOrHistoryLimitIsReached(t *testing.T) {
+func TestRunManagerRetainsLatestHistoryWithoutCancellingRun(t *testing.T) {
 	limits := config.DefaultRunLimits()
 	limits.MaxRetainedEvents = 1
-	limits.MaxRetainedBytes = 512
+	limits.MaxRetainedBytes = 1024
 	limits.MaxEventBytes = 512
 	limits.MaxTerminalBytes = 512
 	limits.MaxErrorTextBytes = 64
 	manager := newRunManagerForTest(t, limits)
-	run := activateRunForTest(t, manager, "run-1", "sess-1")
-
-	run.publish(runStreamItem{name: "agent_start", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart}})
-	run.publish(runStreamItem{name: "agent_end", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentEnd}})
-
+	run, runCtx := activateRunWithContextForTest(t, manager, "run-1", "sess-1")
 	subscription, err := manager.subscribe(run.id)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
 	defer subscription.unsubscribe()
-	first, _, ok := subscription.next(t.Context())
-	if !ok || !strings.Contains(string(first.data), "event: agent_start\n") {
-		t.Fatalf("first retained frame = %q", first.data)
+
+	run.publish(runStreamItem{name: "agent_start", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentStart}})
+	run.publish(runStreamItem{name: "agent_end", payload: protocol.AgentEvent{Type: protocol.AgentEventAgentEnd}})
+
+	if err := runCtx.Err(); err != nil {
+		t.Fatalf("run context after history eviction = %v, want active", err)
 	}
-	terminal, _, ok := subscription.next(t.Context())
-	if !ok || !strings.Contains(string(terminal.data), "event: run_error\n") {
-		t.Fatalf("terminal retained frame = %q", terminal.data)
+	first, live, ok := subscription.next(t.Context())
+	if !ok || !live || first.sequence != 1 || !strings.Contains(string(first.data), "event: agent_start\n") {
+		t.Fatalf("first live frame = %q, sequence=%d live=%t ok=%t", first.data, first.sequence, live, ok)
 	}
-	if terminal.sequence != 2 {
-		t.Fatalf("terminal sequence = %d, want 2", terminal.sequence)
+	subscription.acknowledge(first)
+	second, live, ok := subscription.next(t.Context())
+	if !ok || !live || second.sequence != 2 || !strings.Contains(string(second.data), "event: agent_end\n") {
+		t.Fatalf("second live frame = %q, sequence=%d live=%t ok=%t", second.data, second.sequence, live, ok)
 	}
-	if _, _, ok := subscription.next(t.Context()); ok {
-		t.Fatal("terminal run retained extra frames")
+	subscription.acknowledge(second)
+
+	run.mu.Lock()
+	done := run.done
+	normalEvents := run.normalEvents
+	history := append([]runFrame(nil), run.history...)
+	run.mu.Unlock()
+	if done || normalEvents != 1 || len(history) != 1 {
+		t.Fatalf("retained state = done:%t events:%d history:%d, want false/1/1", done, normalEvents, len(history))
+	}
+	if history[0].sequence != 2 {
+		t.Fatalf("retained sequence = %d, want 2", history[0].sequence)
+	}
+
+	run.publishTerminal(runStreamItem{
+		name: "run_done",
+		payload: runDoneEvent{
+			Type:    "run_done",
+			Session: harness.SessionSnapshot{SessionID: "sess-1"},
+		},
+	})
+	terminal, live, ok := subscription.next(t.Context())
+	if !ok || !live || terminal.sequence != 3 || !strings.Contains(string(terminal.data), "event: run_done\n") {
+		t.Fatalf("terminal live frame = %q, sequence=%d live=%t ok=%t", terminal.data, terminal.sequence, live, ok)
+	}
+
+	reconnected, err := manager.subscribe(run.id)
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	frames := readRunSubscription(t, reconnected)
+	if len(frames) != 2 || frames[0].sequence != 2 || frames[1].sequence != 3 {
+		t.Fatalf("replayed frames = %#v, want sequences 2 and 3", frames)
+	}
+	if !strings.Contains(string(frames[0].data), "event: agent_end\n") ||
+		!strings.Contains(string(frames[1].data), `"sessionId":"sess-1"`) {
+		t.Fatalf("replayed tail = %q", frames)
 	}
 }
 
@@ -230,27 +266,123 @@ func TestRunManagerRetainedByteAndSingleEventLimitsKeepBoundedTerminal(t *testin
 		limits.MaxEventBytes = frame.size()
 		limits.MaxRetainedBytes = frame.size()
 		manager := newRunManagerForTest(t, limits)
-		run := activateRunForTest(t, manager, "run-byte-limit", "sess-1")
-
-		run.publish(item)
-		run.publish(item)
+		run, runCtx := activateRunWithContextForTest(t, manager, "run-byte-limit", "sess-1")
 		subscription, err := manager.subscribe(run.id)
 		if err != nil {
 			t.Fatalf("subscribe: %v", err)
 		}
-		frames := readRunSubscription(t, subscription)
-		if len(frames) != 2 {
-			t.Fatalf("frame count = %d, want normal event and terminal", len(frames))
+
+		run.publish(item)
+		run.publish(testRunItem(2, strings.Repeat("x", 128)))
+		if err := runCtx.Err(); err != nil {
+			t.Fatalf("run context after retained byte eviction = %v, want active", err)
 		}
-		if !strings.Contains(string(frames[1].data), "event: run_error\n") {
-			t.Fatalf("terminal frame = %q, want run_error", frames[1].data)
-		}
+
 		run.mu.Lock()
-		defer run.mu.Unlock()
-		if run.normalBytes != frame.size() || run.normalBytes > manager.limits.MaxRetainedBytes {
-			t.Fatalf("normal retained bytes = %d, limit = %d", run.normalBytes, manager.limits.MaxRetainedBytes)
+		history := append([]runFrame(nil), run.history...)
+		normalEvents := run.normalEvents
+		normalBytes := run.normalBytes
+		run.mu.Unlock()
+		if len(history) != 1 || normalEvents != 1 || normalBytes != frame.size() {
+			t.Fatalf("retained byte state = history:%d events:%d bytes:%d", len(history), normalEvents, normalBytes)
+		}
+		if history[0].sequence != 2 {
+			t.Fatalf("retained sequence = %d, want 2", history[0].sequence)
+		}
+
+		run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+		frames := readRunSubscription(t, subscription)
+		if len(frames) != 3 || !strings.Contains(string(frames[2].data), "event: run_done\n") {
+			t.Fatalf("live frames = %q, want two normal frames and run_done", frames)
+		}
+
+		reconnected, err := manager.subscribe(run.id)
+		if err != nil {
+			t.Fatalf("reconnect: %v", err)
+		}
+		replayed := readRunSubscription(t, reconnected)
+		if len(replayed) != 2 || replayed[0].sequence != 2 || replayed[1].sequence != 3 {
+			t.Fatalf("replayed frames = %#v, want sequences 2 and 3", replayed)
 		}
 	})
+
+	t.Run("frame larger than retained budget stays live", func(t *testing.T) {
+		limits := config.DefaultRunLimits()
+		limits.MaxEventBytes = frame.size()
+		limits.MaxRetainedBytes = frame.size() - 1
+		manager := newRunManagerForTest(t, limits)
+		run, runCtx := activateRunWithContextForTest(t, manager, "run-live-only", "sess-1")
+		subscription, err := manager.subscribe(run.id)
+		if err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+
+		run.publish(item)
+		if err := runCtx.Err(); err != nil {
+			t.Fatalf("run context after live-only frame = %v, want active", err)
+		}
+		run.mu.Lock()
+		if len(run.history) != 0 || run.normalEvents != 0 || run.normalBytes != 0 {
+			run.mu.Unlock()
+			t.Fatalf("live-only retained state = history:%d events:%d bytes:%d, want 0/0/0",
+				len(run.history), run.normalEvents, run.normalBytes)
+		}
+		run.mu.Unlock()
+
+		liveFrame, live, ok := subscription.next(t.Context())
+		if !ok || !live || liveFrame.sequence != 1 || !strings.Contains(string(liveFrame.data), `"index":1`) {
+			t.Fatalf("live-only frame = %q, sequence=%d live=%t ok=%t", liveFrame.data, liveFrame.sequence, live, ok)
+		}
+		subscription.acknowledge(liveFrame)
+		run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+		terminal, live, ok := subscription.next(t.Context())
+		if !ok || !live || terminal.sequence != 2 || !strings.Contains(string(terminal.data), "event: run_done\n") {
+			t.Fatalf("terminal frame = %q, sequence=%d live=%t ok=%t", terminal.data, terminal.sequence, live, ok)
+		}
+
+		reconnected, err := manager.subscribe(run.id)
+		if err != nil {
+			t.Fatalf("reconnect: %v", err)
+		}
+		replayed := readRunSubscription(t, reconnected)
+		if len(replayed) != 1 || replayed[0].sequence != 2 || !strings.Contains(string(replayed[0].data), "event: run_done\n") {
+			t.Fatalf("replayed frames = %#v, want only terminal sequence 2", replayed)
+		}
+	})
+}
+
+func TestRunManagerRepeatedHistoryEvictionKeepsTailAccounting(t *testing.T) {
+	limits := config.DefaultRunLimits()
+	limits.MaxRetainedEvents = 3
+	limits.MaxRetainedBytes = 4096
+	manager := newRunManagerForTest(t, limits)
+	run, runCtx := activateRunWithContextForTest(t, manager, "run-repeated-eviction", "sess-1")
+
+	const published = 30
+	for index := 1; index <= published; index++ {
+		run.publish(testRunItem(index, "tail"))
+	}
+	if err := runCtx.Err(); err != nil {
+		t.Fatalf("run context after repeated eviction = %v, want active", err)
+	}
+
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if len(run.history) != limits.MaxRetainedEvents || run.normalEvents != limits.MaxRetainedEvents {
+		t.Fatalf("retained events = history:%d accounting:%d, want %d",
+			len(run.history), run.normalEvents, limits.MaxRetainedEvents)
+	}
+	wantSequence := uint64(published - limits.MaxRetainedEvents + 1)
+	retainedBytes := 0
+	for index, retained := range run.history {
+		if retained.sequence != wantSequence+uint64(index) {
+			t.Fatalf("history sequence[%d] = %d, want %d", index, retained.sequence, wantSequence+uint64(index))
+		}
+		retainedBytes += retained.size()
+	}
+	if run.normalBytes != retainedBytes || retainedBytes > limits.MaxRetainedBytes {
+		t.Fatalf("retained bytes = accounting:%d actual:%d limit:%d", run.normalBytes, retainedBytes, limits.MaxRetainedBytes)
+	}
 }
 
 func TestRunManagerLiveByteLimitEvictsSlowSubscriberAndReconnectsTerminal(t *testing.T) {
