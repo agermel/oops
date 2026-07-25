@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	protocol "oops/internal/agent/ai"
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/config"
-	"oops/internal/llm/ai/protocol"
-	"oops/internal/llm/runtime/harness"
 )
 
 type runManagerTestPayload struct {
@@ -213,7 +213,7 @@ func TestRunManagerRetainsLatestHistoryWithoutCancellingRun(t *testing.T) {
 		name: "run_done",
 		payload: runDoneEvent{
 			Type:    "run_done",
-			Session: harness.SessionSnapshot{SessionID: "sess-1"},
+			Session: agentruntime.SessionSnapshot{SessionID: "sess-1"},
 		},
 	})
 	terminal, live, ok := subscription.next(t.Context())
@@ -875,45 +875,24 @@ func TestRunManagerReleasesCapacityAfterExecutionFinishes(t *testing.T) {
 	second.release()
 }
 
-func TestRunManagerAllowsOneWriterPerSessionUntilExecutionFinishes(t *testing.T) {
-	manager := newRunManagerForTest(t)
-	first, err := manager.reserve()
+func TestRuntimeAllowsOneWriterPerSessionUntilRelease(t *testing.T) {
+	runtime := agentruntime.NewRuntime(agentruntime.RuntimeOptions{})
+	first, err := runtime.AcquireSession("sess-1")
 	if err != nil {
-		t.Fatalf("reserve first run: %v", err)
-	}
-	if err := first.claimSession("sess-1"); err != nil {
 		t.Fatalf("claim first session: %v", err)
 	}
-	run, err := first.activate("run-1", "sess-1", "project-1", func() {})
+	if second, err := runtime.AcquireSession("sess-1"); !errors.Is(err, ErrSessionBusy) {
+		if second != nil {
+			second.Release()
+		}
+		t.Fatalf("claim session during active lease = %v, want ErrSessionBusy", err)
+	}
+	first.Release()
+	third, err := runtime.AcquireSession("sess-1")
 	if err != nil {
-		t.Fatalf("activate first run: %v", err)
+		t.Fatalf("claim session after release: %v", err)
 	}
-
-	second, err := manager.reserve()
-	if err != nil {
-		t.Fatalf("reserve second run: %v", err)
-	}
-	if err := second.claimSession("sess-1"); !errors.Is(err, ErrSessionBusy) {
-		second.release()
-		t.Fatalf("claim session during active run = %v, want ErrSessionBusy", err)
-	}
-	second.release()
-
-	run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
-	if lease, err := manager.acquireSession("sess-1"); !errors.Is(err, ErrSessionBusy) {
-		lease.release()
-		t.Fatalf("claim session before execution finished = %v, want ErrSessionBusy", err)
-	}
-	run.finishExecution()
-	third, err := manager.reserve()
-	if err != nil {
-		t.Fatalf("reserve third run: %v", err)
-	}
-	if err := third.claimSession("sess-1"); err != nil {
-		third.release()
-		t.Fatalf("claim session after terminal: %v", err)
-	}
-	third.release()
+	third.Release()
 }
 
 func TestRunManagerBoundsTerminalSnapshotAndExpiresCompletedRun(t *testing.T) {
@@ -928,7 +907,7 @@ func TestRunManagerBoundsTerminalSnapshotAndExpiresCompletedRun(t *testing.T) {
 		name: "run_done",
 		payload: runDoneEvent{
 			Type: "run_done",
-			Session: harness.SessionSnapshot{
+			Session: agentruntime.SessionSnapshot{
 				SessionID: strings.Repeat("s", 128),
 				LeafID:    strings.Repeat("l", 128),
 				Messages:  protocol.MessageList{protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent(strings.Repeat("x", 2048))}}},
@@ -976,7 +955,7 @@ func TestRunManagerClampsTerminalBudgetToEncodableFrame(t *testing.T) {
 		name: "run_done",
 		payload: runDoneEvent{
 			Type: "run_done",
-			Session: harness.SessionSnapshot{
+			Session: agentruntime.SessionSnapshot{
 				SessionID: strings.Repeat("s", 4096),
 				LeafID:    strings.Repeat("l", 4096),
 			},

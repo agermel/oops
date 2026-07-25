@@ -8,14 +8,12 @@ import (
 	"sync"
 	"time"
 
+	agentauth "oops/internal/agent/ai/auth"
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/auth"
 	"oops/internal/config"
 	"oops/internal/console"
 	"oops/internal/httprate"
-	"oops/internal/llm/agent"
-	runtimesession "oops/internal/llm/runtime/session"
-	"oops/internal/llm/skills"
-	llmtools "oops/internal/llm/tools"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
@@ -53,6 +51,8 @@ type Options struct {
 	RuntimeStore      *runtimestore.Store
 	LLMEnabled        bool
 	LLMConfig         config.LLMConfig
+	LLMCredentials    agentauth.CredentialStore
+	LLMAuthContext    agentauth.AuthContext
 	RunLimits         config.RunLimits
 	UserStore         *auth.Store
 	TokenService      *auth.TokenService
@@ -83,14 +83,15 @@ type Server struct {
 	nodeletManager  *nodelet.NodeletManager
 	nodeletProber   *nodelet.NodeletProber
 	nodeletClient   NodeletClient
-	llmClient       *agent.Client
+	llmClient       *agentruntime.Client
 	llmConfig       config.LLMConfig
-	skillStore      *skills.SkillStore
+	skillStore      *agentruntime.SkillStore
+	agentRuntime    *agentruntime.Runtime
 	mcpManager      *mcp.Manager
 	projectStore    *project.Store
 	dsnStore        *project.DSNStore
 	runtimeStore    *runtimestore.Store
-	agentRepo       *runtimesession.Repository
+	agentRepo       *agentruntime.Repository
 	runManager      *runManager
 	UserStore       *auth.Store
 	TokenService    *auth.TokenService
@@ -158,10 +159,7 @@ func NewFromConfigWithConsoleHub(cfg config.Config, consoleHub *console.Hub) (*S
 		ConsoleHub:      consoleHub,
 	})
 
-	// MCP Manager 在 Server 创建后初始化，onChange 回调可引用 s.llmClient。
-	mgr, err := mcp.NewManagerWithRuntimeAndConsole(runtimeStore, s.consoleHub, func(mcpTools []mcp.ConnectionTool) {
-		s.onMCPToolsChanged(mcpTools)
-	})
+	mgr, err := mcp.NewManagerWithRuntimeAndConsole(runtimeStore, s.consoleHub, nil)
 	if err != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), cfg.Run.WithDefaults().CloseTimeout)
 		_ = s.Close(closeCtx)
@@ -236,16 +234,17 @@ func New(options Options) *Server {
 		consoleHub:      consoleHub,
 		ownsConsoleHub:  ownsConsoleHub,
 	}
-	if storage, err := runtimesession.NewFileStorage("data/agent-sessions"); err != nil {
+	if storage, err := agentruntime.NewFileStorage("data/agent-sessions"); err != nil {
 		logutil.Warn("agent session: open store, falling back to memory-only", zap.Error(err))
-		s.agentRepo = runtimesession.NewRepository(nil)
+		s.agentRepo = agentruntime.NewRepository(nil)
 	} else {
-		s.agentRepo = runtimesession.NewRepository(storage)
+		s.agentRepo = agentruntime.NewRepository(storage)
 	}
+	s.agentRuntime = agentruntime.NewRuntime(agentruntime.RuntimeOptions{Repo: s.agentRepo})
 	s.runManager = newRunManager(options.RunLimits)
 
 	// SkillStore 必须在 LLM Client 之前就绪，保证无 MCP 连接时也会注册 skill 工具。
-	ss, err := skills.NewSkillStore("config/skills")
+	ss, err := agentruntime.NewSkillStore("config/skills")
 	if err != nil {
 		logutil.Warn("llm: skill store", zap.Error(err))
 	} else {
@@ -256,13 +255,10 @@ func New(options Options) *Server {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		nativeTools, err := llmtools.NewTools(s, s.skillStore)
-		if err != nil {
-			logutil.Error("llm: create tools", zap.Error(err))
-			return s
-		}
-
-		client, err := agent.NewClient(ctx, options.LLMConfig, nativeTools)
+		client, err := agentruntime.NewClient(ctx, options.LLMConfig, agentruntime.ClientOptions{
+			Credentials: options.LLMCredentials,
+			AuthContext: options.LLMAuthContext,
+		})
 		if err != nil {
 			// LLM 不可用时不影响其他功能，仅日志输出。
 			logutil.Error("llm: create client", zap.Error(err))

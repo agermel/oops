@@ -30,11 +30,11 @@ func (s *Server) handleSessionUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid session title", http.StatusBadRequest)
 		return
 	}
-	lease, ok := s.beginSessionMutation(w, id)
+	lease, ok := s.acquireRuntimeSessionLease(w, id)
 	if !ok {
 		return
 	}
-	defer lease.release()
+	defer lease.Release()
 	info, found, err := s.renameRuntimeSession(id, "", title)
 	if err != nil {
 		sanitizedError(w, "update session", err, http.StatusInternalServerError)
@@ -54,11 +54,11 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	lease, ok := s.beginSessionMutation(w, id)
+	lease, ok := s.acquireRuntimeSessionLease(w, id)
 	if !ok {
 		return
 	}
-	defer lease.release()
+	defer lease.Release()
 	deleted, err := s.agentRepo.Delete(id)
 	if err != nil {
 		sanitizedError(w, "delete session", err, http.StatusInternalServerError)
@@ -110,11 +110,11 @@ func (s *Server) handleProjectSessionUpdate(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, "invalid session title", http.StatusBadRequest)
 		return
 	}
-	lease, ok := s.beginSessionMutation(w, id)
+	lease, ok := s.acquireRuntimeSessionLease(w, id)
 	if !ok {
 		return
 	}
-	defer lease.release()
+	defer lease.Release()
 	info, found, err := s.renameRuntimeSession(id, pid, title)
 	if err != nil {
 		sanitizedError(w, "update project session", err, http.StatusInternalServerError)
@@ -131,11 +131,11 @@ func (s *Server) handleProjectSessionUpdate(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleProjectSessionDelete(w http.ResponseWriter, r *http.Request) {
 	pid := r.PathValue("pid")
 	id := r.PathValue("id")
-	lease, ok := s.beginSessionMutation(w, id)
+	lease, ok := s.acquireRuntimeSessionLease(w, id)
 	if !ok {
 		return
 	}
-	defer lease.release()
+	defer lease.Release()
 	info, ok, err := s.runtimeSessionInfoByID(id)
 	if err != nil {
 		sanitizedError(w, "delete project session", err, http.StatusInternalServerError)

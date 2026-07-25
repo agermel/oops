@@ -4,21 +4,22 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"oops/internal/llm/ai/protocol"
-	"oops/internal/llm/runtime/harness"
-	runtimesession "oops/internal/llm/runtime/session"
+	protocol "oops/internal/agent/ai"
+	agentruntime "oops/internal/agent/runtime"
 )
 
 func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
-	storage, err := runtimesession.NewFileStorage(t.TempDir())
+	storage, err := agentruntime.NewFileStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := runtimesession.NewRepository(storage)
+	repo := agentruntime.NewRepository(storage)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	sess := createRuntimeSession(t, repo, "rt-1", "proj-1", "hello")
 	createRuntimeSession(t, repo, "rt-2", "proj-2", "other")
@@ -39,11 +40,11 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 		t.Fatalf("top-level list status = %d, want %d, body = %s", topLevelListResp.Code, http.StatusNotFound, topLevelListResp.Body.String())
 	}
 
-	detailResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions/rt-1?include_messages=true", "")
+	detailResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions/rt-1", "")
 	if detailResp.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, want %d, body = %s", detailResp.Code, http.StatusOK, detailResp.Body.String())
 	}
-	var snapshot harness.SessionSnapshot
+	var snapshot agentruntime.SessionSnapshot
 	if err := json.NewDecoder(detailResp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
@@ -70,12 +71,49 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	}
 }
 
-func TestRuntimeSessionHandlersRename(t *testing.T) {
-	storage, err := runtimesession.NewFileStorage(t.TempDir())
+func TestProjectSessionListSkipsInvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := agentruntime.NewFileStorage(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := runtimesession.NewRepository(storage)
+	valid := agentruntime.New("valid")
+	entry, err := valid.AppendSessionInfoWithProject("/tmp/project", "work", "proj-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Append(valid.ID(), entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "invalid.jsonl"), []byte(`{"type":"session_info","version":1}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server, jwtToken := newRuntimeSessionTestServer(t, agentruntime.NewRepository(storage))
+	listResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/projects/proj-1/sessions", "")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body = %s", listResp.Code, http.StatusOK, listResp.Body.String())
+	}
+	var infos []sessionInfo
+	if err := json.NewDecoder(listResp.Body).Decode(&infos); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != "valid" {
+		t.Fatalf("infos = %+v, want only valid session", infos)
+	}
+
+	invalidResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions/invalid", "")
+	if invalidResp.Code != http.StatusInternalServerError {
+		t.Fatalf("invalid session status = %d, want %d, body = %s", invalidResp.Code, http.StatusInternalServerError, invalidResp.Body.String())
+	}
+}
+
+func TestRuntimeSessionHandlersRename(t *testing.T) {
+	storage, err := agentruntime.NewFileStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := agentruntime.NewRepository(storage)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	sess := createRuntimeSession(t, repo, "rt-title", "proj-1", "hello")
 	createRuntimeSession(t, repo, "rt-other-title", "proj-2", "other")
@@ -111,14 +149,14 @@ func TestRuntimeSessionHandlersRename(t *testing.T) {
 }
 
 func TestRuntimeSessionMutationsRejectBusySession(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	createRuntimeSession(t, repo, "rt-busy", "proj-1", "hello")
-	lease, err := server.runManager.acquireSession("rt-busy")
+	lease, err := server.ensureAgentRuntime().AcquireSession("rt-busy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.release()
+	defer lease.Release()
 
 	tests := []struct {
 		name   string
@@ -146,7 +184,7 @@ func TestRuntimeSessionMutationsRejectBusySession(t *testing.T) {
 }
 
 func TestRuntimeSessionHandlersRejectInvalidSessionID(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	tests := []struct {
 		name   string
@@ -177,7 +215,7 @@ func TestRuntimeSessionHandlersRejectInvalidSessionID(t *testing.T) {
 }
 
 func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	sess := createRuntimeSession(t, repo, "rt-branch", "proj-1", "root")
 	root := sess.LeafID()
@@ -191,7 +229,7 @@ func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	var snapshot harness.SessionSnapshot
+	var snapshot agentruntime.SessionSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode branch: %v", err)
 	}
@@ -210,7 +248,7 @@ func TestRuntimeSessionBranchNavigatesLeaf(t *testing.T) {
 }
 
 func TestRuntimeSessionBranchUserTargetReturnsEditorText(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	sess := createRuntimeSession(t, repo, "rt-edit-user", "proj-1", "root")
 	root := sess.LeafID()
@@ -220,7 +258,7 @@ func TestRuntimeSessionBranchUserTargetReturnsEditorText(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	var snapshot harness.SessionSnapshot
+	var snapshot agentruntime.SessionSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode branch: %v", err)
 	}
@@ -230,7 +268,7 @@ func TestRuntimeSessionBranchUserTargetReturnsEditorText(t *testing.T) {
 }
 
 func TestRuntimeSessionBranchCanAppendSummary(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	sess := createRuntimeSession(t, repo, "rt-summary", "proj-1", "root")
 	root := sess.LeafID()
@@ -247,7 +285,7 @@ func TestRuntimeSessionBranchCanAppendSummary(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	var snapshot harness.SessionSnapshot
+	var snapshot agentruntime.SessionSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode branch: %v", err)
 	}
@@ -261,13 +299,13 @@ func TestRuntimeSessionBranchCanAppendSummary(t *testing.T) {
 		t.Fatalf("summary message = %q", runtimeMessageText(t, snapshot.Messages[1]))
 	}
 	last := snapshot.Entries[len(snapshot.Entries)-1]
-	if last.Type != runtimesession.EntryBranchSummary || last.ParentID != root {
+	if last.Type != agentruntime.EntryBranchSummary || last.ParentID != root {
 		t.Fatalf("last entry = %#v", last)
 	}
 }
 
 func TestRuntimeSessionBranchSummaryUsesResolvedToolCallLeaf(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	server, jwtToken := newRuntimeSessionTestServer(t, repo)
 	sess := createRuntimeSession(t, repo, "rt-summary-tool", "proj-1", "root")
 	assistant := appendRuntimeAssistantToolCall(t, repo, sess, "call_read", "read", `{"path":"left.md"}`)
@@ -278,17 +316,17 @@ func TestRuntimeSessionBranchSummaryUsesResolvedToolCallLeaf(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("branch status = %d, want %d, body = %s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	var snapshot harness.SessionSnapshot
+	var snapshot agentruntime.SessionSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode branch: %v", err)
 	}
 	last := snapshot.Entries[len(snapshot.Entries)-1]
-	if last.Type != runtimesession.EntryBranchSummary || last.ParentID != result.ID {
+	if last.Type != agentruntime.EntryBranchSummary || last.ParentID != result.ID {
 		t.Fatalf("last entry = %#v, want branch summary under result %q", last, result.ID)
 	}
 }
 
-func newRuntimeSessionTestServer(t *testing.T, repo *runtimesession.Repository) (*Server, string) {
+func newRuntimeSessionTestServer(t *testing.T, repo *agentruntime.Repository) (*Server, string) {
 	t.Helper()
 	userStore, tokenService, jwtToken := testAuthSetup(t)
 	return &Server{
@@ -299,7 +337,7 @@ func newRuntimeSessionTestServer(t *testing.T, repo *runtimesession.Repository) 
 	}, jwtToken
 }
 
-func createRuntimeSession(t *testing.T, repo *runtimesession.Repository, id, projectID, firstMessage string) *runtimesession.Session {
+func createRuntimeSession(t *testing.T, repo *agentruntime.Repository, id, projectID, firstMessage string) *agentruntime.Session {
 	t.Helper()
 	sess := repo.Create(id)
 	info, err := sess.AppendSessionInfoWithProject("/tmp/project", "work", projectID)
@@ -313,7 +351,7 @@ func createRuntimeSession(t *testing.T, repo *runtimesession.Repository, id, pro
 	return sess
 }
 
-func appendRuntimeMessage(t *testing.T, repo *runtimesession.Repository, sess *runtimesession.Session, text string) runtimesession.Entry {
+func appendRuntimeMessage(t *testing.T, repo *agentruntime.Repository, sess *agentruntime.Session, text string) agentruntime.Entry {
 	t.Helper()
 	entry, err := sess.AppendMessage(protocol.UserMessage{
 		Content:   protocol.ContentList{protocol.NewTextContent(text)},
@@ -328,7 +366,7 @@ func appendRuntimeMessage(t *testing.T, repo *runtimesession.Repository, sess *r
 	return entry
 }
 
-func appendRuntimeAssistantToolCall(t *testing.T, repo *runtimesession.Repository, sess *runtimesession.Session, callID, name, args string) runtimesession.Entry {
+func appendRuntimeAssistantToolCall(t *testing.T, repo *agentruntime.Repository, sess *agentruntime.Session, callID, name, args string) agentruntime.Entry {
 	t.Helper()
 	entry, err := sess.AppendMessage(protocol.AssistantMessage{
 		Content: protocol.ContentList{
@@ -346,7 +384,7 @@ func appendRuntimeAssistantToolCall(t *testing.T, repo *runtimesession.Repositor
 	return entry
 }
 
-func appendRuntimeToolResult(t *testing.T, repo *runtimesession.Repository, sess *runtimesession.Session, callID, name, text string) runtimesession.Entry {
+func appendRuntimeToolResult(t *testing.T, repo *agentruntime.Repository, sess *agentruntime.Session, callID, name, text string) agentruntime.Entry {
 	t.Helper()
 	entry, err := sess.AppendMessage(protocol.ToolResultMessage{
 		ToolCallID: callID,

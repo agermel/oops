@@ -200,6 +200,7 @@ function pickRow(row: SessionTreeRow) {
 function sessionInfo(id: string): SessionEntry {
   return {
     type: "session_info",
+    version: 1,
     id,
     timestamp: "2026-01-01T00:00:00Z",
     name: "session",
@@ -209,6 +210,7 @@ function sessionInfo(id: string): SessionEntry {
 function modelEntry(id: string, parentId: string): SessionEntry {
   return {
     type: "model_change",
+    version: 1,
     id,
     parentId,
     timestamp: "2026-01-01T00:00:00Z",
@@ -219,6 +221,7 @@ function modelEntry(id: string, parentId: string): SessionEntry {
 function branchSummary(id: string, parentId: string, summary: string): SessionEntry {
   return {
     type: "branch_summary",
+    version: 1,
     id,
     parentId,
     timestamp: "2026-01-01T00:00:00Z",
@@ -286,6 +289,7 @@ function toolResultEntry(id: string, parentId: string, toolCallId: string, toolN
 function messageEntry(id: string, parentId: string, message: AgentMessage): SessionEntry {
   return {
     type: "message",
+    version: 1,
     id,
     parentId,
     timestamp: "2026-01-01T00:00:00Z",

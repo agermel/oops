@@ -19,8 +19,7 @@ export function useSessions(projectId?: string) {
 export function useSessionDetail(sessionId: string) {
   return useQuery<SessionResponse>({
     queryKey: queryKeys.sessions.detail(sessionId),
-    queryFn: () =>
-      apiRequest<SessionResponse>(sessionPaths(sessionId).get + "?include_messages=true"),
+    queryFn: () => apiRequest<SessionResponse>(sessionPaths(sessionId).get),
     enabled: !!sessionId,
   });
 }

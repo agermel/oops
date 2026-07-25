@@ -10,22 +10,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/google/uuid"
 
-	"oops/internal/llm/ai/protocol"
-	"oops/internal/llm/ai/provider"
-	coreagent "oops/internal/llm/core/agent"
-	"oops/internal/llm/core/toolruntime"
-	tooladapter "oops/internal/llm/core/toolruntime/einoadapter"
-	"oops/internal/llm/prompt"
-	"oops/internal/llm/runtime/harness"
-	workspacetools "oops/internal/llm/runtime/tools"
+	agentruntime "oops/internal/agent/runtime"
 )
 
 const (
-	runTimeout       = 120 * time.Second
-	runProviderLabel = "openai-compatible"
+	runTimeout = 120 * time.Second
 )
 
 var runIDCounter atomic.Uint64
@@ -48,7 +39,7 @@ type runCreateResponse struct {
 
 func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 	if s.llmClient == nil {
-		writeJSONError(w, "LLM not configured. Set llm.enabled=true and llm.api_key in config.", http.StatusServiceUnavailable)
+		writeJSONError(w, "LLM not configured. Enable llm and configure a provider credential.", http.StatusServiceUnavailable)
 		return
 	}
 	var req runCreateRequest
@@ -98,19 +89,20 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		newSessionID = "session_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 		leaseSessionID = newSessionID
 	}
-	if err := reservation.claimSession(leaseSessionID); err != nil {
+	sessionLease, err := s.ensureAgentRuntime().AcquireSession(leaseSessionID)
+	if err != nil {
 		if errors.Is(err, ErrSessionBusy) {
 			writeJSONError(w, ErrSessionBusy.Error(), http.StatusConflict)
-			return
-		}
-		if errors.Is(err, ErrRunManagerQuiescing) {
-			w.Header().Set("Retry-After", s.runManager.retryAfterHeader())
-			writeJSONError(w, "run capacity unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		sanitizedError(w, "claim run session", err, http.StatusInternalServerError)
 		return
 	}
+	defer func() {
+		if !activated {
+			sessionLease.Release()
+		}
+	}()
 	if req.SessionID != "" {
 		req.ProjectID, err = s.resolveRunProjectID(req.SessionID, req.ProjectID)
 		if err != nil {
@@ -166,19 +158,16 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	activated = true
-	unsubscribe := agentSession.Listen(func(_ context.Context, event protocol.AgentEvent, _ coreagent.AgentState) error {
-		run.publish(runStreamItem{name: string(event.Type), payload: event})
+	unsubscribe := agentSession.ListenRunEvents(func(_ context.Context, event agentruntime.RunEvent) error {
+		run.publish(runStreamItem{name: event.Name, payload: event.Payload})
 		return nil
 	})
 
 	go func() {
+		defer sessionLease.Release()
 		defer run.finishExecution()
 		defer unsubscribe()
-		messages := protocol.MessageList{protocol.UserMessage{
-			Content:   protocol.ContentList{protocol.NewTextContent(req.Text)},
-			Timestamp: time.Now().UnixMilli(),
-		}}
-		if _, err := agentSession.Prompt(runCtx, messages); err != nil {
+		if err := agentSession.PromptText(runCtx, req.Text, time.Now().UnixMilli()); err != nil {
 			run.publishTerminal(runStreamItem{
 				name: "run_error",
 				payload: runErrorEvent{
@@ -265,168 +254,42 @@ func (s *Server) handleRunAbort(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"aborted": aborted})
 }
 
-func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest, newSessionID string) (*harness.AgentSession, error) {
+func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest, newSessionID string) (*agentruntime.AgentSession, error) {
 	rawTools, inventory := s.chatToolsAndInventory(ctx, req.ProjectID)
-	runtimeTools, modelTools, err := s.runToolSets(ctx, rawTools)
-	if err != nil {
-		return nil, err
-	}
-	streamFn, err := provider.NewEinoStreamFn(ctx, s.llmClient.Model(), modelTools)
+	maxTurns, err := s.runAgentMaxTurns(ctx)
 	if err != nil {
 		return nil, err
 	}
 	systemPrompt := s.runSystemPrompt(req.ProjectID, inventory)
-	loopConfig, err := s.runAgentLoopConfig(ctx, streamFn)
-	if err != nil {
-		return nil, err
-	}
-	runtime := harness.NewRuntime(harness.RuntimeOptions{
-		Repo: s.agentRepo,
-		Loader: harness.StaticResourceLoader{Snapshot: harness.ResourceSnapshot{
-			SystemPrompt: systemPrompt,
-			Tools:        runtimeTools,
-		}},
-		Config:   loopConfig,
-		Model:    s.llmConfig.Model,
-		Provider: runProviderLabel,
-	})
-	if req.SessionID != "" {
-		return runtime.Resume(ctx, req.SessionID)
-	}
-	return runtime.NewSession(ctx, harness.NewSessionOptions{
-		ID:        newSessionID,
-		Model:     s.llmConfig.Model,
-		Provider:  runProviderLabel,
-		ProjectID: req.ProjectID,
+	return s.ensureAgentRuntime().PreparePromptSession(ctx, agentruntime.PreparePromptOptions{
+		SessionID:     req.SessionID,
+		NewSessionID:  newSessionID,
+		Model:         s.llmConfig.Model,
+		Provider:      s.llmClient.Provider(),
+		ProjectID:     req.ProjectID,
+		SystemPrompt:  systemPrompt,
+		PlatformTools: rawTools,
+		MaxTurns:      maxTurns,
+		Client:        s.llmClient,
 	})
 }
 
-func (s *Server) runAgentLoopConfig(ctx context.Context, streamFn coreagent.StreamFn) (coreagent.AgentLoopConfig, error) {
+func (s *Server) runAgentMaxTurns(ctx context.Context) (int, error) {
 	if s.runtimeStore == nil {
-		return coreagent.AgentLoopConfig{}, fmt.Errorf("runtime store not available")
+		return 0, fmt.Errorf("runtime store not available")
 	}
 	settings, err := s.runtimeStore.GetAgentSettings(ctx)
 	if err != nil {
-		return coreagent.AgentLoopConfig{}, fmt.Errorf("read agent settings: %w", err)
+		return 0, fmt.Errorf("read agent settings: %w", err)
 	}
-	return coreagent.AgentLoopConfig{
-		MaxTurns: settings.MaxTurns,
-		Stream:   streamFn,
-	}, nil
-}
-
-func (s *Server) runToolSets(ctx context.Context, platformTools []einotool.InvokableTool) ([]toolruntime.Tool, []einotool.InvokableTool, error) {
-	workspaceRuntimeTools, err := workspacetools.NewWorkspaceTools(workspacetools.Options{})
-	if err != nil {
-		return nil, nil, err
-	}
-	workspaceModelTools, err := tooladapter.ToInvokableTools(workspaceRuntimeTools)
-	if err != nil {
-		return nil, nil, err
-	}
-	workspaceNames := runtimeToolNameSet(workspaceRuntimeTools)
-	allModelTools := make([]einotool.InvokableTool, 0, len(platformTools)+len(workspaceModelTools))
-	allModelTools = append(allModelTools, workspaceModelTools...)
-	allModelTools = append(allModelTools, platformTools...)
-	allModelTools = uniqueInvokableTools(ctx, allModelTools)
-	enabledModelTools := s.llmClient.EnabledTools(allModelTools)
-	enabledNames := invokableToolNameSet(ctx, enabledModelTools)
-
-	enabledPlatformTools := filterInvokableTools(ctx, platformTools, enabledNames, workspaceNames)
-	runtimeTools, _, err := tooladapter.FromInvokableTools(ctx, enabledPlatformTools)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, item := range workspaceRuntimeTools {
-		if item == nil {
-			continue
-		}
-		if enabledNames[item.Definition().Name] {
-			runtimeTools = append(runtimeTools, item)
-		}
-	}
-	return runtimeTools, enabledModelTools, nil
-}
-
-func runtimeToolNameSet(tools []toolruntime.Tool) map[string]bool {
-	names := make(map[string]bool, len(tools))
-	for _, item := range tools {
-		if item == nil {
-			continue
-		}
-		if name := item.Definition().Name; name != "" {
-			names[name] = true
-		}
-	}
-	return names
-}
-
-func invokableToolNameSet(ctx context.Context, tools []einotool.InvokableTool) map[string]bool {
-	names := make(map[string]bool, len(tools))
-	for _, item := range tools {
-		if item == nil {
-			continue
-		}
-		info, err := item.Info(ctx)
-		if err != nil || info == nil || info.Name == "" {
-			continue
-		}
-		names[info.Name] = true
-	}
-	return names
-}
-
-func uniqueInvokableTools(ctx context.Context, tools []einotool.InvokableTool) []einotool.InvokableTool {
-	if len(tools) == 0 {
-		return nil
-	}
-	seen := map[string]bool{}
-	out := make([]einotool.InvokableTool, 0, len(tools))
-	for _, item := range tools {
-		if item == nil {
-			continue
-		}
-		info, err := item.Info(ctx)
-		if err != nil || info == nil || info.Name == "" {
-			continue
-		}
-		if seen[info.Name] {
-			continue
-		}
-		seen[info.Name] = true
-		out = append(out, item)
-	}
-	return out
-}
-
-func filterInvokableTools(ctx context.Context, tools []einotool.InvokableTool, enabled, reserved map[string]bool) []einotool.InvokableTool {
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]einotool.InvokableTool, 0, len(tools))
-	for _, item := range tools {
-		if item == nil {
-			continue
-		}
-		info, err := item.Info(ctx)
-		if err != nil || info == nil {
-			continue
-		}
-		if reserved[info.Name] {
-			continue
-		}
-		if enabled[info.Name] {
-			out = append(out, item)
-		}
-	}
-	return out
+	return settings.MaxTurns, nil
 }
 
 func (s *Server) runSystemPrompt(projectID, inventory string) string {
-	systemPrompt := prompt.BasePrompt
+	systemPrompt := agentruntime.BasePrompt
 	if projectID != "" && s.projectStore != nil {
 		if p := s.projectStore.Get(projectID); p != nil {
-			systemPrompt += "\n\n" + prompt.FormatProjectContext(&prompt.ProjectContext{
+			systemPrompt += "\n\n" + agentruntime.FormatProjectContext(&agentruntime.ProjectContext{
 				ID:          p.ID,
 				Name:        p.Name,
 				Description: p.Description,

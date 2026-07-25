@@ -28,10 +28,14 @@ type Config struct {
 
 // LLMConfig 保存 LLM Agent 配置。
 type LLMConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Model   string `mapstructure:"model"`
-	BaseURL string `mapstructure:"base_url"`
-	APIKey  string `mapstructure:"api_key"`
+	Enabled       bool     `mapstructure:"enabled"`
+	Provider      string   `mapstructure:"provider"`
+	Model         string   `mapstructure:"model"`
+	BaseURL       string   `mapstructure:"base_url"`
+	APIKey        string   `mapstructure:"api_key"`
+	ContextWindow int      `mapstructure:"context_window"`
+	MaxTokens     int      `mapstructure:"max_tokens"`
+	Temperature   *float32 `mapstructure:"temperature"`
 }
 
 // HTTPConfig defines trust-boundary settings for HTTP listeners.

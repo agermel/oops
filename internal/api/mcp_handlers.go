@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	llmtools "oops/internal/llm/tools"
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/project"
@@ -18,40 +18,6 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
 )
-
-// onMCPToolsChanged 是 MCP Manager 的工具变更回调。
-// 合并原生工具和 MCP 工具后热更新 LLM Client。
-func (s *Server) onMCPToolsChanged(mcpTools []mcp.ConnectionTool) {
-	if s.llmClient == nil {
-		return
-	}
-
-	nativeTools, err := llmtools.NewTools(s, s.skillStore)
-	if err != nil {
-		logutil.Error("mcp: create native tools", zap.Error(err))
-		return
-	}
-
-	mcpTools = s.withMCPToolServerNames(mcpTools)
-	mcpTools = namespaceMCPTools(mcpTools, nativeToolNames(context.Background(), nativeTools))
-	allTools := make([]tool.InvokableTool, 0, len(nativeTools)+len(mcpTools))
-	allTools = append(allTools, nativeTools...)
-	for _, mt := range mcpTools {
-		if it, ok := mt.Tool.(tool.InvokableTool); ok {
-			allTools = append(allTools, namespacedMCPTool{
-				modelName: mt.ModelName,
-				inner:     it,
-			})
-		}
-	}
-
-	s.llmClient.UpdateTools(allTools)
-	logutil.Info("mcp: tools updated",
-		zap.Int("total", len(allTools)),
-		zap.Int("native", len(nativeTools)),
-		zap.Int("mcp", len(mcpTools)),
-	)
-}
 
 func (s *Server) namespacedMCPToolEntries(ctx context.Context) []mcp.ConnectionTool {
 	return s.namespacedMCPToolEntriesForProject(ctx, "")
@@ -62,7 +28,7 @@ func (s *Server) namespacedMCPToolEntriesForProject(ctx context.Context, project
 		return nil
 	}
 	entries := s.mcpToolEntriesForProject(projectID)
-	nativeTools, err := llmtools.NewTools(s, s.skillStore)
+	nativeTools, err := agentruntime.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return namespaceMCPTools(entries, nil)
@@ -71,7 +37,7 @@ func (s *Server) namespacedMCPToolEntriesForProject(ctx context.Context, project
 }
 
 func (s *Server) chatToolsAndInventory(ctx context.Context, projectID string) ([]tool.InvokableTool, string) {
-	nativeTools, err := llmtools.NewTools(s, s.skillStore)
+	nativeTools, err := agentruntime.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return nil, ""
@@ -197,7 +163,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 原生工具。
-	nativeTools, err := llmtools.NewTools(s, s.skillStore)
+	nativeTools, err := agentruntime.NewTools(s, s.skillStore)
 	nativeNames := map[string]struct{}{}
 	if err == nil {
 		nativeNames = nativeToolNames(r.Context(), nativeTools)

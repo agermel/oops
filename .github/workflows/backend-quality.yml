@@ -96,7 +96,7 @@ jobs:
           }
           check_coverage internal/api 50
           check_coverage internal/mcp 50
-          check_coverage internal/llm/tools 40
+          check_coverage internal/agent/runtime 40
       - name: Check generated SQLC code
         if: matrix.name == 'root'
         run: |

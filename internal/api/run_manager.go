@@ -10,10 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/config"
-	"oops/internal/llm/ai/protocol"
-	"oops/internal/llm/runtime/harness"
-	runtimesession "oops/internal/llm/runtime/session"
 )
 
 var (
@@ -21,18 +19,18 @@ var (
 	ErrRunManagerQuiescing = errors.New("run manager is quiescing")
 	ErrRunSubscriberLimit  = errors.New("run subscriber limit reached")
 	ErrRunReservationUsed  = errors.New("run reservation already released")
-	ErrSessionBusy         = errors.New("session is busy")
+	ErrSessionBusy         = agentruntime.ErrSessionBusy
 )
 
 type runDoneEvent struct {
-	Type    string                  `json:"type"`
-	Session harness.SessionSnapshot `json:"session"`
+	Type    string                       `json:"type"`
+	Session agentruntime.SessionSnapshot `json:"session"`
 }
 
 type runErrorEvent struct {
-	Type    string                  `json:"type"`
-	Error   string                  `json:"error"`
-	Session harness.SessionSnapshot `json:"session"`
+	Type    string                       `json:"type"`
+	Error   string                       `json:"error"`
+	Session agentruntime.SessionSnapshot `json:"session"`
 }
 
 type runStreamItem struct {
@@ -44,29 +42,21 @@ type runStreamItem struct {
 // Its active counter includes reservations so expensive session construction
 // cannot bypass the configured capacity limit.
 type runManager struct {
-	mu            sync.Mutex
-	runs          map[string]*runState
-	sessionLeases map[string]*sessionLease
-	limits        config.RunLimits
-	active        int
-	quiescing     bool
-	lifecycle     context.Context
-	cancel        context.CancelFunc
-	workers       sync.WaitGroup
-	closeOnce     sync.Once
+	mu        sync.Mutex
+	runs      map[string]*runState
+	limits    config.RunLimits
+	active    int
+	quiescing bool
+	lifecycle context.Context
+	cancel    context.CancelFunc
+	workers   sync.WaitGroup
+	closeOnce sync.Once
 }
 
 type runReservation struct {
-	mu           sync.Mutex
-	manager      *runManager
-	reserved     bool
-	sessionLease *sessionLease
-}
-
-type sessionLease struct {
-	manager   *runManager
-	sessionID string
-	once      sync.Once
+	mu       sync.Mutex
+	manager  *runManager
+	reserved bool
 }
 
 type runState struct {
@@ -77,7 +67,6 @@ type runState struct {
 	sessionID string
 	projectID string
 	cancel    context.CancelFunc
-	lease     *sessionLease
 
 	nextSequence   uint64
 	history        []runFrame
@@ -125,11 +114,10 @@ func newRunManager(configured ...config.RunLimits) *runManager {
 	}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	return &runManager{
-		runs:          make(map[string]*runState),
-		sessionLeases: make(map[string]*sessionLease),
-		limits:        limits,
-		lifecycle:     lifecycle,
-		cancel:        cancel,
+		runs:      make(map[string]*runState),
+		limits:    limits,
+		lifecycle: lifecycle,
+		cancel:    cancel,
 	}
 }
 
@@ -170,42 +158,13 @@ func (r *runReservation) release() {
 	}
 	r.reserved = false
 	m := r.manager
-	lease := r.sessionLease
-	r.sessionLease = nil
 	r.mu.Unlock()
-	lease.release()
 	m.releaseReservation()
-}
-
-func (r *runReservation) claimSession(sessionID string) error {
-	if r == nil {
-		return ErrRunReservationUsed
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.reserved {
-		return ErrRunReservationUsed
-	}
-	if r.sessionLease != nil {
-		if r.sessionLease.sessionID == sessionID {
-			return nil
-		}
-		return fmt.Errorf("reservation already owns session %q", r.sessionLease.sessionID)
-	}
-	lease, err := r.manager.acquireSession(sessionID)
-	if err != nil {
-		return err
-	}
-	r.sessionLease = lease
-	return nil
 }
 
 func (r *runReservation) activate(runID, sessionID, projectID string, cancel context.CancelFunc) (*runState, error) {
 	if r == nil {
 		return nil, ErrRunReservationUsed
-	}
-	if err := r.claimSession(sessionID); err != nil {
-		return nil, err
 	}
 	r.mu.Lock()
 	if !r.reserved {
@@ -214,20 +173,16 @@ func (r *runReservation) activate(runID, sessionID, projectID string, cancel con
 	}
 	r.reserved = false
 	m := r.manager
-	lease := r.sessionLease
-	r.sessionLease = nil
 	r.mu.Unlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.quiescing {
-		m.releaseSessionLeaseLocked(lease)
 		m.releaseActiveLocked()
 		m.workers.Done()
 		return nil, ErrRunManagerQuiescing
 	}
 	if _, exists := m.runs[runID]; exists {
-		m.releaseSessionLeaseLocked(lease)
 		m.releaseActiveLocked()
 		m.workers.Done()
 		return nil, fmt.Errorf("run %q already exists", runID)
@@ -239,47 +194,12 @@ func (r *runReservation) activate(runID, sessionID, projectID string, cancel con
 		sessionID:   sessionID,
 		projectID:   projectID,
 		cancel:      cancel,
-		lease:       lease,
 		subscribers: make(map[*runSubscriber]struct{}),
 	}
 	m.runs[runID] = run
 	m.workers.Add(1)
 	m.workers.Done()
 	return run, nil
-}
-
-func (m *runManager) acquireSession(sessionID string) (*sessionLease, error) {
-	if sessionID == "" {
-		return nil, fmt.Errorf("session id is required")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.quiescing {
-		return nil, ErrRunManagerQuiescing
-	}
-	if _, exists := m.sessionLeases[sessionID]; exists {
-		return nil, ErrSessionBusy
-	}
-	lease := &sessionLease{manager: m, sessionID: sessionID}
-	m.sessionLeases[sessionID] = lease
-	return lease, nil
-}
-
-func (l *sessionLease) release() {
-	if l == nil || l.manager == nil {
-		return
-	}
-	l.once.Do(func() {
-		l.manager.mu.Lock()
-		l.manager.releaseSessionLeaseLocked(l)
-		l.manager.mu.Unlock()
-	})
-}
-
-func (m *runManager) releaseSessionLeaseLocked(lease *sessionLease) {
-	if lease != nil && m.sessionLeases[lease.sessionID] == lease {
-		delete(m.sessionLeases, lease.sessionID)
-	}
 }
 
 func (m *runManager) releaseReservation() {
@@ -355,7 +275,6 @@ func (m *runManager) close(ctx context.Context) error {
 	case <-done:
 		m.mu.Lock()
 		m.runs = make(map[string]*runState)
-		m.sessionLeases = make(map[string]*sessionLease)
 		m.mu.Unlock()
 		return nil
 	case <-ctx.Done():
@@ -379,20 +298,11 @@ func (m *runManager) complete(run *runState) {
 
 func (r *runState) finishExecution() {
 	r.executionOnce.Do(func() {
-		r.releaseSessionLease()
 		r.manager.mu.Lock()
 		r.manager.releaseActiveLocked()
 		r.manager.workers.Done()
 		r.manager.mu.Unlock()
 	})
-}
-
-func (r *runState) releaseSessionLease() {
-	r.mu.Lock()
-	lease := r.lease
-	r.lease = nil
-	r.mu.Unlock()
-	lease.release()
 }
 
 func (m *runManager) expireAfterTTL(run *runState) {
@@ -508,7 +418,7 @@ func (r *runState) publishTerminal(item runStreamItem) {
 			payload: runErrorEvent{
 				Type:    "run_error",
 				Error:   "run terminal event could not be encoded",
-				Session: boundedRunSnapshot(harness.SessionSnapshot{SessionID: r.sessionID}, 0, 0),
+				Session: boundedRunSnapshot(agentruntime.SessionSnapshot{SessionID: r.sessionID}, 0, 0),
 			},
 		}, r.limits)
 		if err != nil {
@@ -545,7 +455,7 @@ func (r *runState) fail(message string) {
 		payload: runErrorEvent{
 			Type:    "run_error",
 			Error:   message,
-			Session: harness.SessionSnapshot{SessionID: r.sessionID},
+			Session: agentruntime.SessionSnapshot{SessionID: r.sessionID},
 		},
 	})
 }
@@ -687,19 +597,14 @@ func terminalItemWithErrorLimit(item runStreamItem, errorLimit int) runStreamIte
 	return item
 }
 
-func boundedRunSnapshot(snapshot harness.SessionSnapshot, idLimit, leafLimit int) harness.SessionSnapshot {
+func boundedRunSnapshot(snapshot agentruntime.SessionSnapshot, idLimit, leafLimit int) agentruntime.SessionSnapshot {
 	if idLimit >= 0 {
 		snapshot.SessionID = truncateRunText(snapshot.SessionID, idLimit)
 	}
 	if leafLimit >= 0 {
 		snapshot.LeafID = truncateRunText(snapshot.LeafID, leafLimit)
 	}
-	snapshot.EditorText = ""
-	snapshot.Messages = protocol.MessageList{}
-	snapshot.Events = []protocol.AgentEvent{}
-	snapshot.Tools = []protocol.ToolDefinition{}
-	snapshot.Entries = []runtimesession.Entry{}
-	return snapshot
+	return agentruntime.ClearSnapshotPayload(snapshot)
 }
 
 func truncateRunText(value string, maxBytes int) string {

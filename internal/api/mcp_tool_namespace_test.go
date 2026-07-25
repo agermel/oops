@@ -2,15 +2,12 @@ package api
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
+	protocol "oops/internal/agent/ai"
+	toolruntime "oops/internal/agent/core"
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/config"
-	"oops/internal/llm/agent"
-	"oops/internal/llm/ai/protocol"
-	"oops/internal/llm/core/toolruntime"
-	tooladapter "oops/internal/llm/core/toolruntime/einoadapter"
-	llmtools "oops/internal/llm/tools"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
 	"oops/internal/project"
@@ -57,7 +54,7 @@ func TestMCPToolHooksUseModelFacingToolName(t *testing.T) {
 	}
 	var beforeName string
 	var afterName string
-	runtimeTools, _, err := tooladapter.FromInvokableTools(context.Background(), []tool.InvokableTool{wrapped})
+	runtimeTools, _, err := agentruntime.FromInvokableTools(context.Background(), []tool.InvokableTool{wrapped})
 	if err != nil {
 		t.Fatalf("FromInvokableTools() error = %v", err)
 	}
@@ -263,54 +260,90 @@ func TestWithMCPToolServerNames(t *testing.T) {
 	}
 }
 
-func TestOnMCPToolsChangedUpdatesClientWithNamespacedTools(t *testing.T) {
+func TestClientFiltersNamespacedMCPToolsFromCurrentSnapshot(t *testing.T) {
 	server := &Server{}
 	cfg := config.LLMConfig{
 		Model:   "gpt-4o-mini",
 		BaseURL: "https://api.openai.com/v1",
 		APIKey:  "test-key",
 	}
-	client, err := agent.NewClient(context.Background(), cfg, nil)
+	ctx := context.Background()
+	client, err := agentruntime.NewClient(ctx, cfg, agentruntime.ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	server.llmClient = client
 
-	nativeTools, err := llmtools.NewTools(server, nil)
+	nativeTools, err := agentruntime.NewTools(server, nil)
 	if err != nil {
 		t.Fatalf("NewTools: %v", err)
 	}
-	client.SetToolEnabled("redis_info", false)
-	server.onMCPToolsChanged([]mcp.ConnectionTool{{
+	mcpEntries := namespaceMCPTools([]mcp.ConnectionTool{{
 		ConnectionID:   "cache",
 		ConnectionName: "Redis",
 		ConnectionType: "redis",
 		OriginalName:   "info",
 		Tool:           &invokableToolForTest{name: "info", desc: "Redis info", output: "ok"},
-	}})
+	}}, nativeToolNames(ctx, nativeTools))
+	allTools := append([]tool.InvokableTool{}, nativeTools...)
+	for _, entry := range mcpEntries {
+		invokable, ok := entry.Tool.(tool.InvokableTool)
+		if !ok {
+			t.Fatalf("MCP tool %q is not invokable", entry.OriginalName)
+		}
+		allTools = append(allTools, namespacedMCPTool{
+			modelName: entry.ModelName,
+			inner:     invokable,
+		})
+	}
 
-	active, all := clientToolLens(t, client)
-	if all != len(nativeTools)+1 {
-		t.Fatalf("all tool count = %d, want %d", all, len(nativeTools)+1)
-	}
-	if active != len(nativeTools) {
-		t.Fatalf("active tool count = %d, want %d after redis_info disabled", active, len(nativeTools))
-	}
+	client.SetToolEnabled("redis_info", false)
+	active := client.EnabledTools(allTools)
+	assertToolCount(t, active, len(nativeTools))
+	assertToolAbsent(t, active, "redis_info")
 	if disabled := client.DisabledTools(); !disabled["redis_info"] {
 		t.Fatalf("DisabledTools = %#v, want redis_info disabled", disabled)
 	}
 
 	client.SetToolEnabled("redis_info", true)
-	active, all = clientToolLens(t, client)
-	if all != len(nativeTools)+1 || active != len(nativeTools)+1 {
-		t.Fatalf("tool counts after re-enable active=%d all=%d, want %d", active, all, len(nativeTools)+1)
+	active = client.EnabledTools(allTools)
+	assertToolCount(t, active, len(nativeTools)+1)
+	assertToolPresent(t, active, "redis_info")
+}
+
+func assertToolCount(t *testing.T, tools []tool.InvokableTool, want int) {
+	t.Helper()
+	if len(tools) != want {
+		t.Fatalf("tool count = %d, want %d", len(tools), want)
 	}
 }
 
-func clientToolLens(t *testing.T, client *agent.Client) (active int, all int) {
+func assertToolPresent(t *testing.T, tools []tool.InvokableTool, name string) {
 	t.Helper()
-	value := reflect.ValueOf(client).Elem()
-	return value.FieldByName("tools").Len(), value.FieldByName("allTools").Len()
+	if !hasToolNamed(t, tools, name) {
+		t.Fatalf("tool %q missing", name)
+	}
+}
+
+func assertToolAbsent(t *testing.T, tools []tool.InvokableTool, name string) {
+	t.Helper()
+	if hasToolNamed(t, tools, name) {
+		t.Fatalf("tool %q present", name)
+	}
+}
+
+func hasToolNamed(t *testing.T, tools []tool.InvokableTool, name string) bool {
+	t.Helper()
+	for _, item := range tools {
+		info, err := item.Info(context.Background())
+		if err != nil {
+			t.Fatalf("tool Info: %v", err)
+		}
+		if info.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type invokableToolForTest struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"oops/internal/llm/skills"
+	agentruntime "oops/internal/agent/runtime"
 )
 
 func TestExpandSkillCommandNamespaced(t *testing.T) {
@@ -118,7 +118,7 @@ func assertSkillCommandError(t *testing.T, err error, status int) {
 	}
 }
 
-func newTestSkillStore(t *testing.T) *skills.SkillStore {
+func newTestSkillStore(t *testing.T) *agentruntime.SkillStore {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
@@ -141,7 +141,7 @@ Disabled.
 			t.Fatalf("write skill %s: %v", name, err)
 		}
 	}
-	store, err := skills.NewSkillStore(dir)
+	store, err := agentruntime.NewSkillStore(dir)
 	if err != nil {
 		t.Fatalf("NewSkillStore: %v", err)
 	}

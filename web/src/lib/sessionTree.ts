@@ -367,6 +367,7 @@ function mergeRealtimeEntries(
     const id = realtimeEntryID(message, messageIndex);
     out.push({
       type: "message",
+      version: 1,
       id,
       parentId: parentID,
       timestamp: new Date((message.timestamp || Date.now()) + messageIndex).toISOString(),

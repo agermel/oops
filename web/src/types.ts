@@ -371,11 +371,12 @@ export type SessionEntryType =
 
 export type SessionEntry = {
   type: SessionEntryType;
-  version?: number;
-  id?: string;
+  version: number;
+  id: string;
   parentId?: string;
-  timestamp?: string;
+  timestamp: string;
   cwd?: string;
+  projectId?: string;
   message?: AgentMessage;
   model?: string;
   provider?: string;
@@ -389,6 +390,7 @@ export type SessionEntry = {
   payload?: unknown;
   label?: string;
   name?: string;
+  title?: string;
   leafId?: string;
 };
 

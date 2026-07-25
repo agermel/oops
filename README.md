@@ -102,18 +102,14 @@ graph TB
 
 | 组件 | 源文件 | 职责 |
 |---|---|---|
-| AI Protocol | [`internal/llm/ai/protocol`](internal/llm/ai/protocol) | Agent message、content、tool definition、AgentEvent 协议 |
-| Provider | [`internal/llm/ai/provider`](internal/llm/ai/provider) | Eino 模型创建与流式事件 adapter |
-| Agent Core | [`internal/llm/core/agent`](internal/llm/core/agent) | Agent 状态机、队列、abort、`runAgentLoop` |
-| Tool Runtime | [`internal/llm/core/toolruntime`](internal/llm/core/toolruntime) | tool registry、schema 校验、顺序/并行执行、hook |
-| Session | [`internal/llm/runtime/session`](internal/llm/runtime/session) | Session JSONL v1 tree、leaf context、compaction、branch summary |
-| Harness | [`internal/llm/runtime/harness`](internal/llm/runtime/harness) | AgentSession、资源加载、消息持久化、settled lifecycle |
+| AI Protocol | [`internal/agent/ai`](internal/agent/ai) | Agent message、content、tool definition、AgentEvent 协议 |
+| Provider | [`internal/agent/ai/api`](internal/agent/ai/api) + [`internal/agent/ai/provider`](internal/agent/ai/provider) | OpenAI Compatible 流式 adapter、Provider 选择与模型创建 |
+| Agent Core | [`internal/agent/core`](internal/agent/core) | Agent 状态机、队列、abort、`runAgentLoop`、tool registry、schema 校验、顺序/并行执行和 hook |
+| Agent Runtime | [`internal/agent/runtime`](internal/agent/runtime) | AgentSession、Session JSONL v1 tree、资源加载、消息持久化、branch summary、workspace/ops tools 和 Skill store |
 | Run API | [`internal/api/run_handlers.go`](internal/api/run_handlers.go) | `/api/runs`、事件订阅、abort |
 | Session API | [`internal/api/runtime_session_handlers.go`](internal/api/runtime_session_handlers.go) | session list/detail/delete/branch |
-| Workspace Tools | [`internal/llm/runtime/tools`](internal/llm/runtime/tools) | read、ls、grep、find、bash、write、edit |
-| Ops Tools | [`internal/llm/tools`](internal/llm/tools) | 运维查询、仓库读取、skill 元工具 |
 | MCP Manager | [`internal/mcp/manager.go`](internal/mcp/manager.go) | MCP 连接生命周期、工具动态注册、保活 |
-| Skills | [`internal/llm/skills`](internal/llm/skills) + [`config/skills/`](config/skills/) | Skill 定义加载、可用列表渲染 |
+| Skills | [`internal/agent/runtime`](internal/agent/runtime) + [`config/skills/`](config/skills/) | Skill 定义加载、可用列表渲染 |
 
 ---
 
@@ -173,7 +169,7 @@ cd oops
 cp config/config.example.yaml config/config.yaml
 ```
 
-编辑 `config/config.yaml`，填写 `llm.api_key`、`llm.base_url` 和 `llm.model`。
+编辑 `config/config.yaml`，填写 `llm.provider`、`llm.api_key`、`llm.base_url` 和 `llm.model`。
 
 首次启动时会交互式创建用户（用户名 + 密码），系统会自动生成密码哈希。
 
@@ -300,8 +296,8 @@ color: blue
 仓库 CI 读取 GitHub Actions variable `OOPS_SENSITIVE_PATTERN`；变量为空、匹配到敏感词或扫描命令异常都会使门禁失败。
 
 ```bash
-go test -count=1 ./internal/llm/ai/protocol ./internal/llm/core/agent ./internal/llm/core/toolruntime ./internal/llm/runtime/session ./internal/llm/runtime/harness ./internal/api
-go test -race -count=1 ./internal/llm/core/agent ./internal/llm/runtime/harness
+go test -count=1 ./internal/agent/ai ./internal/agent/ai/api ./internal/agent/ai/provider ./internal/agent/core ./internal/agent/runtime ./internal/api
+go test -race -count=1 ./internal/agent/core ./internal/agent/runtime ./internal/api
 go test -count=1 ./...
 (cd web && npm run build)
 (cd web && npm test)
@@ -315,9 +311,7 @@ rg -n -i "$OOPS_SENSITIVE_PATTERN" --hidden --glob '!.omx/**' --glob '!AGENTS.md
 |---|---|
 | Protocol | JSON snapshot 覆盖 message、content、tool、AgentEvent |
 | Agent Core | mock stream 覆盖 tool call、tool error、parallel order、max turns、abort |
-| Tool Runtime | schema 校验、hook、顺序/并行、workspace path guard |
-| Session | Session JSONL v1、leaf context、compaction details、branch summary、文件读取 |
-| Harness | message persistence、pending writes、settled lifecycle、session resume/fork |
+| Agent Runtime | schema 校验、hook、顺序/并行、workspace path guard、Session JSONL v1、leaf context、branch summary、文件读取 |
 | API | `/api/runs` SSE 顺序、Session API、abort |
 | Frontend | AgentEvent reducer、Session Tree、工具列表、构建产物 |
 

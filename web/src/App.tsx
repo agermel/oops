@@ -201,9 +201,7 @@ export function App() {
     let cancelled = false;
     async function load() {
       try {
-        const detail = await apiRequest<SessionResponse | SessionDetail>(
-          sessionPaths(sessionId).get + "?include_messages=true"
-        );
+        const detail = await apiRequest<SessionResponse | SessionDetail>(sessionPaths(sessionId).get);
         const nextSession = detail ? sessionFromAPI(detail) : null;
         if (!cancelled && nextSession?.sessionId) {
           setAgentSession(nextSession);
@@ -383,9 +381,7 @@ export function App() {
     setChatLoading(true); // 用 chatLoading 指示会话切换中
     setChatError("");
     try {
-      const detail = await apiRequest<SessionResponse | SessionDetail>(
-        sessionPaths(id).get + "?include_messages=true"
-      );
+      const detail = await apiRequest<SessionResponse | SessionDetail>(sessionPaths(id).get);
       const nextSession = detail ? sessionFromAPI(detail) : null;
       if (nextSession?.sessionId) {
         setAgentSession(nextSession);

@@ -11,28 +11,11 @@ import (
 	"testing"
 	"time"
 
-	einotool "github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
-
+	protocol "oops/internal/agent/ai"
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/config"
-	"oops/internal/llm/agent"
-	"oops/internal/llm/ai/protocol"
-	"oops/internal/llm/runtime/harness"
-	runtimesession "oops/internal/llm/runtime/session"
 	runtimestore "oops/internal/store/runtime"
 )
-
-type namedRunTool struct {
-	name string
-}
-
-func (t namedRunTool) Info(context.Context) (*schema.ToolInfo, error) {
-	return &schema.ToolInfo{Name: t.name}, nil
-}
-
-func (t namedRunTool) InvokableRun(context.Context, string, ...einotool.Option) (string, error) {
-	return "", nil
-}
 
 func TestRunManagerReplaysHistoryAndRunDone(t *testing.T) {
 	manager := newRunManagerForTest(t)
@@ -45,7 +28,7 @@ func TestRunManagerReplaysHistoryAndRunDone(t *testing.T) {
 		name: "run_done",
 		payload: runDoneEvent{
 			Type:    "run_done",
-			Session: harness.SessionSnapshot{SessionID: "sess-1"},
+			Session: agentruntime.SessionSnapshot{SessionID: "sess-1"},
 		},
 	})
 
@@ -79,7 +62,7 @@ func TestHandleRunEventsReplaysBoundedHistoryTailAndTerminal(t *testing.T) {
 		name: "run_done",
 		payload: runDoneEvent{
 			Type:    "run_done",
-			Session: harness.SessionSnapshot{SessionID: "sess-1"},
+			Session: agentruntime.SessionSnapshot{SessionID: "sess-1"},
 		},
 	})
 	run.finishExecution()
@@ -184,35 +167,10 @@ func newRunManagerForTest(t *testing.T, limits ...config.RunLimits) *runManager 
 	return manager
 }
 
-func TestRunToolHelpersPreferReservedNames(t *testing.T) {
-	ctx := context.Background()
-	unique := uniqueInvokableTools(ctx, []einotool.InvokableTool{
-		namedRunTool{name: "read"},
-		namedRunTool{name: "read"},
-		namedRunTool{name: "repo_read_file"},
-	})
-	if len(unique) != 2 {
-		t.Fatalf("unique len = %d", len(unique))
-	}
-	enabled := map[string]bool{"read": true, "repo_read_file": true}
-	reserved := map[string]bool{"read": true}
-	filtered := filterInvokableTools(ctx, unique, enabled, reserved)
-	if len(filtered) != 1 {
-		t.Fatalf("filtered len = %d", len(filtered))
-	}
-	info, err := filtered[0].Info(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Name != "repo_read_file" {
-		t.Fatalf("filtered tool = %q", info.Name)
-	}
-}
-
 func TestHandleRunCreateRejectsInvalidSkillCommandBeforeRun(t *testing.T) {
 	manager := newRunManagerForTest(t)
 	server := &Server{
-		llmClient:  &agent.Client{},
+		llmClient:  &agentruntime.Client{},
 		runManager: manager,
 		skillStore: newTestSkillStore(t),
 	}
@@ -246,7 +204,7 @@ func TestHandleRunCreateRejectsAtCapacityWithRetryAfter(t *testing.T) {
 	}
 	defer reservation.release()
 
-	server := &Server{llmClient: &agent.Client{}, runManager: manager}
+	server := &Server{llmClient: &agentruntime.Client{}, runManager: manager}
 	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello"}`))
 	recorder := httptest.NewRecorder()
 
@@ -262,15 +220,18 @@ func TestHandleRunCreateRejectsAtCapacityWithRetryAfter(t *testing.T) {
 
 func TestHandleRunCreateRejectsBusySession(t *testing.T) {
 	manager := newRunManagerForTest(t)
-	lease, err := manager.acquireSession("sess-1")
+	repo := agentruntime.NewRepository(nil)
+	runtime := agentruntime.NewRuntime(agentruntime.RuntimeOptions{Repo: repo})
+	lease, err := runtime.AcquireSession("sess-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.release()
+	defer lease.Release()
 	server := &Server{
-		llmClient:  &agent.Client{},
-		runManager: manager,
-		agentRepo:  runtimesession.NewRepository(nil),
+		llmClient:    &agentruntime.Client{},
+		runManager:   manager,
+		agentRepo:    repo,
+		agentRuntime: runtime,
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello","session_id":"sess-1"}`))
 	recorder := httptest.NewRecorder()
@@ -289,7 +250,7 @@ func TestHandleRunCreateRejectsInvalidSessionID(t *testing.T) {
 	for _, sessionID := range []string{"../outside", "SESS-1"} {
 		t.Run(sessionID, func(t *testing.T) {
 			server := &Server{
-				llmClient:  &agent.Client{},
+				llmClient:  &agentruntime.Client{},
 				runManager: newRunManagerForTest(t),
 			}
 			request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(fmt.Sprintf(`{"text":"hello","session_id":%q}`, sessionID)))
@@ -309,10 +270,10 @@ func TestHandleRunCreateRejectsInvalidSessionID(t *testing.T) {
 
 func TestHandleRunCreateRejectsPersistedProjectConflict(t *testing.T) {
 	manager := newRunManagerForTest(t)
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	createRuntimeSession(t, repo, "sess-project", "project-a", "hello")
 	server := &Server{
-		llmClient:  &agent.Client{},
+		llmClient:  &agentruntime.Client{},
 		runManager: manager,
 		agentRepo:  repo,
 	}
@@ -327,23 +288,23 @@ func TestHandleRunCreateRejectsPersistedProjectConflict(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), "session belongs to another project") {
 		t.Fatalf("body = %s", recorder.Body.String())
 	}
-	lease, err := manager.acquireSession("sess-project")
+	lease, err := server.ensureAgentRuntime().AcquireSession("sess-project")
 	if err != nil {
 		t.Fatalf("session lease was not released: %v", err)
 	}
-	lease.release()
+	lease.Release()
 }
 
 func TestHandleRunCreateRejectsMissingSessionWithoutCreatingFile(t *testing.T) {
 	dir := t.TempDir()
-	storage, err := runtimesession.NewFileStorage(dir)
+	storage, err := agentruntime.NewFileStorage(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := newRunManagerForTest(t)
-	repo := runtimesession.NewRepository(storage)
+	repo := agentruntime.NewRepository(storage)
 	server := &Server{
-		llmClient:  &agent.Client{},
+		llmClient:  &agentruntime.Client{},
 		runManager: manager,
 		agentRepo:  repo,
 	}
@@ -364,15 +325,15 @@ func TestHandleRunCreateRejectsMissingSessionWithoutCreatingFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "missing-session.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("session file stat error = %v, want not exist", err)
 	}
-	lease, err := manager.acquireSession("missing-session")
+	lease, err := server.ensureAgentRuntime().AcquireSession("missing-session")
 	if err != nil {
 		t.Fatalf("session lease was not released: %v", err)
 	}
-	lease.release()
+	lease.Release()
 }
 
 func TestResolveRunProjectIDUsesPersistedProject(t *testing.T) {
-	repo := runtimesession.NewRepository(nil)
+	repo := agentruntime.NewRepository(nil)
 	createRuntimeSession(t, repo, "sess-project", "project-a", "hello")
 	server := &Server{agentRepo: repo}
 
@@ -428,7 +389,7 @@ func TestHandleRunEventsRejectsSubscriberLimitAndExpiredRun(t *testing.T) {
 	}
 }
 
-func TestRunAgentLoopConfigUsesRuntimeSettings(t *testing.T) {
+func TestRunAgentMaxTurnsUsesRuntimeSettings(t *testing.T) {
 	ctx := context.Background()
 	store, err := runtimestore.Open(filepath.Join(t.TempDir(), "runtime.db"))
 	if err != nil {
@@ -440,17 +401,17 @@ func TestRunAgentLoopConfigUsesRuntimeSettings(t *testing.T) {
 	}
 
 	server := &Server{runtimeStore: store}
-	config, err := server.runAgentLoopConfig(ctx, nil)
+	maxTurns, err := server.runAgentMaxTurns(ctx)
 	if err != nil {
-		t.Fatalf("runAgentLoopConfig: %v", err)
+		t.Fatalf("runAgentMaxTurns: %v", err)
 	}
-	if config.MaxTurns != 9 {
-		t.Fatalf("MaxTurns = %d, want 9", config.MaxTurns)
+	if maxTurns != 9 {
+		t.Fatalf("MaxTurns = %d, want 9", maxTurns)
 	}
 }
 
-func TestRunAgentLoopConfigRequiresRuntimeStore(t *testing.T) {
-	_, err := (&Server{}).runAgentLoopConfig(context.Background(), nil)
+func TestRunAgentMaxTurnsRequiresRuntimeStore(t *testing.T) {
+	_, err := (&Server{}).runAgentMaxTurns(context.Background())
 	if err == nil {
 		t.Fatal("expected runtime store error")
 	}

@@ -7,22 +7,22 @@ import (
 	"sync"
 	"time"
 
-	llmtools "oops/internal/llm/tools"
+	agentruntime "oops/internal/agent/runtime"
 	"oops/internal/nodelet"
 )
 
 // ListNodelets 实现 tools.OpsData，返回所有 Nodelet 概要。
 // 先读 Prober 缓存判断可用性，仅对健康节点实时获取 Docker 详情。
-func (s *Server) ListNodelets(ctx context.Context) ([]llmtools.NodeletSummary, error) {
+func (s *Server) ListNodelets(ctx context.Context) ([]agentruntime.NodeletSummary, error) {
 	nodelets := s.nodeletManager.List()
-	results := make([]llmtools.NodeletSummary, len(nodelets))
+	results := make([]agentruntime.NodeletSummary, len(nodelets))
 	var wg sync.WaitGroup
 	for index, item := range nodelets {
 		wg.Add(1)
 		go func(index int, item nodelet.NodeletConfig) {
 			defer wg.Done()
 
-			summary := llmtools.NodeletSummary{
+			summary := agentruntime.NodeletSummary{
 				ID:      item.ID,
 				Name:    item.Name,
 				Address: item.Address,

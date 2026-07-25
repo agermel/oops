@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"oops/internal/llm/skills"
+	agentruntime "oops/internal/agent/runtime"
 )
 
 var errSkillStoreUnavailable = errors.New("skill store not configured")
@@ -40,7 +40,7 @@ func (s *Server) expandSkillCommand(text string) (string, error) {
 		}
 		return text, nil
 	}
-	return skills.FormatSkillInvocation(skill, command.instructions), nil
+	return agentruntime.FormatSkillInvocation(skill, command.instructions), nil
 }
 
 type parsedSkillCommand struct {

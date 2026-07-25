@@ -115,7 +115,7 @@ graph TB
 
 - **DAG-based session entries** (message + compaction nodes) with branching support.
 - **Automatic compaction**: when context exceeds ~48K tokens, earlier messages are summarized.
-- **JSONL persistence** at `data/sessions/` — sessions survive server restarts.
+- **Session JSONL v1 persistence** at `data/agent-sessions/` — sessions survive server restarts.
 - **64K input + 8K output** token budget with 2000-char tool result truncation.
 
 ### 🔌 MCP (Model Context Protocol) Integration
@@ -259,7 +259,7 @@ Add connections in the MCP management panel in the web UI.
 | `config/skills/*.md` | Skill definitions (Markdown + YAML frontmatter) |
 | `data/runtime.db` | SQLite runtime store for users, nodelets, MCP connections, projects, and container DSN overrides |
 | `data/events.db` | SQLite event store (LLM conversation events) |
-| `data/sessions/` | JSONL session files |
+| `data/agent-sessions/` | Session JSONL v1 files |
 
 ### Config Keys Reference
 
@@ -422,7 +422,7 @@ go run ./cmd/oops-nodelet
 go test ./...
 
 # Run specific package tests
-go test ./internal/llm/...
+go test ./internal/agent/...
 ```
 
 Core dependencies: CloudWeGo Eino (LLM Agent framework), Moby (Docker client), mcp-go (MCP protocol), zap (logging), Viper (config), modernc.org/sqlite (pure-Go SQLite).
@@ -497,10 +497,10 @@ Ensure `mcp.enabled: true`, the MCP server binary path is correct and executable
 Yes. Set `llm.base_url` to your Ollama endpoint (e.g. `http://localhost:11434/v1`) and `llm.model` to your local model name. Any OpenAI-compatible API works.
 
 **Q: Session history lost after restart?**
-Sessions persist to `data/sessions/` as JSONL files. Ensure the directory exists and is writable by the oops process.
+Sessions persist to `data/agent-sessions/` as Session JSONL v1 files. Ensure the directory exists and is writable by the oops process.
 
 **Q: How to change the compaction threshold?**
-The default threshold is 48K tokens in `DefaultCompactionConfig()` (`internal/llm/context_builder.go`). Future releases will make this configurable via `config.yaml`.
+Session JSONL v1 records compaction entries. The current runtime policy is caller-owned and has no public configuration key.
 
 **Q: How to change the user password?**
 Clear the `users` table in `data/runtime.db`, restart Oops Plane, and the interactive first-run flow will prompt for new credentials. The current release supports a single-user model.

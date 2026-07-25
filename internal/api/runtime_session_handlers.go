@@ -9,9 +9,7 @@ import (
 	"strings"
 	"time"
 
-	coreagent "oops/internal/llm/core/agent"
-	"oops/internal/llm/runtime/harness"
-	runtimesession "oops/internal/llm/runtime/session"
+	agentruntime "oops/internal/agent/runtime"
 )
 
 // sessionInfo 是 HTTP 会话列表和重命名响应的稳定 DTO。
@@ -35,14 +33,22 @@ type runtimeSessionUpdateRequest struct {
 	Title string `json:"title"`
 }
 
-func (s *Server) beginSessionMutation(w http.ResponseWriter, sessionID string) (*sessionLease, bool) {
+func (s *Server) ensureAgentRuntime() *agentruntime.Runtime {
+	if s.agentRuntime != nil {
+		return s.agentRuntime
+	}
+	if s.agentRepo == nil {
+		s.agentRepo = agentruntime.NewRepository(nil)
+	}
+	s.agentRuntime = agentruntime.NewRuntime(agentruntime.RuntimeOptions{Repo: s.agentRepo})
+	return s.agentRuntime
+}
+
+func (s *Server) acquireRuntimeSessionLease(w http.ResponseWriter, sessionID string) (*agentruntime.SessionLease, bool) {
 	if !validateRuntimeSessionID(w, sessionID) {
 		return nil, false
 	}
-	if s.runManager == nil {
-		return nil, true
-	}
-	lease, err := s.runManager.acquireSession(sessionID)
+	lease, err := s.ensureAgentRuntime().AcquireSession(sessionID)
 	if err == nil {
 		return lease, true
 	}
@@ -54,12 +60,12 @@ func (s *Server) beginSessionMutation(w http.ResponseWriter, sessionID string) (
 		writeJSONError(w, "server is shutting down", http.StatusServiceUnavailable)
 		return nil, false
 	}
-	sanitizedError(w, "claim session mutation", err, http.StatusInternalServerError)
+	sanitizedError(w, "acquire runtime session lease", err, http.StatusInternalServerError)
 	return nil, false
 }
 
 func validateRuntimeSessionID(w http.ResponseWriter, sessionID string) bool {
-	if err := runtimesession.ValidateID(sessionID); err != nil {
+	if err := agentruntime.ValidateID(sessionID); err != nil {
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
@@ -77,11 +83,11 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	lease, ok := s.beginSessionMutation(w, id)
+	lease, ok := s.acquireRuntimeSessionLease(w, id)
 	if !ok {
 		return
 	}
-	defer lease.release()
+	defer lease.Release()
 	agentSession, ok, err := s.runtimeAgentSession(r.Context(), id, "")
 	if err != nil {
 		sanitizedError(w, "load session", err, http.StatusInternalServerError)
@@ -91,7 +97,7 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "session not found", http.StatusNotFound)
 		return
 	}
-	var snapshot harness.SessionSnapshot
+	var snapshot agentruntime.SessionSnapshot
 	var navErr error
 	if req.Summary != "" {
 		snapshot, navErr = agentSession.NavigateTreeWithSummarySnapshot(req.LeafID, req.Summary)
@@ -99,7 +105,7 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		snapshot, navErr = agentSession.NavigateTreeSnapshot(req.LeafID)
 	}
 	if navErr != nil {
-		if errors.Is(navErr, coreagent.ErrAgentBusy) {
+		if errors.Is(navErr, agentruntime.ErrAgentBusy) {
 			writeJSONError(w, "session is busy", http.StatusConflict)
 			return
 		}
@@ -130,7 +136,7 @@ func (s *Server) runtimeSessionInfos(projectID string) ([]sessionInfo, error) {
 	return out, nil
 }
 
-func runtimeSessionInfo(info runtimesession.Info) sessionInfo {
+func runtimeSessionInfo(info agentruntime.Info) sessionInfo {
 	return sessionInfo{
 		ID:           info.ID,
 		ProjectID:    info.ProjectID,
@@ -142,20 +148,20 @@ func runtimeSessionInfo(info runtimesession.Info) sessionInfo {
 	}
 }
 
-func (s *Server) runtimeSessionInfoByID(sessionID string) (runtimesession.Info, bool, error) {
+func (s *Server) runtimeSessionInfoByID(sessionID string) (agentruntime.Info, bool, error) {
 	if s.agentRepo == nil || sessionID == "" {
-		return runtimesession.Info{}, false, nil
+		return agentruntime.Info{}, false, nil
 	}
 	runtimeSession, ok := s.agentRepo.Get(sessionID)
 	if !ok {
 		var err error
 		runtimeSession, err = s.agentRepo.Load(sessionID)
 		if err != nil {
-			return runtimesession.Info{}, false, err
+			return agentruntime.Info{}, false, err
 		}
 		if len(runtimeSession.Entries()) == 0 {
 			_, _ = s.agentRepo.Delete(sessionID)
-			return runtimesession.Info{}, false, nil
+			return agentruntime.Info{}, false, nil
 		}
 	}
 	return runtimeSession.Info(), true, nil
@@ -181,11 +187,7 @@ func (s *Server) renameRuntimeSession(sessionID, projectID, title string) (sessi
 	if projectID != "" && info.ProjectID != projectID {
 		return sessionInfo{}, false, nil
 	}
-	entry, err := runtimeSession.AppendSessionTitle(title)
-	if err != nil {
-		return sessionInfo{}, false, err
-	}
-	if err := s.agentRepo.SaveEntry(runtimeSession.ID(), entry); err != nil {
+	if _, err := s.agentRepo.AppendEntry(runtimeSession.ID(), agentruntime.Entry{Type: agentruntime.EntrySessionInfo, Title: title}); err != nil {
 		return sessionInfo{}, false, err
 	}
 	return runtimeSessionInfo(runtimeSession.Info()), true, nil
@@ -210,15 +212,15 @@ func unixMilli(t time.Time) int64 {
 	return t.UnixMilli()
 }
 
-func (s *Server) runtimeSessionSnapshot(ctx context.Context, sessionID, projectID string) (harness.SessionSnapshot, bool, error) {
+func (s *Server) runtimeSessionSnapshot(ctx context.Context, sessionID, projectID string) (agentruntime.SessionSnapshot, bool, error) {
 	agentSession, ok, err := s.runtimeAgentSession(ctx, sessionID, projectID)
 	if err != nil || !ok {
-		return harness.SessionSnapshot{}, ok, err
+		return agentruntime.SessionSnapshot{}, ok, err
 	}
 	return agentSession.Snapshot(), true, nil
 }
 
-func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID string) (*harness.AgentSession, bool, error) {
+func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID string) (*agentruntime.AgentSession, bool, error) {
 	if s.agentRepo == nil || sessionID == "" {
 		return nil, false, nil
 	}
@@ -250,12 +252,10 @@ func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID s
 		}
 		return agentSession, true, nil
 	}
-	runtime := harness.NewRuntime(harness.RuntimeOptions{
-		Repo:   s.agentRepo,
-		Loader: harness.StaticResourceLoader{Snapshot: harness.ResourceSnapshot{}},
-		CWD:    info.CWD,
+	agentSession, err := s.ensureAgentRuntime().ResumeWithOptions(ctx, sessionID, agentruntime.ResumeSessionOptions{
+		CWD:       info.CWD,
+		Resources: &agentruntime.ResourceSnapshot{},
 	})
-	agentSession, err := runtime.Resume(ctx, sessionID)
 	if err != nil {
 		return nil, false, err
 	}
