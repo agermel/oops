@@ -18,6 +18,7 @@ bin/
 .omx
 AGENTS.md
 agent-sessions/
+*.excalidraw
 mcp-servers/*/.venv/
 mcp-servers/etcd/etcd-mcp-server
 mcp-servers/mysql/mysql-mcp-server
