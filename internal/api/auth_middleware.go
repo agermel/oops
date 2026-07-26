@@ -18,7 +18,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if s.TokenService != nil {
 			if cookie, err := r.Cookie("jwt"); err == nil {
 				if claims, err := s.TokenService.VerifyToken(cookie.Value); err == nil {
-					user := &auth.User{Name: claims.Name, Username: claims.Username}  // 注意：store.User.Username 实际是用户名，Name 是显示名
+					user := &auth.User{Name: claims.Name, Username: claims.Username} // 注意：store.User.Username 实际是用户名，Name 是显示名
 					ctx := context.WithValue(r.Context(), userContextKey, user)
 					r = r.WithContext(ctx)
 				}

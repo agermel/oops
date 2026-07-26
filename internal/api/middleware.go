@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"os"
 
-	"oops/internal/logutil"
 	"go.uber.org/zap"
+	"oops/internal/logutil"
 )
 
 const (
@@ -44,7 +44,7 @@ func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
 		if corsOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
 		}
 
 		// CORS 预检请求直接返回
