@@ -20,6 +20,20 @@ type AgentSessionOptions struct {
 	Provider        string
 	Reasoning       string
 	ActiveToolNames []string
+	SteeringMode    QueueMode
+	FollowUpMode    QueueMode
+}
+
+type QueueMode string
+
+const (
+	QueueModeAll        QueueMode = "all"
+	QueueModeOneAtATime QueueMode = "one-at-a-time"
+)
+
+type AbortResult struct {
+	ClearedSteering protocol.MessageList
+	ClearedFollowUp protocol.MessageList
 }
 
 type AgentSession struct {
@@ -31,6 +45,11 @@ type AgentSession struct {
 	resources       ResourceSnapshot
 	allTools        map[string]agentcore.Tool
 	activeToolNames []string
+	steeringQueue   protocol.MessageList
+	followUpQueue   protocol.MessageList
+	nextTurnQueue   protocol.MessageList
+	steeringMode    QueueMode
+	followUpMode    QueueMode
 
 	config    agentcore.AgentLoopConfig
 	model     string
@@ -38,6 +57,9 @@ type AgentSession struct {
 	reasoning string
 
 	agent *agentcore.Agent
+
+	runCancel context.CancelFunc
+	runDone   chan struct{}
 
 	events []protocol.AgentEvent
 }
@@ -74,6 +96,8 @@ func NewAgentSession(options AgentSessionOptions) (*AgentSession, error) {
 		provider:        options.Provider,
 		reasoning:       options.Reasoning,
 		activeToolNames: cloneStrings(options.ActiveToolNames),
+		steeringMode:    normalizeQueueMode(options.SteeringMode),
+		followUpMode:    normalizeQueueMode(options.FollowUpMode),
 	}
 	if as.repo != nil {
 		if _, ok := as.repo.Get(as.session.ID()); !ok {
@@ -128,9 +152,104 @@ func (s *AgentSession) snapshotLocked(editorText string) SessionSnapshot {
 
 func (s *AgentSession) Prompt(ctx context.Context, messages protocol.MessageList) (protocol.MessageList, error) {
 	s.mu.Lock()
+	if s.runDone != nil {
+		s.mu.Unlock()
+		return nil, agentcore.ErrAgentBusy
+	}
 	agent := s.agent
+	prompts := append(protocol.CloneMessageList(s.nextTurnQueue), protocol.CloneMessageList(messages)...)
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	s.nextTurnQueue = nil
+	s.runCancel = cancel
+	s.runDone = done
 	s.mu.Unlock()
-	return agent.Prompt(ctx, messages)
+
+	defer s.finishRun(cancel, done)
+	return agent.Prompt(runCtx, prompts)
+}
+
+func (s *AgentSession) Abort(ctx context.Context) (AbortResult, error) {
+	s.mu.Lock()
+	result := AbortResult{
+		ClearedSteering: protocol.CloneMessageList(s.steeringQueue),
+		ClearedFollowUp: protocol.CloneMessageList(s.followUpQueue),
+	}
+	s.steeringQueue = nil
+	s.followUpQueue = nil
+	cancel := s.runCancel
+	done := s.runDone
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
+		return result, nil
+	}
+	select {
+	case <-done:
+		return result, nil
+	case <-ctx.Done():
+		return result, ctx.Err()
+	}
+}
+
+func (s *AgentSession) WaitForIdle(ctx context.Context) error {
+	s.mu.Lock()
+	done := s.runDone
+	s.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *AgentSession) finishRun(cancel context.CancelFunc, done chan struct{}) {
+	cancel()
+	s.mu.Lock()
+	if s.runDone == done {
+		s.runCancel = nil
+		s.runDone = nil
+	}
+	close(done)
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) Steer(messages protocol.MessageList) error {
+	return s.enqueueWhileRunning(&s.steeringQueue, messages, "steer")
+}
+
+func (s *AgentSession) FollowUp(messages protocol.MessageList) error {
+	return s.enqueueWhileRunning(&s.followUpQueue, messages, "follow-up")
+}
+
+func (s *AgentSession) NextTurn(messages protocol.MessageList) error {
+	if err := validateQueuedMessages(messages); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.nextTurnQueue = append(s.nextTurnQueue, protocol.CloneMessageList(messages)...)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *AgentSession) enqueueWhileRunning(queue *protocol.MessageList, messages protocol.MessageList, operation string) error {
+	if err := validateQueuedMessages(messages); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agent == nil || !s.agent.State().IsStreaming {
+		return fmt.Errorf("cannot %s while agent is idle", operation)
+	}
+	*queue = append(*queue, protocol.CloneMessageList(messages)...)
+	return nil
 }
 
 func (s *AgentSession) NavigateTreeSnapshot(leafID string) (SessionSnapshot, error) {
@@ -275,16 +394,37 @@ func (s *AgentSession) buildCoreInputsLocked() (agentcore.AgentContext, agentcor
 	reasoning := firstNonEmpty(sessionCtx.Reasoning, s.reasoning)
 	config := s.config
 	userPrepare := config.PrepareNextTurn
+	userGetSteering := config.GetSteeringMessages
+	userGetFollowUp := config.GetFollowUpMessages
 	config.Model = model
 	config.Provider = provider
 	config.Reasoning = reasoning
 	config.ToolRunner = runner
 	config.PrepareNextTurn = s.prepareNextTurn(userPrepare)
+	config.GetSteeringMessages = s.queuedMessageSource(&s.steeringQueue, &s.steeringMode, userGetSteering)
+	config.GetFollowUpMessages = s.queuedMessageSource(&s.followUpQueue, &s.followUpMode, userGetFollowUp)
 	return agentcore.AgentContext{
 		SystemPrompt: composeSystemPrompt(s.resources.SystemPrompt),
 		Messages:     sessionCtx.Messages,
 		Tools:        registry.Definitions(),
 	}, config, nil
+}
+
+func (s *AgentSession) queuedMessageSource(queue *protocol.MessageList, mode *QueueMode, fallback func(context.Context) (protocol.MessageList, error)) func(context.Context) (protocol.MessageList, error) {
+	return func(ctx context.Context) (protocol.MessageList, error) {
+		s.mu.Lock()
+		count := len(*queue)
+		if count > 0 && normalizeQueueMode(*mode) == QueueModeOneAtATime {
+			count = 1
+		}
+		messages := protocol.CloneMessageList((*queue)[:count])
+		*queue = append(protocol.MessageList(nil), (*queue)[count:]...)
+		s.mu.Unlock()
+		if len(messages) > 0 || fallback == nil {
+			return messages, nil
+		}
+		return fallback(ctx)
+	}
 }
 
 func (s *AgentSession) prepareNextTurn(userPrepare func(context.Context, agentcore.TurnContext) (agentcore.TurnUpdate, error)) func(context.Context, agentcore.TurnContext) (agentcore.TurnUpdate, error) {
@@ -427,4 +567,26 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeQueueMode(mode QueueMode) QueueMode {
+	if mode == QueueModeAll {
+		return QueueModeAll
+	}
+	return QueueModeOneAtATime
+}
+
+func validateQueuedMessages(messages protocol.MessageList) error {
+	if len(messages) == 0 {
+		return errors.New("queued messages are required")
+	}
+	for _, message := range messages {
+		if message == nil {
+			return errors.New("queued message is required")
+		}
+		if err := message.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

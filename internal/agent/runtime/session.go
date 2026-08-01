@@ -435,8 +435,8 @@ func (s *Session) validateLoadedHistoryLocked() error {
 	}
 	for target := range targets {
 		analysis, _ := s.analyzeLeafLocked(target)
-		if analysis.Status == protocol.ProviderSequenceInvalid {
-			return analysis.Err
+		if analysis.status == messageSequenceInvalid {
+			return analysis.err
 		}
 	}
 	return nil
@@ -444,22 +444,22 @@ func (s *Session) validateLoadedHistoryLocked() error {
 
 func (s *Session) executableLeafLocked(leafID string) string {
 	analysis, entryIDs := s.analyzeLeafLocked(leafID)
-	if analysis.Status != protocol.ProviderSequenceRecoverable {
+	if analysis.status != messageSequenceIncomplete {
 		return leafID
 	}
-	if analysis.PendingAssistantIndex < 0 || analysis.PendingAssistantIndex >= len(entryIDs) {
+	if analysis.pendingAssistantIndex < 0 || analysis.pendingAssistantIndex >= len(entryIDs) {
 		return s.safeBoundaryLocked(leafID)
 	}
-	assistant, ok := s.entries[entryIDs[analysis.PendingAssistantIndex]]
+	assistant, ok := s.entries[entryIDs[analysis.pendingAssistantIndex]]
 	if !ok {
 		return s.safeBoundaryLocked(leafID)
 	}
 	return assistant.ParentID
 }
 
-func (s *Session) analyzeLeafLocked(leafID string) (protocol.ProviderSequenceAnalysis, []string) {
+func (s *Session) analyzeLeafLocked(leafID string) (messageSequenceAnalysis, []string) {
 	messages, entryIDs := s.contextMessagesForLeafLocked(leafID)
-	return protocol.AnalyzeProviderMessageSequence(messages), entryIDs
+	return analyzeMessageSequence(messages), entryIDs
 }
 
 func (s *Session) contextMessagesForLeafLocked(leafID string) (protocol.MessageList, []string) {

@@ -21,11 +21,11 @@ func (s *Session) ValidateContext() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ctx := s.buildContextLocked()
-	return protocol.ValidateProviderMessageSequence(ctx.Messages)
+	return validateMessageSequence(ctx.Messages)
 }
 
 func (s *Session) ValidateMessages(messages protocol.MessageList) error {
-	return protocol.ValidateProviderMessageSequence(messages)
+	return validateMessageSequence(messages)
 }
 
 func (s *Session) resolveNavigationTargetLocked(targetID string) (NavigationResult, error) {
@@ -191,7 +191,7 @@ func (s *Session) activePathIDsLocked() map[string]bool {
 func (s *Session) safeBoundaryLocked(leafID string) string {
 	for {
 		ctx := s.buildContextForLeafLocked(leafID)
-		if protocol.ValidateProviderMessageSequence(ctx.Messages) == nil {
+		if validateMessageSequence(ctx.Messages) == nil {
 			return leafID
 		}
 		if leafID == "" {

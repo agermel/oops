@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,107 @@ func TestOpenAICompletionStreamMergesToolCallArguments(t *testing.T) {
 	}
 }
 
+func TestOpenAICompletionStreamDefersSequenceValidationToProvider(t *testing.T) {
+	chatModel := &chunkedStreamModel{chunks: []*schema.Message{{Role: schema.Assistant, Content: "ok"}}}
+	streamFn, err := NewOpenAICompletionStream(chatModel, Options{})
+	if err != nil {
+		t.Fatalf("NewOpenAICompletionStream() error = %v", err)
+	}
+
+	stream, err := streamFn(context.Background(), protocol.StreamRequest{Context: protocol.Context{Messages: protocol.MessageList{
+		protocol.ToolResultMessage{
+			ToolCallID: "orphan_call",
+			ToolName:   "read_file",
+			Content:    protocol.ContentList{protocol.NewTextContent("result")},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+	if _, err := stream.Result(context.Background()); err != nil {
+		t.Fatalf("stream.Result() error = %v", err)
+	}
+	if len(chatModel.messages) != 1 || chatModel.messages[0].Role != schema.Tool {
+		t.Fatalf("provider messages = %#v, want one tool message", chatModel.messages)
+	}
+}
+
+func TestOpenAICompletionStreamEmitsToolCallLifecycle(t *testing.T) {
+	index := 0
+	streamFn, err := NewOpenAICompletionStream(&chunkedStreamModel{chunks: []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{
+			Index: &index,
+			ID:    "call-1",
+			Type:  "function",
+			Function: schema.FunctionCall{
+				Name:      "lookup",
+				Arguments: `{"id":`,
+			},
+		}}},
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{
+			Index: &index,
+			Function: schema.FunctionCall{
+				Arguments: `1}`,
+			},
+		}}},
+	}}, Options{})
+	if err != nil {
+		t.Fatalf("NewOpenAICompletionStream() error = %v", err)
+	}
+	stream, err := streamFn(context.Background(), protocol.StreamRequest{})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+
+	var eventTypes []protocol.AssistantMessageEventType
+	for event := range stream.Events() {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	want := []protocol.AssistantMessageEventType{
+		protocol.AssistantEventStart,
+		protocol.AssistantEventToolCallStart,
+		protocol.AssistantEventToolCallDelta,
+		protocol.AssistantEventToolCallDelta,
+		protocol.AssistantEventToolCallEnd,
+		protocol.AssistantEventDone,
+	}
+	if !slices.Equal(eventTypes, want) {
+		t.Fatalf("event types = %v, want %v", eventTypes, want)
+	}
+}
+
+func TestOpenAICompletionStreamEmitsTextAndThinkingLifecycle(t *testing.T) {
+	streamFn, err := NewOpenAICompletionStream(&chunkedStreamModel{chunks: []*schema.Message{
+		{Role: schema.Assistant, ReasoningContent: "think"},
+		{Role: schema.Assistant, Content: "answer"},
+	}}, Options{})
+	if err != nil {
+		t.Fatalf("NewOpenAICompletionStream() error = %v", err)
+	}
+	stream, err := streamFn(context.Background(), protocol.StreamRequest{})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+
+	var eventTypes []protocol.AssistantMessageEventType
+	for event := range stream.Events() {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	want := []protocol.AssistantMessageEventType{
+		protocol.AssistantEventStart,
+		protocol.AssistantEventThinkingStart,
+		protocol.AssistantEventThinkingDelta,
+		protocol.AssistantEventTextStart,
+		protocol.AssistantEventTextDelta,
+		protocol.AssistantEventThinkingEnd,
+		protocol.AssistantEventTextEnd,
+		protocol.AssistantEventDone,
+	}
+	if !slices.Equal(eventTypes, want) {
+		t.Fatalf("event types = %v, want %v", eventTypes, want)
+	}
+}
+
 func TestOpenAICompletionStreamEmitsError(t *testing.T) {
 	streamFn, err := NewOpenAICompletionStream(&chunkedStreamModel{err: errors.New("stream failed")}, Options{})
 	if err != nil {
@@ -90,6 +192,58 @@ func TestOpenAICompletionStreamEmitsError(t *testing.T) {
 	event := <-stream.Events()
 	if event.Type != protocol.AssistantEventError || event.Error == nil || event.Error.ErrorMessage != "stream failed" {
 		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestOpenAICompletionStreamClassifiesCanceledReaderAsAborted(t *testing.T) {
+	streamFn, err := NewOpenAICompletionStream(&chunkedStreamModel{err: context.Canceled}, Options{})
+	if err != nil {
+		t.Fatalf("NewOpenAICompletionStream() error = %v", err)
+	}
+	stream, err := streamFn(context.Background(), protocol.StreamRequest{
+		Provider: "openai-compatible",
+		Model:    "model-id",
+	})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+
+	terminal := <-stream.Events()
+	if terminal.Type != protocol.AssistantEventError || terminal.Reason != protocol.StopReasonAborted {
+		t.Fatalf("terminal event = %#v", terminal)
+	}
+	result, err := stream.Result(context.Background())
+	if err != nil {
+		t.Fatalf("stream.Result() error = %v", err)
+	}
+	if result.StopReason != protocol.StopReasonAborted {
+		t.Fatalf("result.StopReason = %q, want aborted", result.StopReason)
+	}
+}
+
+func TestOpenAICompletionStreamClassifiesCanceledStartAsAborted(t *testing.T) {
+	streamFn, err := NewOpenAICompletionStream(&chunkedStreamModel{streamErr: context.Canceled}, Options{})
+	if err != nil {
+		t.Fatalf("NewOpenAICompletionStream() error = %v", err)
+	}
+	stream, err := streamFn(context.Background(), protocol.StreamRequest{
+		Provider: "openai-compatible",
+		Model:    "model-id",
+	})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+
+	terminal := <-stream.Events()
+	if terminal.Type != protocol.AssistantEventError || terminal.Reason != protocol.StopReasonAborted {
+		t.Fatalf("terminal event = %#v", terminal)
+	}
+	result, err := stream.Result(context.Background())
+	if err != nil {
+		t.Fatalf("stream.Result() error = %v", err)
+	}
+	if result.StopReason != protocol.StopReasonAborted {
+		t.Fatalf("result.StopReason = %q, want aborted", result.StopReason)
 	}
 }
 
@@ -111,6 +265,55 @@ func TestOpenAICompletionStreamEmitsOneErrorWhenModelReturnsNoChunks(t *testing.
 	}
 	if errorEvents != 1 {
 		t.Fatalf("error event count = %d, want 1", errorEvents)
+	}
+}
+
+func TestOpenAICompletionStreamClosesWithProviderErrorStopReason(t *testing.T) {
+	streamFn, err := NewOpenAICompletionStream(&chunkedStreamModel{chunks: []*schema.Message{{
+		Role:    schema.Assistant,
+		Content: "partial response",
+		ResponseMeta: &schema.ResponseMeta{
+			FinishReason: "error",
+		},
+	}}}, Options{})
+	if err != nil {
+		t.Fatalf("NewOpenAICompletionStream() error = %v", err)
+	}
+	stream, err := streamFn(context.Background(), protocol.StreamRequest{
+		Provider: "openai-compatible",
+		Model:    "model-id",
+	})
+	if err != nil {
+		t.Fatalf("streamFn() error = %v", err)
+	}
+
+	var events []protocol.AssistantMessageEvent
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for event := range stream.Events() {
+			events = append(events, event)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event stream did not close after provider error stop reason")
+	}
+
+	if len(events) == 0 {
+		t.Fatal("event stream emitted no events")
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != protocol.AssistantEventError || terminal.Reason != protocol.StopReasonError {
+		t.Fatalf("terminal event = %#v", terminal)
+	}
+	result, err := stream.Result(context.Background())
+	if err != nil {
+		t.Fatalf("stream.Result() error = %v", err)
+	}
+	if result.StopReason != protocol.StopReasonError {
+		t.Fatalf("result.StopReason = %q, want error", result.StopReason)
 	}
 }
 
@@ -620,6 +823,7 @@ func TestOpenAIReasoningEffort(t *testing.T) {
 type chunkedStreamModel struct {
 	chunks    []*schema.Message
 	err       error
+	streamErr error
 	messages  []*schema.Message
 	options   []model.Option
 	toolBinds [][]string
@@ -635,6 +839,9 @@ func (m *chunkedStreamModel) Generate(context.Context, []*schema.Message, ...mod
 func (m *chunkedStreamModel) Stream(_ context.Context, messages []*schema.Message, options ...model.Option) (*schema.StreamReader[*schema.Message], error) {
 	m.messages = messages
 	m.options = append([]model.Option(nil), options...)
+	if m.streamErr != nil {
+		return nil, m.streamErr
+	}
 	if m.err != nil {
 		reader, writer := schema.Pipe[*schema.Message](1)
 		writer.Send(nil, m.err)

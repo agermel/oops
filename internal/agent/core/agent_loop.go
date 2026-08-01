@@ -41,97 +41,126 @@ func runLoop(ctx context.Context, current AgentContext, config AgentLoopConfig, 
 	}
 
 	firstTurn := true
-	hasMoreToolCalls := true
+	pendingMessages, err := getQueuedMessages(ctx, config.GetSteeringMessages)
+	if err != nil {
+		return nil, err
+	}
 
-	for hasMoreToolCalls {
-		if firstTurn {
-			firstTurn = false
-		} else {
-			turn++
-			if err := emitEvent(ctx, emit, protocol.AgentEvent{Type: protocol.AgentEventTurnStart, Turn: turn}); err != nil {
-				return nil, err
-			}
-		}
-
-		if turn > maxTurns {
-			return emitActiveTerminalError(ctx, emit, newMessages, turn, config, "max_turns_exceeded", protocol.StopReasonError)
-		}
-
-		message, err := streamAssistantResponse(ctx, current, config, emit, turn)
-		if err != nil {
-			return nil, err
-		}
-		current.Messages = append(current.Messages, message)
-		newMessages = append(newMessages, message)
-
-		toolResults := []protocol.ToolResultMessage{}
-		hasMoreToolCalls = false
-		if message.StopReason != protocol.StopReasonError && message.StopReason != protocol.StopReasonAborted {
-			toolCalls := protocol.ToolCallsFromAssistant(message)
-			if len(toolCalls) > 0 {
-				if err := ctx.Err(); err != nil {
-					return emitActiveTerminalError(ctx, emit, newMessages, turn, config, err.Error(), protocol.StopReasonAborted)
-				}
-				toolBatch, err := executeToolCalls(ctx, current, config, emit, turn, message, toolCalls)
-				if len(toolBatch.Messages) > 0 {
-					toolResults = toolBatch.Messages
-					for _, result := range toolResults {
-						current.Messages = append(current.Messages, result)
-						newMessages = append(newMessages, result)
-					}
-				}
-				if err != nil {
-					if ctx.Err() != nil {
-						return emitActiveTerminalError(ctx, emit, newMessages, turn, config, ctx.Err().Error(), protocol.StopReasonAborted)
-					}
+	for {
+		hasMoreToolCalls := true
+		for hasMoreToolCalls || len(pendingMessages) > 0 {
+			if firstTurn {
+				firstTurn = false
+			} else {
+				turn++
+				if err := emitEvent(ctx, emit, protocol.AgentEvent{Type: protocol.AgentEventTurnStart, Turn: turn}); err != nil {
 					return nil, err
 				}
-				hasMoreToolCalls = !toolBatch.Terminate
 			}
-		}
 
-		if err := emitEvent(ctx, emit, protocol.AgentEvent{
-			Type:        protocol.AgentEventTurnEnd,
-			Turn:        turn,
-			Message:     message,
-			ToolResults: toolResults,
-		}); err != nil {
-			return nil, err
-		}
+			if turn > maxTurns {
+				return emitActiveTerminalError(ctx, emit, newMessages, turn, config, "max_turns_exceeded", protocol.StopReasonError)
+			}
+			for _, pending := range pendingMessages {
+				if err := emitMessage(ctx, emit, protocol.AgentEventMessageStart, turn, pending); err != nil {
+					return nil, err
+				}
+				if err := emitMessage(ctx, emit, protocol.AgentEventMessageEnd, turn, pending); err != nil {
+					return nil, err
+				}
+				current.Messages = append(current.Messages, pending)
+				newMessages = append(newMessages, pending)
+			}
+			pendingMessages = nil
 
-		if message.StopReason == protocol.StopReasonError || message.StopReason == protocol.StopReasonAborted {
-			if err := emitEvent(ctx, emit, protocol.AgentEvent{Type: protocol.AgentEventAgentEnd, Messages: cloneMessages(newMessages)}); err != nil {
+			message, err := streamAssistantResponse(ctx, current, config, emit, turn)
+			if err != nil {
 				return nil, err
 			}
-			return cloneMessages(newMessages), nil
-		}
+			current.Messages = append(current.Messages, message)
+			newMessages = append(newMessages, message)
 
-		turnCtx := TurnContext{
-			Message:     message,
-			ToolResults: cloneToolResultMessages(toolResults),
-			Context:     cloneContext(current),
-			NewMessages: cloneMessages(newMessages),
-			Turn:        turn,
-		}
-		if config.PrepareNextTurn != nil {
-			update, err := config.PrepareNextTurn(ctx, turnCtx)
-			if err != nil {
-				return emitPostTurnHookError(ctx, emit, newMessages, turn, config, err.Error())
+			toolResults := []protocol.ToolResultMessage{}
+			hasMoreToolCalls = false
+			if message.StopReason != protocol.StopReasonError && message.StopReason != protocol.StopReasonAborted {
+				toolCalls := protocol.ToolCallsFromAssistant(message)
+				if len(toolCalls) > 0 {
+					if err := ctx.Err(); err != nil {
+						return emitActiveTerminalError(ctx, emit, newMessages, turn, config, err.Error(), protocol.StopReasonAborted)
+					}
+					toolBatch, err := executeToolCalls(ctx, current, config, emit, turn, message, toolCalls)
+					if len(toolBatch.Messages) > 0 {
+						toolResults = toolBatch.Messages
+						for _, result := range toolResults {
+							current.Messages = append(current.Messages, result)
+							newMessages = append(newMessages, result)
+						}
+					}
+					if err != nil {
+						if ctx.Err() != nil {
+							return emitActiveTerminalError(ctx, emit, newMessages, turn, config, ctx.Err().Error(), protocol.StopReasonAborted)
+						}
+						return nil, err
+					}
+					hasMoreToolCalls = !toolBatch.Terminate
+				}
 			}
-			applyTurnUpdate(&current, &config, update)
-			turnCtx.Context = cloneContext(current)
-		}
-		if config.ShouldStopAfterTurn != nil {
-			stop, err := config.ShouldStopAfterTurn(ctx, turnCtx)
-			if err != nil {
-				return emitPostTurnHookError(ctx, emit, newMessages, turn, config, err.Error())
+
+			if err := emitEvent(ctx, emit, protocol.AgentEvent{
+				Type:        protocol.AgentEventTurnEnd,
+				Turn:        turn,
+				Message:     message,
+				ToolResults: toolResults,
+			}); err != nil {
+				return nil, err
 			}
-			if stop {
+
+			if message.StopReason == protocol.StopReasonError || message.StopReason == protocol.StopReasonAborted {
 				if err := emitEvent(ctx, emit, protocol.AgentEvent{Type: protocol.AgentEventAgentEnd, Messages: cloneMessages(newMessages)}); err != nil {
 					return nil, err
 				}
 				return cloneMessages(newMessages), nil
 			}
+
+			turnCtx := TurnContext{
+				Message:     message,
+				ToolResults: cloneToolResultMessages(toolResults),
+				Context:     cloneContext(current),
+				NewMessages: cloneMessages(newMessages),
+				Turn:        turn,
+			}
+			if config.PrepareNextTurn != nil {
+				update, err := config.PrepareNextTurn(ctx, turnCtx)
+				if err != nil {
+					return emitPostTurnHookError(ctx, emit, newMessages, turn, config, err.Error())
+				}
+				applyTurnUpdate(&current, &config, update)
+				turnCtx.Context = cloneContext(current)
+			}
+			if config.ShouldStopAfterTurn != nil {
+				stop, err := config.ShouldStopAfterTurn(ctx, turnCtx)
+				if err != nil {
+					return emitPostTurnHookError(ctx, emit, newMessages, turn, config, err.Error())
+				}
+				if stop {
+					if err := emitEvent(ctx, emit, protocol.AgentEvent{Type: protocol.AgentEventAgentEnd, Messages: cloneMessages(newMessages)}); err != nil {
+						return nil, err
+					}
+					return cloneMessages(newMessages), nil
+				}
+			}
+			pendingMessages, err = getQueuedMessages(ctx, config.GetSteeringMessages)
+			if err != nil {
+				return emitPostTurnHookError(ctx, emit, newMessages, turn, config, err.Error())
+			}
+		}
+
+		pendingMessages, err = getQueuedMessages(ctx, config.GetFollowUpMessages)
+		if err != nil {
+			return emitPostTurnHookError(ctx, emit, newMessages, turn, config, err.Error())
+		}
+		if len(pendingMessages) == 0 {
+			break
 		}
 	}
 
@@ -139,6 +168,17 @@ func runLoop(ctx context.Context, current AgentContext, config AgentLoopConfig, 
 		return nil, err
 	}
 	return cloneMessages(newMessages), nil
+}
+
+func getQueuedMessages(ctx context.Context, get func(context.Context) (protocol.MessageList, error)) (protocol.MessageList, error) {
+	if get == nil {
+		return nil, nil
+	}
+	messages, err := get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return cloneMessages(messages), nil
 }
 
 func applyTurnUpdate(current *AgentContext, config *AgentLoopConfig, update TurnUpdate) {

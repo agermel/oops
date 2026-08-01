@@ -139,7 +139,4 @@ func TestTransformMessagesCompletesToolResultsAndSkipsIncompleteAssistants(t *te
 	if _, ok := transformed[4].(protocol.UserMessage); !ok {
 		t.Fatalf("interrupted user message = %#v", transformed[4])
 	}
-	if err := protocol.ValidateProviderMessageSequence(transformed); err != nil {
-		t.Fatalf("ValidateProviderMessageSequence() error = %v", err)
-	}
 }

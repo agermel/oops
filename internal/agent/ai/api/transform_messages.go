@@ -7,29 +7,37 @@ import (
 	protocol "oops/internal/agent/ai"
 )
 
+// 一些文字占位符，用于描述处理掉的内容
 const (
 	nonVisionUserImagePlaceholder = "(image omitted: model does not support images)"
 	nonVisionToolImagePlaceholder = "(tool image omitted: model does not support images)"
 	missingToolResultText         = "No result provided"
 )
 
-// TransformMessages prepares stored history for one target model.
-//
-// It removes content the target cannot consume, keeps model-specific replay
-// fields only for messages from the same model, and repairs incomplete tool
-// call turns before the adapter validates their sequence.
+// TransformMessages 将存储好的历史对话转换成模型可用的消息对话，就是将历史消息整理好
+// 用于模型请求前加载历史消息的时候
+// 处理两种场景
+// 模型切换：处理思考签名、工具调用 ID、图片能力等跨模型兼容问题
+// 补齐“有 ToolCall、缺 ToolResult”的调用轮次，并跳过 error、aborted 的助手消息
+// 保证历史消息在模型请求后能够重放
 type TransformMessagesOptions struct {
 	Provider string
 	Model    string
 
 	SupportsImages bool
 
-	// NormalizeToolCallID adapts a previous model's tool call ID to the target
-	// protocol. It runs only while switching models.
+	// NormalizeToolCallID 会把先前模型生成的工具调用 ID 调整为目标协议所要求的格式。
+	// 该函数只在切换模型时执行。
+	// 每个供应商有他自己的 NormalizeToolCallID
 	NormalizeToolCallID func(id string, source protocol.AssistantMessage) string
 }
 
+// 将历史消息（存储好的）通过选项选择转化为模型可用的消息对话（将历史对话 1.突然结束的 2.切换模型后目标模型无法理解的对话格式 等目标模型无法理解的格式进行加工）
+// TransformMessages -> transformMessage (处理逐条历史信息)
+//
+//	-> completeToolResultHistory （补全历史中缺失的工具执行结果）
 func TransformMessages(messages protocol.MessageList, options TransformMessagesOptions) protocol.MessageList {
+	// idMap 的目的是保证工具调用与工具结果仍然使用同一个 ID
 	idMap := make(map[string]string)
 	transformed := make(protocol.MessageList, 0, len(messages))
 	for _, message := range messages {
@@ -38,6 +46,15 @@ func TransformMessages(messages protocol.MessageList, options TransformMessagesO
 	return completeToolResultHistory(transformed)
 }
 
+// idMap 是工具调用 ID 的映射表
+// agent 框架提供工具清单，而工具调用 ID 是模型调用一次工具所产生的记录 ID
+// toolcall 的 id 是由模型生成的所以我们需要 idMap 去做一次 id 识别与转换
+// 以适应切换模型的时候，历史的id能够兼容新供应商的标准
+
+// 根据消息的不同类型进行不同的处理
+// UserMessage: transformInputImages 处理输入图片
+// ToolResultMessage: transformInputImages 处理输入图片 通过idMap决定是否需要修改toolid
+// AssistantMessage: transformAssistantHistory 整理助手信息
 func transformMessage(message protocol.AgentMessage, options TransformMessagesOptions, idMap map[string]string) protocol.AgentMessage {
 	switch value := message.(type) {
 	case protocol.UserMessage:
@@ -79,6 +96,11 @@ func transformMessage(message protocol.AgentMessage, options TransformMessagesOp
 	}
 }
 
+// transformInputImages 用于按目标模型的图片能力处理消息内容
+// 若支持图片，复制并保留原始图片内容
+// 目标模型只接收文本时，它将图片替换为占位文本。
+// 连续多张图片会合并为一条占位文本，避免历史消息出现重复提示
+// 多张图片只做一条占位文本的原因是因为既然目标模型无法获取图片内容，那么图片数量不影响语义；占位文本只需告知模型存在已省略的图片即可。
 func transformInputImages(content protocol.ContentList, placeholder string, supportsImages bool) protocol.ContentList {
 	if supportsImages {
 		return protocol.CloneContentList(content)
@@ -102,6 +124,12 @@ func transformInputImages(content protocol.ContentList, placeholder string, supp
 	return transformed
 }
 
+// 整理助手信息
+// 处理 AssistantHistory 的 ContentList 里面的逐个 content
+// ThinkingContent -> transformThinking
+// TextContent -> 直接append
+// ToolCallContent -> transformToolCall
+// newContent 的目的就是弄掉独属于samemodel的一些配置 如session_id或secret这些，保留可读文本，移除 TextSignature 等模型专用重放字段。
 func transformAssistantHistory(message protocol.AssistantMessage, options TransformMessagesOptions, idMap map[string]string) protocol.AssistantMessage {
 	message = protocol.CloneAssistantMessage(message)
 	sameModel := message.Provider == options.Provider && message.Model == options.Model
@@ -179,6 +207,12 @@ func transformToolCall(call protocol.ToolCallContent, source protocol.AssistantM
 	return call
 }
 
+// 补全历史中缺失的工具执行结果
+// 维护 pending：上一条助手消息发起、等待结果的工具调用。
+// 维护 existing：已经收到结果的工具调用 ID。
+// 遇到助手消息时，先补齐上一轮遗留调用；跳过 error、aborted 助手消息（不留在上下文中）；收集当前消息中的工具调用到 pending
+// 遇到工具结果时，记录它的 ToolCallID，并保留该消息。
+// 遇到用户消息、下一条助手消息或历史结束时，为 pending 中缺少结果的调用生成一条错误工具结果："No result provided"、IsError: true。
 func completeToolResultHistory(messages protocol.MessageList) protocol.MessageList {
 	result := make(protocol.MessageList, 0, len(messages))
 	var pending []protocol.ToolCallContent

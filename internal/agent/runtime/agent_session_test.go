@@ -80,6 +80,96 @@ func TestNavigateTreeSnapshotRejectsBusySession(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSteerQueuesMessageForActiveRun(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+	stream := func(ctx context.Context, _ agentcore.StreamRequest) (*protocol.AssistantMessageEventStream, error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return textStream("first"), nil
+		}
+		return textStream("second"), nil
+	}
+	as := newHarnessSession(t, agentcore.AgentLoopConfig{Stream: stream}, nil)
+
+	type promptResult struct {
+		messages protocol.MessageList
+		err      error
+	}
+	done := make(chan promptResult, 1)
+	go func() {
+		messages, err := as.Prompt(context.Background(), protocol.MessageList{userMessage("start")})
+		done <- promptResult{messages: messages, err: err}
+	}()
+	<-started
+	if err := as.Steer(protocol.MessageList{userMessage("redirect")}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	assertMessageTexts(t, result.messages, []string{"start", "first", "redirect", "second"})
+	assertMessageTexts(t, as.session.BuildContext().Messages, []string{"start", "first", "redirect", "second"})
+}
+
+func TestAgentSessionAbortClearsLiveQueuesAndPreservesNextTurn(t *testing.T) {
+	started := make(chan struct{})
+	calls := 0
+	stream := func(ctx context.Context, _ agentcore.StreamRequest) (*protocol.AssistantMessageEventStream, error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return textStream("after"), nil
+	}
+	as := newHarnessSession(t, agentcore.AgentLoopConfig{Stream: stream}, nil)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := as.Prompt(context.Background(), protocol.MessageList{userMessage("start")})
+		firstDone <- err
+	}()
+	<-started
+	if err := as.Steer(protocol.MessageList{userMessage("redirect")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := as.FollowUp(protocol.MessageList{userMessage("afterward")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := as.NextTurn(protocol.MessageList{userMessage("queued-next")}); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := as.Abort(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMessageTexts(t, aborted.ClearedSteering, []string{"redirect"})
+	assertMessageTexts(t, aborted.ClearedFollowUp, []string{"afterward"})
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := as.WaitForIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := as.Prompt(context.Background(), protocol.MessageList{userMessage("explicit")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMessageTexts(t, messages, []string{"queued-next", "explicit", "after"})
+}
+
 func TestNavigateTreeWithSummarySnapshotReturnsEditorTextForUserTarget(t *testing.T) {
 	as := newHarnessSession(t, agentcore.AgentLoopConfig{Stream: streamSequence(textStream("done"))}, nil)
 	root, err := as.session.AppendMessage(userMessage("root"))

@@ -19,7 +19,7 @@ const (
 	ThinkingLevelXHigh   = "xhigh"
 )
 
-// Options configures the call-time parameters shared by API adapters.
+// 集中处理各模型适配器共用的调用参数
 type Options struct {
 	ContextWindow int
 	MaxTokens     int

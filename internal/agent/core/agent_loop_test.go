@@ -39,6 +39,78 @@ func TestRunAgentLoopTextAnswerEventOrder(t *testing.T) {
 	}
 }
 
+func TestRunAgentLoopInjectsSteeringBeforeNextAssistantTurn(t *testing.T) {
+	polls := 0
+	newMessages, err := RunAgentLoop(
+		context.Background(),
+		protocol.MessageList{userMessage("start")},
+		AgentContext{},
+		AgentLoopConfig{
+			Stream: queueStreams(textStream("first"), textStream("second")),
+			GetSteeringMessages: func(context.Context) (protocol.MessageList, error) {
+				polls++
+				if polls == 2 {
+					return protocol.MessageList{userMessage("redirect")}, nil
+				}
+				return nil, nil
+			},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("RunAgentLoop() error = %v", err)
+	}
+	assertRoles(t, newMessages,
+		protocol.RoleUser,
+		protocol.RoleAssistant,
+		protocol.RoleUser,
+		protocol.RoleAssistant,
+	)
+	steering, ok := newMessages[2].(protocol.UserMessage)
+	if !ok {
+		t.Fatalf("steering message = %T, want UserMessage", newMessages[2])
+	}
+	if got := textContent(t, steering.Content[0]); got != "redirect" {
+		t.Fatalf("steering message = %q, want redirect", got)
+	}
+}
+
+func TestRunAgentLoopStartsNewTurnForFollowUpMessage(t *testing.T) {
+	polls := 0
+	newMessages, err := RunAgentLoop(
+		context.Background(),
+		protocol.MessageList{userMessage("start")},
+		AgentContext{},
+		AgentLoopConfig{
+			Stream: queueStreams(textStream("first"), textStream("second")),
+			GetFollowUpMessages: func(context.Context) (protocol.MessageList, error) {
+				polls++
+				if polls == 1 {
+					return protocol.MessageList{userMessage("afterward")}, nil
+				}
+				return nil, nil
+			},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("RunAgentLoop() error = %v", err)
+	}
+	assertRoles(t, newMessages,
+		protocol.RoleUser,
+		protocol.RoleAssistant,
+		protocol.RoleUser,
+		protocol.RoleAssistant,
+	)
+	followUp, ok := newMessages[2].(protocol.UserMessage)
+	if !ok {
+		t.Fatalf("follow-up message = %T, want UserMessage", newMessages[2])
+	}
+	if got := textContent(t, followUp.Content[0]); got != "afterward" {
+		t.Fatalf("follow-up message = %q, want afterward", got)
+	}
+}
+
 func TestRunAgentLoopToolCallThenAnswerOrder(t *testing.T) {
 	call := toolCall("call_1", "lookup", `{"query":"pods"}`)
 	events := recordEvents(t)

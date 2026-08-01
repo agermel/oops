@@ -220,19 +220,3 @@ type AgentEvent struct {
 	Result                *ToolResult            `json:"result,omitempty"`
 	IsError               bool                   `json:"isError,omitempty"`
 }
-
-// Provider sequence analysis
-
-type ProviderSequenceStatus string
-
-const (
-	ProviderSequenceComplete    ProviderSequenceStatus = "complete"
-	ProviderSequenceRecoverable ProviderSequenceStatus = "recoverable"
-	ProviderSequenceInvalid     ProviderSequenceStatus = "invalid"
-)
-
-type ProviderSequenceAnalysis struct {
-	Status                ProviderSequenceStatus
-	PendingAssistantIndex int
-	Err                   error
-}

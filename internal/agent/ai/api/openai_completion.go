@@ -19,22 +19,24 @@ import (
 	einojsonschema "github.com/eino-contrib/jsonschema"
 )
 
+// 清理掉来着python的错误，可疑，待清理
 var providerPydanticTraceRE = regexp.MustCompile(`\n For further information visit https?://[^\s]+`)
 
+// 哨兵错误 1.创建流时缺少聊天模型实例 2.转换 Eino 消息时收到空消息 3.系统提示属于 Context.SystemPrompt，消息转换函数用它标记协议边界
 var (
 	ErrMissingModel   = errors.New("openai completion requires chat model")
 	ErrNilMessage     = errors.New("model message is nil")
 	ErrSystemBoundary = errors.New("system message belongs to context conversion")
 )
 
-// OpenAICompletionConfig describes one OpenAI Compatible chat completion endpoint.
+// OpenAICompletionConfig 连接配置
 type OpenAICompletionConfig struct {
 	Model   string
 	APIKey  string
 	BaseURL string
 }
 
-// NewOpenAICompletionModel creates an Eino chat model backed by an OpenAI Compatible endpoint.
+// NewOpenAICompletionModel 创建新模型，使用 Eino 包装，底层使用 OpenAICompletion 协议
 func NewOpenAICompletionModel(ctx context.Context, cfg OpenAICompletionConfig) (model.ToolCallingChatModel, error) {
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		Model:   cfg.Model,
@@ -47,7 +49,7 @@ func NewOpenAICompletionModel(ctx context.Context, cfg OpenAICompletionConfig) (
 	return chatModel, nil
 }
 
-// OpenAICompletionFactory builds the OpenAI-compatible adapter for one resolved provider model.
+// OpenAICompletionFactory 构建模型 -> 返回模型的流式调用函数
 func OpenAICompletionFactory(ctx context.Context, cfg protocol.ProviderConfig) (protocol.StreamFunc, error) {
 	apiKey := cfg.APIKey
 	if hasAuthorizationHeader(cfg.Headers) {
@@ -69,29 +71,30 @@ func OpenAICompletionFactory(ctx context.Context, cfg protocol.ProviderConfig) (
 	})
 }
 
-// NewOpenAICompletionStream adapts an Eino chat model to the Agent Core stream contract.
+// NewOpenAICompletionStream 构建模型的流式调用函数
 func NewOpenAICompletionStream(chatModel model.ToolCallingChatModel, options Options) (protocol.StreamFunc, error) {
 	if chatModel == nil {
 		return nil, ErrMissingModel
 	}
 	return func(runCtx context.Context, req protocol.StreamRequest) (*protocol.AssistantMessageEventStream, error) {
 		requestContext := req.Context
+		// 处理好历史信息（补全toolresult，针对跨模型之间的上下文标准差异进行格式处理）
 		requestContext.Messages = TransformMessages(req.Context.Messages, TransformMessagesOptions{
 			Provider:       req.Provider,
 			Model:          req.Model,
 			SupportsImages: true,
 		})
-		if err := protocol.ValidateProviderMessageSequence(requestContext.Messages); err != nil {
-			return nil, err
-		}
+		// 转换 Context 的消息 -> openai
 		messages, err := messagesFromContext(requestContext)
 		if err != nil {
 			return nil, err
 		}
+		// 转换工具列表
 		toolInfos, err := toolInfosFromDefinitions(req.Context.Tools)
 		if err != nil {
 			return nil, err
 		}
+		// 将 tool 带入 model
 		modelForRun := chatModel
 		if len(toolInfos) > 0 {
 			bound, err := chatModel.WithTools(cloneToolInfos(toolInfos))
@@ -100,16 +103,26 @@ func NewOpenAICompletionStream(chatModel model.ToolCallingChatModel, options Opt
 			}
 			modelForRun = bound
 		}
+
+		// 流式请求 model
 		reader, err := modelForRun.Stream(runCtx, messages, openAICompletionOptions(options, requestContext, req.Reasoning, req.Provider)...)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || runCtx.Err() != nil {
+				stream := protocol.NewAssistantMessageEventStream(1)
+				pushAssistantError(stream, err, protocol.StopReasonAborted, req.Provider, req.Model)
+				return stream, nil
+			}
 			return nil, err
 		}
+		// 创建内部协议的助手消息事件流式响应，通道的缓冲容量为 16。
 		stream := protocol.NewAssistantMessageEventStream(16)
+		// 将 eino 模型流转换为内部协议流
 		go drainMessageStream(runCtx, reader, stream, req.Provider, req.Model)
 		return stream, nil
 	}, nil
 }
 
+// 组装配置 Options -> Eino Option
 func openAICompletionOptions(options Options, ctx protocol.Context, reasoning, providerID string) []model.Option {
 	effort, ok := openAIReasoningEffort(reasoning)
 	callOptions := BuildBaseOptions(options, ctx)
@@ -140,6 +153,7 @@ func hasAuthorizationHeader(headers map[string]string) bool {
 	return false
 }
 
+// 针对 deepseek 进行 payload 调整
 func modifyDeepSeekRequestPayload(rawBody []byte, reasoning string) ([]byte, error) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(rawBody, &payload); err != nil {
@@ -230,13 +244,19 @@ func drainMessageStream(ctx context.Context, reader *schema.StreamReader[*schema
 	started := false
 	var chunks []*schema.Message
 	var text, thinking string
+	toolCalls := map[int]*streamingToolCall{}
+	var toolOrder []int
 	for {
 		message, err := reader.Recv()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			pushAssistantError(out, err, protocol.StopReasonError, provider, modelID)
+			reason := protocol.StopReasonError
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				reason = protocol.StopReasonAborted
+			}
+			pushAssistantError(out, err, reason, provider, modelID)
 			return
 		}
 		if message == nil {
@@ -251,6 +271,7 @@ func drainMessageStream(ctx context.Context, reader *schema.StreamReader[*schema
 			started = true
 		}
 		text, thinking = pushTextChunkUpdates(out, message, text, thinking, provider, modelID)
+		pushToolCallChunkUpdates(out, message, text, thinking, provider, modelID, toolCalls, &toolOrder)
 	}
 	if err := ctx.Err(); err != nil {
 		pushAssistantError(out, err, protocol.StopReasonAborted, provider, modelID)
@@ -274,8 +295,98 @@ func drainMessageStream(ctx context.Context, reader *schema.StreamReader[*schema
 			return
 		}
 	}
+	if thinking != "" {
+		index := thinkingContentIndex(final)
+		_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventThinkingEnd, ContentIndex: &index, Content: thinking, Partial: &final})
+	}
+	if text != "" {
+		index := textContentIndex(final)
+		_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventTextEnd, ContentIndex: &index, Content: text, Partial: &final})
+	}
 	pushFinalToolCalls(out, final)
+	if final.StopReason == protocol.StopReasonError || final.StopReason == protocol.StopReasonAborted {
+		if final.ErrorMessage == "" {
+			if final.StopReason == protocol.StopReasonAborted {
+				final.ErrorMessage = "request was aborted"
+			} else {
+				final.ErrorMessage = "provider returned an error stop reason"
+			}
+		}
+		_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventError, Reason: final.StopReason, Error: &final})
+		return
+	}
 	_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventDone, Reason: final.StopReason, Message: &final})
+}
+
+type streamingToolCall struct {
+	id        string
+	name      string
+	arguments string
+	started   bool
+}
+
+func pushToolCallChunkUpdates(out *protocol.AssistantMessageEventStream, message *schema.Message, text, thinking, provider, modelID string, calls map[int]*streamingToolCall, order *[]int) {
+	for position, chunk := range message.ToolCalls {
+		key := position
+		if chunk.Index != nil {
+			key = *chunk.Index
+		}
+		call, ok := calls[key]
+		if !ok {
+			call = &streamingToolCall{}
+			calls[key] = call
+			*order = append(*order, key)
+		}
+		if chunk.ID != "" {
+			call.id = chunk.ID
+		}
+		if chunk.Function.Name != "" {
+			call.name = chunk.Function.Name
+		}
+		call.arguments += chunk.Function.Arguments
+		if call.id == "" || call.name == "" {
+			continue
+		}
+
+		partial := streamingPartialWithToolCalls(thinking, text, provider, modelID, calls, *order)
+		contentIndex := toolCallIndex(partial, call.id)
+		if !call.started {
+			_ = out.Push(protocol.AssistantMessageEvent{
+				Type:         protocol.AssistantEventToolCallStart,
+				ContentIndex: &contentIndex,
+				Partial:      &partial,
+			})
+			call.started = true
+		}
+		if chunk.Function.Arguments != "" {
+			_ = out.Push(protocol.AssistantMessageEvent{
+				Type:         protocol.AssistantEventToolCallDelta,
+				ContentIndex: &contentIndex,
+				Delta:        chunk.Function.Arguments,
+				Partial:      &partial,
+			})
+		}
+	}
+}
+
+func streamingPartialWithToolCalls(thinking, text, provider, modelID string, calls map[int]*streamingToolCall, order []int) protocol.AssistantMessage {
+	partial := streamingPartial(thinking, text, provider, modelID)
+	for _, key := range order {
+		call := calls[key]
+		if call == nil || call.id == "" || call.name == "" {
+			continue
+		}
+		partial.Content = append(partial.Content, protocol.NewToolCallContent(call.id, call.name, partialToolArguments(call.arguments)))
+	}
+	return partial
+}
+
+func partialToolArguments(arguments string) json.RawMessage {
+	var object map[string]any
+	if json.Unmarshal([]byte(arguments), &object) == nil && object != nil {
+		return json.RawMessage(arguments)
+	}
+	return json.RawMessage(`{}`)
 }
 
 func partialAssistantMessage(chunks []*schema.Message, provider, modelID string) (protocol.AssistantMessage, error) {
@@ -301,6 +412,12 @@ func partialAssistantMessage(chunks []*schema.Message, provider, modelID string)
 
 func pushTextChunkUpdates(out *protocol.AssistantMessageEventStream, message *schema.Message, text, thinking, provider, modelID string) (string, string) {
 	if message.ReasoningContent != "" {
+		if thinking == "" {
+			partial := streamingPartial(thinking, text, provider, modelID)
+			partial.Content = append(protocol.ContentList{protocol.NewThinkingContent("")}, partial.Content...)
+			index := thinkingContentIndex(partial)
+			_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventThinkingStart, ContentIndex: &index, Partial: &partial})
+		}
 		thinking += message.ReasoningContent
 		partial := streamingPartial(thinking, text, provider, modelID)
 		index := thinkingContentIndex(partial)
@@ -312,6 +429,12 @@ func pushTextChunkUpdates(out *protocol.AssistantMessageEventStream, message *sc
 		})
 	}
 	if message.Content != "" {
+		if text == "" {
+			partial := streamingPartial(thinking, text, provider, modelID)
+			partial.Content = append(partial.Content, protocol.NewTextContent(""))
+			index := textContentIndex(partial)
+			_ = out.Push(protocol.AssistantMessageEvent{Type: protocol.AssistantEventTextStart, ContentIndex: &index, Partial: &partial})
+		}
 		text += message.Content
 		partial := streamingPartial(thinking, text, provider, modelID)
 		index := textContentIndex(partial)

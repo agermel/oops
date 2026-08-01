@@ -37,6 +37,8 @@ type AgentLoopConfig struct {
 	ConvertToLLM        func(context.Context, protocol.MessageList) (protocol.MessageList, error)
 	PrepareNextTurn     func(context.Context, TurnContext) (TurnUpdate, error)
 	ShouldStopAfterTurn func(context.Context, TurnContext) (bool, error)
+	GetSteeringMessages func(context.Context) (protocol.MessageList, error)
+	GetFollowUpMessages func(context.Context) (protocol.MessageList, error)
 }
 
 type TurnContext struct {
