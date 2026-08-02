@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/tools/platform"
 	"oops/internal/logutil"
 	"oops/internal/mcp"
 	"oops/internal/project"
@@ -28,7 +28,7 @@ func (s *Server) namespacedMCPToolEntriesForProject(ctx context.Context, project
 		return nil
 	}
 	entries := s.mcpToolEntriesForProject(projectID)
-	nativeTools, err := agentruntime.NewTools(s, s.skillStore)
+	nativeTools, err := platform.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return namespaceMCPTools(entries, nil)
@@ -37,7 +37,7 @@ func (s *Server) namespacedMCPToolEntriesForProject(ctx context.Context, project
 }
 
 func (s *Server) chatToolsAndInventory(ctx context.Context, projectID string) ([]tool.InvokableTool, string) {
-	nativeTools, err := agentruntime.NewTools(s, s.skillStore)
+	nativeTools, err := platform.NewTools(s, s.skillStore)
 	if err != nil {
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return nil, ""
@@ -163,7 +163,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 原生工具。
-	nativeTools, err := agentruntime.NewTools(s, s.skillStore)
+	nativeTools, err := platform.NewTools(s, s.skillStore)
 	nativeNames := map[string]struct{}{}
 	if err == nil {
 		nativeNames = nativeToolNames(r.Context(), nativeTools)

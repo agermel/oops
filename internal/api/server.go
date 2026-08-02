@@ -10,6 +10,9 @@ import (
 
 	agentauth "oops/internal/agent/ai/auth"
 	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/model"
+	"oops/internal/agent/runtime/session"
+	"oops/internal/agent/runtime/skills"
 	"oops/internal/auth"
 	"oops/internal/config"
 	"oops/internal/console"
@@ -60,6 +63,7 @@ type Options struct {
 	HTTPRateLimiter   *httprate.Limiter
 	TrustedProxyCIDRs []string
 	ConsoleHub        *console.Hub
+	PromptTemplates   []agentruntime.PromptTemplate
 }
 
 type serverClosePhase uint8
@@ -83,15 +87,16 @@ type Server struct {
 	nodeletManager  *nodelet.NodeletManager
 	nodeletProber   *nodelet.NodeletProber
 	nodeletClient   NodeletClient
-	llmClient       *agentruntime.Client
+	llmClient       *model.Client
 	llmConfig       config.LLMConfig
-	skillStore      *agentruntime.SkillStore
+	skillStore      *skills.Store
+	promptTemplates []agentruntime.PromptTemplate
 	agentRuntime    *agentruntime.Runtime
 	mcpManager      *mcp.Manager
 	projectStore    *project.Store
 	dsnStore        *project.DSNStore
 	runtimeStore    *runtimestore.Store
-	agentRepo       *agentruntime.Repository
+	agentRepo       *session.Repository
 	runManager      *runManager
 	UserStore       *auth.Store
 	TokenService    *auth.TokenService
@@ -148,6 +153,15 @@ func NewFromConfigWithConsoleHub(cfg config.Config, consoleHub *console.Hub) (*S
 		return nil, fmt.Errorf("create HTTP rate limiter: %w", err)
 	}
 
+	promptTemplates := agentruntime.LoadPromptTemplates("config/prompts")
+	for _, diagnostic := range promptTemplates.Diagnostics {
+		logutil.Warn("agent prompt template: load",
+			zap.String("code", string(diagnostic.Code)),
+			zap.String("path", diagnostic.Path),
+			zap.String("message", diagnostic.Message),
+		)
+	}
+
 	s := New(Options{
 		NodeletManager:  nm,
 		NodeletClient:   nodelet.NewClient(nil),
@@ -157,6 +171,7 @@ func NewFromConfigWithConsoleHub(cfg config.Config, consoleHub *console.Hub) (*S
 		RunLimits:       cfg.Run,
 		HTTPRateLimiter: httpRateLimiter,
 		ConsoleHub:      consoleHub,
+		PromptTemplates: promptTemplates.Templates,
 	})
 
 	mgr, err := mcp.NewManagerWithRuntimeAndConsole(runtimeStore, s.consoleHub, nil)
@@ -219,6 +234,7 @@ func New(options Options) *Server {
 		}
 	}
 
+	promptTemplates := append([]agentruntime.PromptTemplate(nil), options.PromptTemplates...)
 	s := &Server{
 		nodeletManager:  options.NodeletManager,
 		nodeletClient:   options.NodeletClient,
@@ -233,18 +249,22 @@ func New(options Options) *Server {
 		loginLimiter:    newLoginLimiter(nil),
 		consoleHub:      consoleHub,
 		ownsConsoleHub:  ownsConsoleHub,
+		promptTemplates: promptTemplates,
 	}
-	if storage, err := agentruntime.NewFileStorage("data/agent-sessions"); err != nil {
+	if storage, err := session.NewFileStorage("data/agent-sessions"); err != nil {
 		logutil.Warn("agent session: open store, falling back to memory-only", zap.Error(err))
-		s.agentRepo = agentruntime.NewRepository(nil)
+		s.agentRepo = session.NewRepository(nil)
 	} else {
-		s.agentRepo = agentruntime.NewRepository(storage)
+		s.agentRepo = session.NewRepository(storage)
 	}
-	s.agentRuntime = agentruntime.NewRuntime(agentruntime.RuntimeOptions{Repo: s.agentRepo})
+	s.agentRuntime = agentruntime.NewRuntime(agentruntime.RuntimeOptions{
+		Repo:            s.agentRepo,
+		PromptTemplates: promptTemplates,
+	})
 	s.runManager = newRunManager(options.RunLimits)
 
-	// SkillStore 必须在 LLM Client 之前就绪，保证无 MCP 连接时也会注册 skill 工具。
-	ss, err := agentruntime.NewSkillStore("config/skills")
+	// 技能存储必须在模型客户端之前就绪，保证无 MCP 连接时也会注册 skill 工具。
+	ss, err := skills.NewStore("config/skills")
 	if err != nil {
 		logutil.Warn("llm: skill store", zap.Error(err))
 	} else {
@@ -255,7 +275,7 @@ func New(options Options) *Server {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		client, err := agentruntime.NewClient(ctx, options.LLMConfig, agentruntime.ClientOptions{
+		client, err := model.New(ctx, options.LLMConfig, model.Options{
 			Credentials: options.LLMCredentials,
 			AuthContext: options.LLMAuthContext,
 		})

@@ -3,9 +3,9 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/skills"
 )
 
 var errSkillStoreUnavailable = errors.New("skill store not configured")
@@ -19,75 +19,30 @@ func (e skillCommandError) Error() string {
 	return e.message
 }
 
-func (s *Server) expandSkillCommand(text string) (string, error) {
-	command, ok := parseSkillCommand(text)
-	if !ok {
-		return text, nil
+func (s *Server) validateRunPrompt(text string, available []skills.Skill) error {
+	_, err := agentruntime.ResolvePromptCommand(text, s.promptTemplates, available)
+	if err == nil {
+		return nil
 	}
-	if command.namespaced && command.name == "" {
-		return "", skillCommandError{status: http.StatusBadRequest, message: "skill name is required"}
+	if errors.Is(err, agentruntime.ErrPromptSkillUnavailable) && s.skillStore == nil {
+		return skillCommandError{status: http.StatusServiceUnavailable, message: errSkillStoreUnavailable.Error()}
 	}
+	if errors.Is(err, agentruntime.ErrPromptSkillNameRequired) || errors.Is(err, agentruntime.ErrPromptSkillUnavailable) {
+		return skillCommandError{status: http.StatusBadRequest, message: err.Error()}
+	}
+	return err
+}
+
+func (s *Server) enabledSkillSnapshot() []skills.Skill {
 	if s.skillStore == nil {
-		if command.namespaced {
-			return "", skillCommandError{status: http.StatusServiceUnavailable, message: errSkillStoreUnavailable.Error()}
+		return nil
+	}
+	enabled := s.skillStore.Enabled()
+	snapshot := make([]skills.Skill, 0, len(enabled))
+	for _, skill := range enabled {
+		if skill != nil {
+			snapshot = append(snapshot, *skill)
 		}
-		return text, nil
 	}
-	skill, ok := s.skillStore.Get(command.name)
-	if !ok || !skill.Enabled {
-		if command.namespaced {
-			return "", skillCommandError{status: http.StatusBadRequest, message: "skill not found or disabled"}
-		}
-		return text, nil
-	}
-	return agentruntime.FormatSkillInvocation(skill, command.instructions), nil
-}
-
-type parsedSkillCommand struct {
-	namespaced   bool
-	name         string
-	instructions string
-}
-
-func parseSkillCommand(text string) (parsedSkillCommand, bool) {
-	if strings.HasPrefix(text, "/skill:") {
-		rest := strings.TrimPrefix(text, "/skill:")
-		if rest == "" || startsWithSpace(rest) {
-			return parsedSkillCommand{namespaced: true}, true
-		}
-		name, instructions := splitSkillCommandRest(rest)
-		return parsedSkillCommand{namespaced: true, name: name, instructions: instructions}, true
-	}
-	if text == "/skill" || strings.HasPrefix(text, "/skill ") || !strings.HasPrefix(text, "/") {
-		return parsedSkillCommand{}, false
-	}
-	rest := strings.TrimPrefix(text, "/")
-	name, instructions := splitSkillCommandRest(rest)
-	if name == "" || strings.Contains(name, ":") {
-		return parsedSkillCommand{}, false
-	}
-	return parsedSkillCommand{name: name, instructions: instructions}, true
-}
-
-func startsWithSpace(value string) bool {
-	if value == "" {
-		return false
-	}
-	return strings.TrimLeft(value[:1], " \t\r\n") == ""
-}
-
-func splitSkillCommandRest(rest string) (string, string) {
-	rest = strings.TrimLeft(rest, " \t\r\n")
-	if rest == "" {
-		return "", ""
-	}
-	fields := strings.Fields(rest)
-	if len(fields) == 0 {
-		return "", ""
-	}
-	name := fields[0]
-	if len(rest) == len(name) {
-		return name, ""
-	}
-	return name, strings.TrimSpace(rest[len(name):])
+	return snapshot
 }

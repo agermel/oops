@@ -2,22 +2,19 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 
-	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/skills"
 	"oops/internal/logutil"
 
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 // handleSkillsList handles GET /api/skills.
 func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
 	if s.skillStore == nil {
-		writeJSON(w, []agentruntime.Skill{})
+		writeJSON(w, []skills.Skill{})
 		return
 	}
 	writeJSON(w, s.skillStore.List())
@@ -37,7 +34,7 @@ func (s *Server) handleSkillsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var updated agentruntime.Skill
+	var updated skills.Skill
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		writeJSONError(w, "invalid json", http.StatusBadRequest)
 		return
@@ -51,10 +48,16 @@ func (s *Server) handleSkillsUpdate(w http.ResponseWriter, r *http.Request) {
 	existing.Color = updated.Color
 	existing.Enabled = updated.Enabled
 
-	// 写入对应的 .md 文件。
-	path := filepath.Join("config/skills", name+".md")
-	if err := writeSkillFile(path, existing); err != nil {
-		logutil.Error("skill: write file", zap.String("path", path), zap.Error(err))
+	if existing.FilePath == "" {
+		writeJSONError(w, "skill file path is missing", http.StatusConflict)
+		return
+	}
+	if err := s.skillStore.Save(existing); err != nil {
+		if errors.Is(err, skills.ErrSkillNotFound) || errors.Is(err, skills.ErrSkillChanged) || errors.Is(err, skills.ErrSkillPathOutsideRoot) {
+			writeJSONError(w, "skill changed during update", http.StatusConflict)
+			return
+		}
+		logutil.Error("skill: write file", zap.String("path", existing.FilePath), zap.Error(err))
 		writeJSONError(w, "failed to write skill file", http.StatusInternalServerError)
 		return
 	}
@@ -70,7 +73,7 @@ func (s *Server) handleSkillsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.PathValue("name")
-	_, ok := s.skillStore.Get(name)
+	existing, ok := s.skillStore.Get(name)
 	if !ok {
 		writeJSONError(w, "skill not found", http.StatusNotFound)
 		return
@@ -84,34 +87,24 @@ func (s *Server) handleSkillsDelete(w http.ResponseWriter, r *http.Request) {
 
 	// 不允许删除最后一个启用 Skill。
 	enabled := s.skillStore.Enabled()
-	if len(enabled) <= 1 {
+	if existing.Enabled && len(enabled) <= 1 {
 		writeJSONError(w, "cannot delete the last enabled skill", http.StatusBadRequest)
 		return
 	}
 
-	path := filepath.Join("config/skills", name+".md")
-	if err := os.Remove(path); err != nil {
-		logutil.Error("skill: delete file", zap.String("path", path), zap.Error(err))
+	if existing.FilePath == "" {
+		writeJSONError(w, "skill file path is missing", http.StatusConflict)
+		return
+	}
+	if err := s.skillStore.Remove(name); err != nil {
+		if errors.Is(err, skills.ErrSkillNotFound) || errors.Is(err, skills.ErrSkillChanged) || errors.Is(err, skills.ErrSkillPathOutsideRoot) {
+			writeJSONError(w, "skill changed during delete", http.StatusConflict)
+			return
+		}
+		logutil.Error("skill: delete file", zap.String("path", existing.FilePath), zap.Error(err))
 		writeJSONError(w, "failed to delete skill file", http.StatusInternalServerError)
 		return
 	}
 
 	writeJSONOK(w)
-}
-
-// writeSkillFile 将 Skill 序列化为 Markdown + YAML frontmatter 写入文件。
-func writeSkillFile(path string, skill *agentruntime.Skill) error {
-	fm, err := yaml.Marshal(skill)
-	if err != nil {
-		return err
-	}
-
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.Write(fm)
-	b.WriteString("---\n")
-	b.WriteString(skill.Content)
-	b.WriteString("\n")
-
-	return os.WriteFile(path, []byte(b.String()), 0644)
 }

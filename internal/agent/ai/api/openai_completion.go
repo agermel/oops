@@ -105,7 +105,7 @@ func NewOpenAICompletionStream(chatModel model.ToolCallingChatModel, options Opt
 		}
 
 		// 流式请求 model
-		reader, err := modelForRun.Stream(runCtx, messages, openAICompletionOptions(options, requestContext, req.Reasoning, req.Provider)...)
+		reader, err := modelForRun.Stream(runCtx, messages, openAICompletionOptions(options, requestContext, req.Reasoning, req.Provider, req.MaxTokens)...)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || runCtx.Err() != nil {
 				stream := protocol.NewAssistantMessageEventStream(1)
@@ -123,7 +123,14 @@ func NewOpenAICompletionStream(chatModel model.ToolCallingChatModel, options Opt
 }
 
 // 组装配置 Options -> Eino Option
-func openAICompletionOptions(options Options, ctx protocol.Context, reasoning, providerID string) []model.Option {
+func openAICompletionOptions(options Options, ctx protocol.Context, reasoning, providerID string, requestMaxTokens int) []model.Option {
+	if requestMaxTokens > 0 {
+		if options.MaxTokens > 0 {
+			options.MaxTokens = min(options.MaxTokens, requestMaxTokens)
+		} else {
+			options.MaxTokens = requestMaxTokens
+		}
+	}
 	effort, ok := openAIReasoningEffort(reasoning)
 	callOptions := BuildBaseOptions(options, ctx)
 	if ok {

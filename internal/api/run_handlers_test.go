@@ -13,6 +13,8 @@ import (
 
 	protocol "oops/internal/agent/ai"
 	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/model"
+	"oops/internal/agent/runtime/session"
 	"oops/internal/config"
 	runtimestore "oops/internal/store/runtime"
 )
@@ -99,6 +101,47 @@ func TestHandleRunEventsReplaysBoundedHistoryTailAndTerminal(t *testing.T) {
 	}
 }
 
+func TestHandleRunEventsWritesTypedRuntimeEvent(t *testing.T) {
+	manager := newRunManagerForTest(t)
+	run := activateRunForTest(t, manager, "run-typed-event", "sess-1")
+	var event agentruntime.RunEvent = agentruntime.ToolsUpdateEvent{
+		Type:                    "tools_update",
+		ToolNames:               []string{"read", "write"},
+		PreviousToolNames:       []string{"read"},
+		ActiveToolNames:         []string{"write"},
+		PreviousActiveToolNames: []string{"read"},
+		Source:                  "set_tools",
+	}
+	run.publish(runStreamItem{name: event.EventName(), payload: event})
+	run.publishTerminal(runStreamItem{
+		name: "run_done",
+		payload: runDoneEvent{
+			Type:    "run_done",
+			Session: agentruntime.SessionSnapshot{SessionID: "sess-1"},
+		},
+	})
+	run.finishExecution()
+
+	server := &Server{runManager: manager}
+	request := httptest.NewRequest(http.MethodGet, "/api/runs/run-typed-event/events", nil)
+	request.SetPathValue("id", run.id)
+	recorder := httptest.NewRecorder()
+	server.handleRunEvents(recorder, request)
+
+	body := recorder.Body.String()
+	for _, want := range []string{
+		"event: tools_update\n",
+		`"type":"tools_update"`,
+		`"toolNames":["read","write"]`,
+		`"activeToolNames":["write"]`,
+		`"source":"set_tools"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("SSE body missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestRunManagerAbortCancelsActiveRun(t *testing.T) {
 	manager := newRunManagerForTest(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,7 +213,7 @@ func newRunManagerForTest(t *testing.T, limits ...config.RunLimits) *runManager 
 func TestHandleRunCreateRejectsInvalidSkillCommandBeforeRun(t *testing.T) {
 	manager := newRunManagerForTest(t)
 	server := &Server{
-		llmClient:  &agentruntime.Client{},
+		llmClient:  &model.Client{},
 		runManager: manager,
 		skillStore: newTestSkillStore(t),
 	}
@@ -204,7 +247,7 @@ func TestHandleRunCreateRejectsAtCapacityWithRetryAfter(t *testing.T) {
 	}
 	defer reservation.release()
 
-	server := &Server{llmClient: &agentruntime.Client{}, runManager: manager}
+	server := &Server{llmClient: &model.Client{}, runManager: manager}
 	request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"text":"hello"}`))
 	recorder := httptest.NewRecorder()
 
@@ -220,7 +263,7 @@ func TestHandleRunCreateRejectsAtCapacityWithRetryAfter(t *testing.T) {
 
 func TestHandleRunCreateRejectsBusySession(t *testing.T) {
 	manager := newRunManagerForTest(t)
-	repo := agentruntime.NewRepository(nil)
+	repo := session.NewRepository(nil)
 	runtime := agentruntime.NewRuntime(agentruntime.RuntimeOptions{Repo: repo})
 	lease, err := runtime.AcquireSession("sess-1")
 	if err != nil {
@@ -228,7 +271,7 @@ func TestHandleRunCreateRejectsBusySession(t *testing.T) {
 	}
 	defer lease.Release()
 	server := &Server{
-		llmClient:    &agentruntime.Client{},
+		llmClient:    &model.Client{},
 		runManager:   manager,
 		agentRepo:    repo,
 		agentRuntime: runtime,
@@ -250,7 +293,7 @@ func TestHandleRunCreateRejectsInvalidSessionID(t *testing.T) {
 	for _, sessionID := range []string{"../outside", "SESS-1"} {
 		t.Run(sessionID, func(t *testing.T) {
 			server := &Server{
-				llmClient:  &agentruntime.Client{},
+				llmClient:  &model.Client{},
 				runManager: newRunManagerForTest(t),
 			}
 			request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(fmt.Sprintf(`{"text":"hello","session_id":%q}`, sessionID)))
@@ -270,10 +313,10 @@ func TestHandleRunCreateRejectsInvalidSessionID(t *testing.T) {
 
 func TestHandleRunCreateRejectsPersistedProjectConflict(t *testing.T) {
 	manager := newRunManagerForTest(t)
-	repo := agentruntime.NewRepository(nil)
+	repo := session.NewRepository(nil)
 	createRuntimeSession(t, repo, "sess-project", "project-a", "hello")
 	server := &Server{
-		llmClient:  &agentruntime.Client{},
+		llmClient:  &model.Client{},
 		runManager: manager,
 		agentRepo:  repo,
 	}
@@ -297,14 +340,14 @@ func TestHandleRunCreateRejectsPersistedProjectConflict(t *testing.T) {
 
 func TestHandleRunCreateRejectsMissingSessionWithoutCreatingFile(t *testing.T) {
 	dir := t.TempDir()
-	storage, err := agentruntime.NewFileStorage(dir)
+	storage, err := session.NewFileStorage(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := newRunManagerForTest(t)
-	repo := agentruntime.NewRepository(storage)
+	repo := session.NewRepository(storage)
 	server := &Server{
-		llmClient:  &agentruntime.Client{},
+		llmClient:  &model.Client{},
 		runManager: manager,
 		agentRepo:  repo,
 	}
@@ -333,7 +376,7 @@ func TestHandleRunCreateRejectsMissingSessionWithoutCreatingFile(t *testing.T) {
 }
 
 func TestResolveRunProjectIDUsesPersistedProject(t *testing.T) {
-	repo := agentruntime.NewRepository(nil)
+	repo := session.NewRepository(nil)
 	createRuntimeSession(t, repo, "sess-project", "project-a", "hello")
 	server := &Server{agentRepo: repo}
 

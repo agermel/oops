@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	agentruntime "oops/internal/agent/runtime"
+	agentresources "oops/internal/agent/runtime/resources"
+	"oops/internal/agent/runtime/session"
 )
 
 // sessionInfo 是 HTTP 会话列表和重命名响应的稳定 DTO。
@@ -38,9 +41,12 @@ func (s *Server) ensureAgentRuntime() *agentruntime.Runtime {
 		return s.agentRuntime
 	}
 	if s.agentRepo == nil {
-		s.agentRepo = agentruntime.NewRepository(nil)
+		s.agentRepo = session.NewRepository(nil)
 	}
-	s.agentRuntime = agentruntime.NewRuntime(agentruntime.RuntimeOptions{Repo: s.agentRepo})
+	s.agentRuntime = agentruntime.NewRuntime(agentruntime.RuntimeOptions{
+		Repo:            s.agentRepo,
+		PromptTemplates: s.promptTemplates,
+	})
 	return s.agentRuntime
 }
 
@@ -65,7 +71,7 @@ func (s *Server) acquireRuntimeSessionLease(w http.ResponseWriter, sessionID str
 }
 
 func validateRuntimeSessionID(w http.ResponseWriter, sessionID string) bool {
-	if err := agentruntime.ValidateID(sessionID); err != nil {
+	if err := session.ValidateID(sessionID); err != nil {
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
@@ -88,7 +94,7 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lease.Release()
-	agentSession, ok, err := s.runtimeAgentSession(r.Context(), id, "")
+	harness, ok, err := s.runtimeAgentHarness(r.Context(), id, "")
 	if err != nil {
 		sanitizedError(w, "load session", err, http.StatusInternalServerError)
 		return
@@ -100,9 +106,9 @@ func (s *Server) handleSessionBranch(w http.ResponseWriter, r *http.Request) {
 	var snapshot agentruntime.SessionSnapshot
 	var navErr error
 	if req.Summary != "" {
-		snapshot, navErr = agentSession.NavigateTreeWithSummarySnapshot(req.LeafID, req.Summary)
+		snapshot, navErr = harness.NavigateTreeWithSummarySnapshot(req.LeafID, req.Summary)
 	} else {
-		snapshot, navErr = agentSession.NavigateTreeSnapshot(req.LeafID)
+		snapshot, navErr = harness.NavigateTreeSnapshot(req.LeafID)
 	}
 	if navErr != nil {
 		if errors.Is(navErr, agentruntime.ErrAgentBusy) {
@@ -136,7 +142,7 @@ func (s *Server) runtimeSessionInfos(projectID string) ([]sessionInfo, error) {
 	return out, nil
 }
 
-func runtimeSessionInfo(info agentruntime.Info) sessionInfo {
+func runtimeSessionInfo(info session.Info) sessionInfo {
 	return sessionInfo{
 		ID:           info.ID,
 		ProjectID:    info.ProjectID,
@@ -148,20 +154,23 @@ func runtimeSessionInfo(info agentruntime.Info) sessionInfo {
 	}
 }
 
-func (s *Server) runtimeSessionInfoByID(sessionID string) (agentruntime.Info, bool, error) {
+func (s *Server) runtimeSessionInfoByID(sessionID string) (session.Info, bool, error) {
 	if s.agentRepo == nil || sessionID == "" {
-		return agentruntime.Info{}, false, nil
+		return session.Info{}, false, nil
 	}
 	runtimeSession, ok := s.agentRepo.Get(sessionID)
 	if !ok {
 		var err error
 		runtimeSession, err = s.agentRepo.Load(sessionID)
 		if err != nil {
-			return agentruntime.Info{}, false, err
+			if isRuntimeSessionUnavailable(err) {
+				return session.Info{}, false, nil
+			}
+			return session.Info{}, false, err
 		}
 		if len(runtimeSession.Entries()) == 0 {
 			_, _ = s.agentRepo.Delete(sessionID)
-			return agentruntime.Info{}, false, nil
+			return session.Info{}, false, nil
 		}
 	}
 	return runtimeSession.Info(), true, nil
@@ -176,6 +185,9 @@ func (s *Server) renameRuntimeSession(sessionID, projectID, title string) (sessi
 		var err error
 		runtimeSession, err = s.agentRepo.Load(sessionID)
 		if err != nil {
+			if isRuntimeSessionUnavailable(err) {
+				return sessionInfo{}, false, nil
+			}
 			return sessionInfo{}, false, err
 		}
 		if len(runtimeSession.Entries()) == 0 {
@@ -187,7 +199,7 @@ func (s *Server) renameRuntimeSession(sessionID, projectID, title string) (sessi
 	if projectID != "" && info.ProjectID != projectID {
 		return sessionInfo{}, false, nil
 	}
-	if _, err := s.agentRepo.AppendEntry(runtimeSession.ID(), agentruntime.Entry{Type: agentruntime.EntrySessionInfo, Title: title}); err != nil {
+	if _, err := s.agentRepo.AppendEntry(runtimeSession.ID(), session.Entry{Type: session.EntrySessionInfo, Title: title}); err != nil {
 		return sessionInfo{}, false, err
 	}
 	return runtimeSessionInfo(runtimeSession.Info()), true, nil
@@ -213,14 +225,14 @@ func unixMilli(t time.Time) int64 {
 }
 
 func (s *Server) runtimeSessionSnapshot(ctx context.Context, sessionID, projectID string) (agentruntime.SessionSnapshot, bool, error) {
-	agentSession, ok, err := s.runtimeAgentSession(ctx, sessionID, projectID)
+	harness, ok, err := s.runtimeAgentHarness(ctx, sessionID, projectID)
 	if err != nil || !ok {
 		return agentruntime.SessionSnapshot{}, ok, err
 	}
-	return agentSession.Snapshot(), true, nil
+	return harness.Snapshot(), true, nil
 }
 
-func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID string) (*agentruntime.AgentSession, bool, error) {
+func (s *Server) runtimeAgentHarness(ctx context.Context, sessionID, projectID string) (*agentruntime.AgentHarness, bool, error) {
 	if s.agentRepo == nil || sessionID == "" {
 		return nil, false, nil
 	}
@@ -229,6 +241,9 @@ func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID s
 		var err error
 		session, err = s.agentRepo.Load(sessionID)
 		if err != nil {
+			if isRuntimeSessionUnavailable(err) {
+				return nil, false, nil
+			}
 			return nil, false, err
 		}
 		if len(session.Entries()) == 0 {
@@ -246,18 +261,24 @@ func (s *Server) runtimeAgentSession(ctx context.Context, sessionID, projectID s
 	}
 	if s.llmClient != nil {
 		req := runCreateRequest{SessionID: sessionID, ProjectID: effectiveProjectID}
-		agentSession, err := s.newRunAgentSession(ctx, req, "")
+		harness, err := s.newRunAgentHarness(ctx, req, "", s.enabledSkillSnapshot())
 		if err != nil {
 			return nil, false, err
 		}
-		return agentSession, true, nil
+		return harness, true, nil
 	}
-	agentSession, err := s.ensureAgentRuntime().ResumeWithOptions(ctx, sessionID, agentruntime.ResumeSessionOptions{
+	harness, err := s.ensureAgentRuntime().ResumeWithOptions(ctx, sessionID, agentruntime.ResumeSessionOptions{
 		CWD:       info.CWD,
-		Resources: &agentruntime.ResourceSnapshot{},
+		Resources: &agentresources.Snapshot{},
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	return agentSession, true, nil
+	return harness, true, nil
+}
+
+func isRuntimeSessionUnavailable(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, session.ErrSessionCreating) ||
+		errors.Is(err, session.ErrSessionDeleting)
 }

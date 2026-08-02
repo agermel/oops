@@ -4,72 +4,52 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/skills"
 )
 
-func TestExpandSkillCommandNamespaced(t *testing.T) {
+func TestResolveRunPromptNamespacedSkill(t *testing.T) {
 	server := &Server{skillStore: newTestSkillStore(t)}
 
-	got, err := server.expandSkillCommand(`/skill:diagnose inspect <target>`)
-	if err != nil {
-		t.Fatalf("expandSkillCommand: %v", err)
-	}
-	if !strings.Contains(got, `<skill_content name="diagnose">`) {
-		t.Fatalf("missing skill block:\n%s", got)
-	}
-	if !strings.Contains(got, `Use &lt;probe&gt; &amp; report.`) {
-		t.Fatalf("skill content was not escaped:\n%s", got)
-	}
-	if !strings.HasSuffix(got, "\n\ninspect <target>") {
-		t.Fatalf("instructions not preserved outside XML:\n%s", got)
+	if err := server.validateRunPrompt(`/skill:diagnose inspect <target>`, server.enabledSkillSnapshot()); err != nil {
+		t.Fatalf("validateRunPrompt: %v", err)
 	}
 }
 
-func TestExpandSkillCommandShorthand(t *testing.T) {
+func TestResolveRunPromptShorthandSkill(t *testing.T) {
 	server := &Server{skillStore: newTestSkillStore(t)}
 
-	got, err := server.expandSkillCommand(`/diagnose`)
-	if err != nil {
-		t.Fatalf("expandSkillCommand: %v", err)
-	}
-	if !strings.Contains(got, `<skill_content name="diagnose">`) {
-		t.Fatalf("missing skill block:\n%s", got)
-	}
-	if strings.Contains(got, "\n\n\n") {
-		t.Fatalf("empty instructions should not add extra separator:\n%s", got)
+	if err := server.validateRunPrompt(`/diagnose`, server.enabledSkillSnapshot()); err != nil {
+		t.Fatalf("validateRunPrompt: %v", err)
 	}
 }
 
-func TestExpandSkillCommandBoundaries(t *testing.T) {
+func TestResolveRunPromptBoundaries(t *testing.T) {
 	server := &Server{skillStore: newTestSkillStore(t)}
+	available := server.enabledSkillSnapshot()
 	tests := []struct {
 		name string
 		in   string
-		want string
 	}{
-		{name: "unknown shorthand", in: "/missing args", want: "/missing args"},
-		{name: "bare skill command", in: "/skill", want: "/skill"},
-		{name: "uppercase command prefix", in: "/Skill:diagnose", want: "/Skill:diagnose"},
-		{name: "colon in shorthand", in: "/other:diagnose", want: "/other:diagnose"},
+		{name: "unknown shorthand", in: "/missing args"},
+		{name: "bare skill command", in: "/skill"},
+		{name: "uppercase command prefix", in: "/Skill:diagnose"},
+		{name: "colon in shorthand", in: "/other:diagnose"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := server.expandSkillCommand(tt.in)
-			if err != nil {
-				t.Fatalf("expandSkillCommand: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("expandSkillCommand(%q) = %q, want %q", tt.in, got, tt.want)
+			if err := server.validateRunPrompt(tt.in, available); err != nil {
+				t.Fatalf("validateRunPrompt(%q): %v", tt.in, err)
 			}
 		})
 	}
 }
 
-func TestExpandSkillCommandErrors(t *testing.T) {
+func TestResolveRunPromptErrors(t *testing.T) {
 	server := &Server{skillStore: newTestSkillStore(t)}
+	available := server.enabledSkillSnapshot()
 	tests := []struct {
 		name   string
 		in     string
@@ -83,25 +63,39 @@ func TestExpandSkillCommandErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := server.expandSkillCommand(tt.in)
+			err := server.validateRunPrompt(tt.in, available)
 			assertSkillCommandError(t, err, tt.status)
 		})
 	}
 }
 
-func TestExpandSkillCommandNoSkillStore(t *testing.T) {
+func TestResolveRunPromptNoSkillStore(t *testing.T) {
 	server := &Server{}
 
-	got, err := server.expandSkillCommand("/diagnose")
-	if err != nil {
+	if err := server.validateRunPrompt("/diagnose", nil); err != nil {
 		t.Fatalf("shorthand without skill store should pass through: %v", err)
 	}
-	if got != "/diagnose" {
-		t.Fatalf("shorthand without skill store = %q", got)
-	}
 
-	_, err = server.expandSkillCommand("/skill:diagnose")
+	err := server.validateRunPrompt("/skill:diagnose", nil)
 	assertSkillCommandError(t, err, http.StatusServiceUnavailable)
+}
+
+func TestValidateRunPromptAcceptsTemplatesAndShorthandSkills(t *testing.T) {
+	server := &Server{
+		skillStore: newTestSkillStore(t),
+		promptTemplates: []agentruntime.PromptTemplate{
+			{Name: "review", Content: "Review $1 with ${@:2}"},
+			{Name: "diagnose", Content: "template wins shorthand"},
+			{Name: "skill:diagnose", Content: "template should not win namespace"},
+		},
+	}
+	available := server.enabledSkillSnapshot()
+
+	for _, input := range []string{`/review target "extra context"`, "/diagnose", "/skill:diagnose"} {
+		if err := server.validateRunPrompt(input, available); err != nil {
+			t.Fatalf("validateRunPrompt(%q): %v", input, err)
+		}
+	}
 }
 
 func assertSkillCommandError(t *testing.T, err error, status int) {
@@ -118,7 +112,7 @@ func assertSkillCommandError(t *testing.T, err error, status int) {
 	}
 }
 
-func newTestSkillStore(t *testing.T) *agentruntime.SkillStore {
+func newTestSkillStore(t *testing.T) *skills.Store {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
@@ -137,13 +131,17 @@ Disabled.
 `,
 	}
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		skillDir := filepath.Join(dir, name[:len(name)-len(filepath.Ext(name))])
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatalf("create skill dir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
 			t.Fatalf("write skill %s: %v", name, err)
 		}
 	}
-	store, err := agentruntime.NewSkillStore(dir)
+	store, err := skills.NewStore(dir)
 	if err != nil {
-		t.Fatalf("NewSkillStore: %v", err)
+		t.Fatalf("skills.NewStore: %v", err)
 	}
 	t.Cleanup(store.Close)
 	return store

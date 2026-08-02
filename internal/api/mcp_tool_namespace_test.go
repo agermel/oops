@@ -6,7 +6,9 @@ import (
 
 	protocol "oops/internal/agent/ai"
 	toolruntime "oops/internal/agent/core"
-	agentruntime "oops/internal/agent/runtime"
+	"oops/internal/agent/runtime/model"
+	agenttools "oops/internal/agent/runtime/tools"
+	"oops/internal/agent/runtime/tools/platform"
 	"oops/internal/config"
 	"oops/internal/mcp"
 	"oops/internal/nodelet"
@@ -54,7 +56,7 @@ func TestMCPToolHooksUseModelFacingToolName(t *testing.T) {
 	}
 	var beforeName string
 	var afterName string
-	runtimeTools, _, err := agentruntime.FromInvokableTools(context.Background(), []tool.InvokableTool{wrapped})
+	runtimeTools, _, err := agenttools.FromInvokableTools(context.Background(), []tool.InvokableTool{wrapped})
 	if err != nil {
 		t.Fatalf("FromInvokableTools() error = %v", err)
 	}
@@ -268,13 +270,13 @@ func TestClientFiltersNamespacedMCPToolsFromCurrentSnapshot(t *testing.T) {
 		APIKey:  "test-key",
 	}
 	ctx := context.Background()
-	client, err := agentruntime.NewClient(ctx, cfg, agentruntime.ClientOptions{})
+	client, err := model.New(ctx, cfg, model.Options{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	server.llmClient = client
 
-	nativeTools, err := agentruntime.NewTools(server, nil)
+	nativeTools, err := platform.NewTools(server, nil)
 	if err != nil {
 		t.Fatalf("NewTools: %v", err)
 	}

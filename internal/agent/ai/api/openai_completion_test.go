@@ -810,6 +810,36 @@ func TestOpenAICompletionStreamAppliesBaseOptions(t *testing.T) {
 	}
 }
 
+func TestOpenAICompletionStreamAppliesRequestMaxTokens(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configured int
+		requested  int
+		want       int
+	}{
+		{name: "request lowers configured limit", configured: 2000, requested: 512, want: 512},
+		{name: "configured limit caps request", configured: 2000, requested: 4000, want: 2000},
+		{name: "request supplies missing limit", requested: 512, want: 512},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			chatModel := &chunkedStreamModel{chunks: []*schema.Message{{Role: schema.Assistant, Content: "ok"}}}
+			streamFn, err := NewOpenAICompletionStream(chatModel, Options{MaxTokens: test.configured})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := streamFn(context.Background(), protocol.StreamRequest{MaxTokens: test.requested})
+			if err != nil {
+				t.Fatal(err)
+			}
+			drainStream(t, stream)
+			options := model.GetCommonOptions(nil, chatModel.options...)
+			if options.MaxTokens == nil || *options.MaxTokens != test.want {
+				t.Fatalf("MaxTokens = %#v, want %d", options.MaxTokens, test.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIReasoningEffort(t *testing.T) {
 	effort, ok := openAIReasoningEffort(ThinkingLevelXHigh)
 	if !ok || effort != openai.ReasoningEffortLevelHigh {

@@ -79,7 +79,7 @@ export function handleSkillSuggestionKey(
 }
 
 export function parseSkillInvocationSummary(text: string): SkillInvocationSummary | null {
-  const match = text.match(/^<skill_content name="([^"]*)">\n[\s\S]*?\n<\/skill_content>(?:\n\n([\s\S]*))?$/);
+  const match = text.match(/^<skill name="([^"]*)" location="[^"]*">\n[\s\S]*?\n<\/skill>(?:\n\n([\s\S]*))?$/);
   if (!match) return null;
   return {
     name: unescapeXML(match[1] || ""),

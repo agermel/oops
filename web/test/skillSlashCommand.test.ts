@@ -64,11 +64,11 @@ test("keyboard helper selects, moves, closes, and respects composing state", () 
 });
 
 test("parses compact skill invocation summary", () => {
-  const text = `<skill_content name="diagnose">
-# Skill: diagnose
+  const text = `<skill name="diagnose" location="/workspace/skills/diagnose/SKILL.md">
+References are relative to /workspace/skills/diagnose.
 
 Use &lt;probe&gt;.
-</skill_content>
+</skill>
 
 write <draft> & explain "why"`;
 
@@ -80,7 +80,7 @@ write <draft> & explain "why"`;
 });
 
 test("malformed skill block falls back to plain text", () => {
-  const text = `<skill_content name="diagnose">missing close`;
+  const text = `<skill name="diagnose" location="/workspace/skills/diagnose/SKILL.md">missing close`;
   assert.equal(parseSkillInvocationSummary(text), null);
   assert.equal(skillInvocationDisplayText(text), text);
 });

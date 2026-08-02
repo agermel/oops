@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	agentruntime "oops/internal/agent/runtime"
+	agentskills "oops/internal/agent/runtime/skills"
+	"oops/internal/logutil"
 )
 
 const (
@@ -55,8 +58,8 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 	if req.SessionID != "" && !validateRuntimeSessionID(w, req.SessionID) {
 		return
 	}
-	expanded, err := s.expandSkillCommand(req.Text)
-	if err != nil {
+	skillSnapshot := s.enabledSkillSnapshot()
+	if err := s.validateRunPrompt(req.Text, skillSnapshot); err != nil {
 		var commandErr skillCommandError
 		if errors.As(err, &commandErr) {
 			writeJSONError(w, commandErr.message, commandErr.status)
@@ -65,7 +68,6 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		sanitizedError(w, "run create", err, http.StatusInternalServerError)
 		return
 	}
-	req.Text = expanded
 
 	reservation, err := s.runManager.reserve()
 	if err != nil {
@@ -89,7 +91,8 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		newSessionID = "session_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 		leaseSessionID = newSessionID
 	}
-	sessionLease, err := s.ensureAgentRuntime().AcquireSession(leaseSessionID)
+	agentRuntime := s.ensureAgentRuntime()
+	sessionLease, err := agentRuntime.AcquireSession(leaseSessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionBusy) {
 			writeJSONError(w, ErrSessionBusy.Error(), http.StatusConflict)
@@ -125,12 +128,23 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		stopRequestCancel()
 		cancelSetup()
 	}()
-	agentSession, err := s.newRunAgentSession(setupCtx, req, newSessionID)
+	harness, err := s.newRunAgentHarness(setupCtx, req, newSessionID, skillSnapshot)
 	if err != nil {
 		sanitizedError(w, "run create", err, http.StatusInternalServerError)
 		return
 	}
-	if err := agentSession.ValidateProviderContext(); err != nil {
+	defer func() {
+		if activated || newSessionID == "" {
+			return
+		}
+		if err := agentRuntime.DiscardSession(harness); err != nil {
+			logutil.Error("run create: discard session",
+				zap.String("session_id", newSessionID),
+				zap.Error(err),
+			)
+		}
+	}()
+	if err := harness.ValidateProviderContext(); err != nil {
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -139,7 +153,7 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "run capacity unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	snapshot := agentSession.Snapshot()
+	snapshot := harness.Snapshot()
 	runID := newRunID()
 	runCtx, cancelRun := context.WithTimeout(s.runManager.context(), runTimeout)
 	run, err := reservation.activate(runID, snapshot.SessionID, req.ProjectID, cancelRun)
@@ -158,8 +172,8 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	activated = true
-	unsubscribe := agentSession.ListenRunEvents(func(_ context.Context, event agentruntime.RunEvent) error {
-		run.publish(runStreamItem{name: event.Name, payload: event.Payload})
+	unsubscribe := harness.ListenRunEvents(func(_ context.Context, event agentruntime.RunEvent) error {
+		run.publish(runStreamItem{name: event.EventName(), payload: event})
 		return nil
 	})
 
@@ -167,13 +181,14 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 		defer sessionLease.Release()
 		defer run.finishExecution()
 		defer unsubscribe()
-		if err := agentSession.PromptText(runCtx, req.Text, time.Now().UnixMilli()); err != nil {
+		runErr := harness.PromptText(runCtx, req.Text, time.Now().UnixMilli())
+		if runErr != nil {
 			run.publishTerminal(runStreamItem{
 				name: "run_error",
 				payload: runErrorEvent{
 					Type:    "run_error",
-					Error:   err.Error(),
-					Session: agentSession.Snapshot(),
+					Error:   runErr.Error(),
+					Session: harness.Snapshot(),
 				},
 			})
 			return
@@ -182,7 +197,7 @@ func (s *Server) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 			name: "run_done",
 			payload: runDoneEvent{
 				Type:    "run_done",
-				Session: agentSession.Snapshot(),
+				Session: harness.Snapshot(),
 			},
 		})
 	}()
@@ -254,23 +269,25 @@ func (s *Server) handleRunAbort(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"aborted": aborted})
 }
 
-func (s *Server) newRunAgentSession(ctx context.Context, req runCreateRequest, newSessionID string) (*agentruntime.AgentSession, error) {
+func (s *Server) newRunAgentHarness(ctx context.Context, req runCreateRequest, newSessionID string, skillSnapshot []agentskills.Skill) (*agentruntime.AgentHarness, error) {
 	rawTools, inventory := s.chatToolsAndInventory(ctx, req.ProjectID)
 	maxTurns, err := s.runAgentMaxTurns(ctx)
 	if err != nil {
 		return nil, err
 	}
-	systemPrompt := s.runSystemPrompt(req.ProjectID, inventory)
-	return s.ensureAgentRuntime().PreparePromptSession(ctx, agentruntime.PreparePromptOptions{
-		SessionID:     req.SessionID,
-		NewSessionID:  newSessionID,
-		Model:         s.llmConfig.Model,
-		Provider:      s.llmClient.Provider(),
-		ProjectID:     req.ProjectID,
-		SystemPrompt:  systemPrompt,
-		PlatformTools: rawTools,
-		MaxTurns:      maxTurns,
-		Client:        s.llmClient,
+	systemPrompt := s.runSystemPrompt(req.ProjectID, inventory, skillSnapshot)
+	return s.ensureAgentRuntime().PreparePromptHarness(ctx, agentruntime.PreparePromptOptions{
+		SessionID:       req.SessionID,
+		NewSessionID:    newSessionID,
+		Model:           s.llmConfig.Model,
+		Provider:        s.llmClient.Provider(),
+		ProjectID:       req.ProjectID,
+		SystemPrompt:    systemPrompt,
+		PlatformTools:   rawTools,
+		MaxTurns:        maxTurns,
+		Client:          s.llmClient,
+		PromptTemplates: s.promptTemplates,
+		Skills:          skillSnapshot,
 	})
 }
 
@@ -285,7 +302,7 @@ func (s *Server) runAgentMaxTurns(ctx context.Context) (int, error) {
 	return settings.MaxTurns, nil
 }
 
-func (s *Server) runSystemPrompt(projectID, inventory string) string {
+func (s *Server) runSystemPrompt(projectID, inventory string, skillSnapshot []agentskills.Skill) string {
 	systemPrompt := agentruntime.BasePrompt
 	if projectID != "" && s.projectStore != nil {
 		if p := s.projectStore.Get(projectID); p != nil {
@@ -299,7 +316,7 @@ func (s *Server) runSystemPrompt(projectID, inventory string) string {
 		}
 	}
 	if s.skillStore != nil {
-		if available := s.skillStore.RenderAvailable(); available != "" {
+		if available := agentskills.FormatAvailable(skillSnapshot); available != "" {
 			systemPrompt += "\n\n" + available
 		}
 	}

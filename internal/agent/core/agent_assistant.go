@@ -6,7 +6,12 @@ import (
 	protocol "oops/internal/agent/ai"
 )
 
+// 拿到当前会话 agentContext 和本轮配置 config
+// 调用 config.Stream 请求模型
 func streamAssistantResponse(ctx context.Context, agentContext AgentContext, config AgentLoopConfig, emit EventSink, turn int) (protocol.AssistantMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return emitAssistantError(ctx, emit, turn, config, err.Error(), protocol.StopReasonAborted)
+	}
 	messages := cloneMessages(agentContext.Messages)
 	if config.TransformContext != nil {
 		transformed, err := config.TransformContext(ctx, messages)

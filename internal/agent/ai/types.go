@@ -156,6 +156,7 @@ type StreamRequest struct {
 	Provider  string
 	Reasoning string
 	SessionID string
+	MaxTokens int
 }
 
 type StreamFunc func(context.Context, StreamRequest) (*AssistantMessageEventStream, error)
