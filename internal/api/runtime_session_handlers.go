@@ -18,13 +18,13 @@ import (
 // sessionInfo 是 HTTP 会话列表和重命名响应的稳定 DTO。
 // Session 的领域对象不会穿透到 HTTP 边界。
 type sessionInfo struct {
-	ID           string `json:"id"`
-	ProjectID    string `json:"projectId,omitempty"`
-	Title        string `json:"title,omitempty"`
-	Summary      string `json:"summary,omitempty"`
-	MessageCount int    `json:"messageCount"`
-	CreatedAt    int64  `json:"createdAt"`
-	UpdatedAt    int64  `json:"updatedAt"`
+	ID            string `json:"id"`
+	ProjectID     string `json:"projectId,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Summary       string `json:"summary,omitempty"`
+	QuestionCount int    `json:"questionCount"`
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt"`
 }
 
 type runtimeBranchRequest struct {
@@ -144,13 +144,13 @@ func (s *Server) runtimeSessionInfos(projectID string) ([]sessionInfo, error) {
 
 func runtimeSessionInfo(info session.Info) sessionInfo {
 	return sessionInfo{
-		ID:           info.ID,
-		ProjectID:    info.ProjectID,
-		Title:        info.Title,
-		Summary:      info.Summary,
-		MessageCount: info.Messages,
-		CreatedAt:    unixMilli(info.CreatedAt),
-		UpdatedAt:    unixMilli(info.UpdatedAt),
+		ID:            info.ID,
+		ProjectID:     info.ProjectID,
+		Title:         info.Title,
+		Summary:       info.Summary,
+		QuestionCount: info.Questions,
+		CreatedAt:     unixMilli(info.CreatedAt),
+		UpdatedAt:     unixMilli(info.UpdatedAt),
 	}
 }
 

@@ -5,8 +5,9 @@ import {
   applyAgentEventToSession,
   applyTerminalSnapshotToSession,
   EMPTY_AGENT_SESSION,
+  sessionInfosForTabs,
 } from "../src/lib/session.ts";
-import type { AgentEvent, AssistantMessage, ToolResultMessage } from "../src/types.ts";
+import type { AgentEvent, AssistantMessage, SessionInfo, ToolResultMessage } from "../src/types.ts";
 
 const emptyUsage = {
   input: 0,
@@ -99,3 +100,33 @@ test("keeps streamed history when the terminal snapshot is bounded", () => {
   assert.deepEqual(completed.messages, [message]);
   assert.deepEqual(completed.events, [event]);
 });
+
+test("keeps an existing active session in the server-provided order", () => {
+  const sessions: SessionInfo[] = [
+    sessionInfo("first", 1),
+    sessionInfo("second", 2),
+    sessionInfo("third", 3),
+  ];
+
+  const ordered = sessionInfosForTabs(sessions, "third");
+
+  assert.deepEqual(ordered.map((session) => session.id), ["first", "second", "third"]);
+});
+
+test("prepends a missing active session fallback", () => {
+  const sessions: SessionInfo[] = [sessionInfo("history", 1)];
+  const active: SessionInfo = sessionInfo("active", 1);
+
+  const ordered = sessionInfosForTabs(sessions, active.id, active);
+
+  assert.deepEqual(ordered.map((session) => session.id), ["active", "history"]);
+});
+
+function sessionInfo(id: string, questionCount: number): SessionInfo {
+  return {
+    id,
+    questionCount,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}

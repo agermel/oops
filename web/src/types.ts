@@ -427,7 +427,7 @@ export type SessionInfo = {
   projectId?: string;
   title?: string;
   summary?: string;
-  messageCount: number;
+  questionCount: number;
   createdAt: number;
   updatedAt: number;
 };

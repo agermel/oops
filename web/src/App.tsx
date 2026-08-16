@@ -182,8 +182,9 @@ export function App() {
   const [agentSession, setAgentSession] = React.useState<SessionResponse>(EMPTY_AGENT_SESSION);
   const [chatInput, setChatInput] = React.useState("");
   const [chatLoading, setChatLoading] = React.useState(false);
+  const [chatRunning, setChatRunning] = React.useState(false);
   const [chatError, setChatError] = React.useState("");
-  const chatLoadingRef = React.useRef(false);
+  const chatRunningRef = React.useRef(false);
   const chatEventSourceRef = React.useRef<EventSource | null>(null);
   const activeRunIdRef = React.useRef("");
   const [sessionId, setSessionId] = React.useState<string>(() => {
@@ -228,12 +229,12 @@ export function App() {
     const q = (question ?? chatInput).trim();
     if (!q) return;
     // 自愈：若 UI 已不显示 loading 但 ref 泄漏（如导航中途离开聊天页），则重置
-    if (!chatLoading) chatLoadingRef.current = false;
-    if (chatLoadingRef.current) return;
+    if (!chatLoading && !chatRunning) chatRunningRef.current = false;
+    if (chatRunningRef.current) return;
 
     closeRunStream();
 
-    chatLoadingRef.current = true;
+    chatRunningRef.current = true;
     setChatInput("");
     setChatError("");
     setChatLoading(true);
@@ -256,6 +257,8 @@ export function App() {
       const payload = await resp.json() as CreateRunResponse;
       runCreated = true;
       activeRunIdRef.current = payload.runId;
+      setChatLoading(false);
+      setChatRunning(true);
       setSessionId(payload.sessionId);
       setSessionLoaded(true);
       localStorage.setItem(SESSION_STORAGE_KEY, payload.sessionId);
@@ -269,8 +272,9 @@ export function App() {
       const nextState = nextChatStateAfterCreateError({ input: "", loading: true }, q, runCreated);
       setChatInput(nextState.input);
       setChatLoading(nextState.loading);
+      setChatRunning(false);
       setChatError(errorMessage);
-      chatLoadingRef.current = false;
+      chatRunningRef.current = false;
     }
   }
 
@@ -292,7 +296,8 @@ export function App() {
         setSessionId(event.session.sessionId);
         localStorage.setItem(SESSION_STORAGE_KEY, event.session.sessionId);
         setChatLoading(false);
-        chatLoadingRef.current = false;
+        setChatRunning(false);
+        chatRunningRef.current = false;
         activeRunIdRef.current = "";
         closeRunStream(source);
         queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
@@ -307,7 +312,8 @@ export function App() {
           localStorage.setItem(SESSION_STORAGE_KEY, event.session.sessionId);
         }
         setChatLoading(false);
-        chatLoadingRef.current = false;
+        setChatRunning(false);
+        chatRunningRef.current = false;
         activeRunIdRef.current = "";
         closeRunStream(source);
         queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
@@ -323,7 +329,8 @@ export function App() {
       if (!finished) {
         setChatError("事件流连接中断，请刷新会话确认结果。");
         setChatLoading(false);
-        chatLoadingRef.current = false;
+        setChatRunning(false);
+        chatRunningRef.current = false;
         activeRunIdRef.current = "";
       }
       closeRunStream(source);
@@ -342,7 +349,8 @@ export function App() {
     closeRunStream();
     activeRunIdRef.current = "";
     setChatLoading(false);
-    chatLoadingRef.current = false;
+    setChatRunning(false);
+    chatRunningRef.current = false;
     if (runId) {
       await fetch(runPaths.abort(runId), { method: "POST" }).catch(() => undefined);
     }
@@ -373,12 +381,13 @@ export function App() {
     setSessionId("");
     setSessionLoaded(false);
     setChatLoading(false);
-    chatLoadingRef.current = false;
+    setChatRunning(false);
+    chatRunningRef.current = false;
   }
 
   async function switchSession(id: string) {
-    if (chatLoadingRef.current) return; // 正在流式传输中不切换
-    setChatLoading(true); // 用 chatLoading 指示会话切换中
+    if (chatRunningRef.current) return; // 正在流式传输中不切换
+    setChatLoading(true);
     setChatError("");
     try {
       const detail = await apiRequest<SessionResponse | SessionDetail>(sessionPaths(id).get);
@@ -399,7 +408,7 @@ export function App() {
   }
 
   async function switchBranch(leafId: string) {
-    if (!sessionId || chatLoadingRef.current || leafId === agentSession.leafId) return;
+    if (!sessionId || chatRunningRef.current || leafId === agentSession.leafId) return;
     await abortRun();
     setChatLoading(true);
     setChatError("");
@@ -425,7 +434,8 @@ export function App() {
       setChatError(getErrorMessage(err, "切换分支失败"));
     } finally {
       setChatLoading(false);
-      chatLoadingRef.current = false;
+      setChatRunning(false);
+      chatRunningRef.current = false;
     }
   }
 
@@ -465,7 +475,8 @@ export function App() {
         setSessionId("");
         setSessionLoaded(false);
         setChatLoading(false);
-        chatLoadingRef.current = false;
+        setChatRunning(false);
+        chatRunningRef.current = false;
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
     } catch (err) {
@@ -497,7 +508,8 @@ export function App() {
     setSessionLoaded(false);
     queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all(selectedProjectID || undefined) });
     setChatLoading(false);
-    chatLoadingRef.current = false;
+    setChatRunning(false);
+    chatRunningRef.current = false;
   }
 
   React.useEffect(() => {
@@ -775,6 +787,7 @@ export function App() {
               session={agentSession}
               chatInput={chatInput}
               chatLoading={chatLoading}
+              chatRunning={chatRunning}
               chatError={chatError}
               sessions={sessions}
               skills={skills}

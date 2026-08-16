@@ -33,7 +33,7 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	if err := json.NewDecoder(listResp.Body).Decode(&infos); err != nil {
 		t.Fatalf("decode project list: %v", err)
 	}
-	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].MessageCount != 1 || infos[0].Summary != "hello" {
+	if len(infos) != 1 || infos[0].ID != sess.ID() || infos[0].ProjectID != "proj-1" || infos[0].QuestionCount != 1 || infos[0].Summary != "hello" {
 		t.Fatalf("project infos = %+v", infos)
 	}
 	topLevelListResp := serveAuthed(t, server, jwtToken, http.MethodGet, "/api/sessions", "")

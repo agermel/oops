@@ -246,7 +246,7 @@ type Info struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Entries   int
-	Messages  int
+	Questions int
 }
 
 type ForkPosition string

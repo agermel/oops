@@ -39,6 +39,40 @@ func TestBuildContextUsesCurrentLeafPath(t *testing.T) {
 	}
 }
 
+func TestInfoCountsOnlyUserMessages(t *testing.T) {
+	s := New("s1")
+	mustAppendMessage(t, s, "question")
+	mustAppendAssistantToolCall(t, s, "call_read", "read", `{"path":"README.md"}`)
+	mustAppendToolResult(t, s, "call_read", "read", "ok", nil)
+	if _, err := s.AppendMessage(protocol.AssistantMessage{
+		Content:    protocol.ContentList{protocol.NewTextContent("answer")},
+		StopReason: protocol.StopReasonStop,
+		Timestamp:  time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	info := s.Info()
+	if info.Questions != 1 {
+		t.Fatalf("question count = %d, want 1 user question", info.Questions)
+	}
+}
+
+func TestInfoCountsQuestionsOnActiveBranch(t *testing.T) {
+	s := New("s1")
+	root := mustAppendMessage(t, s, "root")
+	mustAppendMessage(t, s, "abandoned")
+	if err := s.MoveTo(root.ID); err != nil {
+		t.Fatal(err)
+	}
+	mustAppendMessage(t, s, "active")
+
+	info := s.Info()
+	if info.Questions != 2 {
+		t.Fatalf("question count = %d, want 2 active-branch user questions", info.Questions)
+	}
+}
+
 func TestBuildContextCompactionOrder(t *testing.T) {
 	s := New("s1")
 	if _, err := s.AppendModelChange("provider", "model-before-compaction"); err != nil {
@@ -887,8 +921,8 @@ func TestFileStorageLoadsProjectID(t *testing.T) {
 	if info.ProjectID != "proj-1" || info.CWD != "/tmp/project" || info.Name != "work" {
 		t.Fatalf("info = %+v", info)
 	}
-	if info.Messages != 0 || info.Entries != 1 {
-		t.Fatalf("counts = messages:%d entries:%d", info.Messages, info.Entries)
+	if info.Questions != 0 || info.Entries != 1 {
+		t.Fatalf("counts = questions:%d entries:%d", info.Questions, info.Entries)
 	}
 }
 

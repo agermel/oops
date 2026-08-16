@@ -69,7 +69,7 @@ func (s *Session) Info() Info {
 		CreatedAt: s.createdAt,
 		UpdatedAt: s.updatedAt,
 		Entries:   len(s.entries),
-		Messages:  s.messageCountLocked(),
+		Questions: s.questionCountLocked(),
 	}
 }
 
@@ -427,10 +427,13 @@ func (s *Session) storeEntryLocked(entry Entry) {
 	}
 }
 
-func (s *Session) messageCountLocked() int {
+func (s *Session) questionCountLocked() int {
 	count := 0
-	for _, entry := range s.entries {
-		if entry.Type == EntryMessage || entry.Type == EntryCustomMessage {
+	for _, entry := range s.pathToLeafLocked(s.executableLeafLocked(s.leafID)) {
+		if entry.Type != EntryMessage && entry.Type != EntryCustomMessage {
+			continue
+		}
+		if _, ok := protocol.AsUserMessage(entry.Message); ok {
 			count++
 		}
 	}

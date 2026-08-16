@@ -4,11 +4,23 @@ import type {
   AssistantMessage,
   ContentBlock,
   SessionDetail,
+  SessionInfo,
   SessionMessage,
   SessionResponse,
   ToolCallContent,
   ToolResultMessage,
 } from "../types";
+
+export function sessionInfosForTabs(
+  sessions: SessionInfo[],
+  activeSessionId: string,
+  activeFallback?: SessionInfo,
+): SessionInfo[] {
+  if (!activeSessionId || sessions.some((session) => session.id === activeSessionId)) {
+    return sessions;
+  }
+  return activeFallback ? [activeFallback, ...sessions] : sessions;
+}
 
 export const EMPTY_AGENT_SESSION: SessionResponse = {
   sessionId: "",

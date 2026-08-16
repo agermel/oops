@@ -31,7 +31,7 @@ import type {
 import { CHAT_MAX_SESSION_TABS } from "../types";
 import { getErrorMessage } from "../lib/api";
 import { useToolToggle, useTools, type ToolItem, type ToolsData } from "../hooks/useTools";
-import { messageKey, textFromContent, toolCallsFromMessage } from "../lib/session";
+import { messageKey, sessionInfosForTabs, textFromContent, toolCallsFromMessage } from "../lib/session";
 import {
   buildSessionTreeDisplay,
   sessionTreeRowPrefix,
@@ -57,6 +57,7 @@ export function ChatView({
   session,
   chatInput,
   chatLoading,
+  chatRunning,
   chatError,
   sessions,
   skills,
@@ -73,6 +74,7 @@ export function ChatView({
   session: SessionResponse;
   chatInput: string;
   chatLoading: boolean;
+  chatRunning: boolean;
   chatError: string;
   sessions: SessionInfo[];
   skills: Skill[];
@@ -89,6 +91,7 @@ export function ChatView({
   const sessionId = session.sessionId;
   const messages = session.messages || [];
   const events = session.events || [];
+  const chatBusy = chatLoading || chatRunning;
   const messageListRef = React.useRef<HTMLDivElement>(null);
   const shouldFollowMessagesRef = React.useRef(true);
   const [collapsedTreeIds, setCollapsedTreeIds] = React.useState<Set<string>>(() => new Set());
@@ -131,7 +134,7 @@ export function ChatView({
         content: (
           <SessionTabsPanel
             tabs={sessionTabs}
-            disabled={chatLoading}
+            disabled={chatBusy}
             onSelectSession={onSelectSession}
             onRenameSession={onRenameSession}
             onDeleteSession={onDeleteSession}
@@ -167,7 +170,7 @@ export function ChatView({
         content: (
           <SessionTree
             tree={tree}
-            disabled={chatLoading}
+            disabled={chatBusy}
             onSelectLeaf={onSelectLeaf}
             onToggleCollapse={toggleTreeCollapse}
           />
@@ -175,7 +178,7 @@ export function ChatView({
       },
     ],
     [
-      chatLoading,
+      chatBusy,
       onDeleteSession,
       onSelectLeaf,
       onSelectSession,
@@ -195,11 +198,11 @@ export function ChatView({
   const activeSidebarPanel = sidebarTabs.find((tab) => tab.id === activeSidebarTab) || sidebarTabs[0];
   const hasContent = messages.length > 0 || events.length > 0;
   const lastMessage = messages[messages.length - 1];
-  const showAssistantThinking = chatLoading && lastMessage?.role !== "assistant";
+  const showAssistantThinking = chatRunning && lastMessage?.role !== "assistant";
   const skillMenuItems = React.useMemo(() => {
-    if (!skillMenuOpen || chatLoading) return [];
+    if (!skillMenuOpen || chatBusy) return [];
     return skillSuggestions(chatInput, skills);
-  }, [chatInput, chatLoading, skillMenuOpen, skills]);
+  }, [chatBusy, chatInput, skillMenuOpen, skills]);
 
   const scrollMessagesToBottom = React.useCallback(() => {
     const list = messageListRef.current;
@@ -216,7 +219,7 @@ export function ChatView({
     if (shouldFollowMessagesRef.current) {
       scrollMessagesToBottom();
     }
-  }, [chatError, chatLoading, events.length, messages, scrollMessagesToBottom]);
+  }, [chatBusy, chatError, events.length, messages, scrollMessagesToBottom]);
 
   function handleMessageListScroll(event: React.UIEvent<HTMLDivElement>) {
     shouldFollowMessagesRef.current = isNearScrollBottom(event.currentTarget);
@@ -251,10 +254,10 @@ export function ChatView({
           <Bot size={18} />
           <span>Agent Runtime</span>
           {sessionId && <span className="runtime-session-id">{sessionId.slice(-10)}</span>}
-          {chatLoading && <span className="runtime-status">运行中</span>}
+          {chatRunning && <span className="runtime-status">运行中</span>}
         </div>
         <span className="chat-header-actions">
-          {chatLoading && (
+          {chatRunning && (
             <button onClick={onAbort} title="停止运行" aria-label="停止运行">
               <Square size={15} />
             </button>
@@ -278,14 +281,14 @@ export function ChatView({
           aria-live="polite"
           onScroll={handleMessageListScroll}
         >
-          {messages.length === 0 && !chatLoading && (
+          {messages.length === 0 && !chatBusy && (
             <div className="chat-empty">暂无消息</div>
           )}
           {messages.map((message, index) => (
             <AgentMessageView
               key={messageKey(message, index)}
               message={message}
-              animate={chatLoading && index === messages.length - 1 && lastMessage?.role === "assistant"}
+              animate={chatRunning && index === messages.length - 1 && lastMessage?.role === "assistant"}
             />
           ))}
           {showAssistantThinking && (
@@ -366,7 +369,7 @@ export function ChatView({
                 onSend();
               }
             }}
-            disabled={chatLoading}
+            disabled={chatBusy}
           />
           {skillMenuItems.length > 0 && (
             <div className="skill-command-menu" role="listbox" aria-label="Skill suggestions">
@@ -390,7 +393,7 @@ export function ChatView({
           )}
           <Button
             onClick={() => onSend()}
-            disabled={chatLoading || !chatInput.trim()}
+            disabled={chatBusy || !chatInput.trim()}
             title="发送"
             aria-label="发送消息"
           >
@@ -1024,24 +1027,18 @@ function enabledToolCount(tools: ToolItem[]): number {
 function buildSessionTabs(sessions: SessionInfo[], sessionId: string, messages: AgentMessage[]): SessionTab[] {
   const byID = new Map(sessions.map((session) => [session.id, session]));
   const activeSession = sessionId ? byID.get(sessionId) : undefined;
-  const activeTab = sessionId
-    ? [sessionTabFromInfo(
-        activeSession || {
-          id: sessionId,
-          title: "",
-          summary: firstUserMessageSummary(messages),
-          messageCount: messages.length,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-        sessionId,
-        messages,
-      )]
-    : [];
-  const historyTabs = sessions
-    .filter((session) => session.id !== sessionId)
+  const fallback = sessionId && !activeSession
+    ? {
+        id: sessionId,
+        title: "",
+        summary: firstUserMessageSummary(messages),
+        questionCount: messages.filter((message) => message.role === "user").length,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+    : undefined;
+  return sessionInfosForTabs(sessions, sessionId, fallback)
     .map((session) => sessionTabFromInfo(session, sessionId, messages));
-  return [...activeTab, ...historyTabs].filter((tab) => tab.id);
 }
 
 function sessionTabFromInfo(session: SessionInfo, activeSessionId: string, activeMessages: AgentMessage[]): SessionTab {
@@ -1052,14 +1049,11 @@ function sessionTabFromInfo(session: SessionInfo, activeSessionId: string, activ
       : firstNonEmpty(session.title, session.summary),
     session.id,
   );
-  const count = session.messageCount || (active ? activeMessages.length : 0);
+  const count = session.questionCount || (active ? activeMessages.filter((message) => message.role === "user").length : 0);
   const parts = [`${count} 条`];
   const age = relativeSessionTime(session.updatedAt || session.createdAt);
   if (age) {
     parts.push(age);
-  }
-  if (active) {
-    parts.unshift("当前");
   }
   return { id: session.id, title, meta: parts.join(" · "), active };
 }

@@ -502,7 +502,6 @@
 .runtime-session-edit button:disabled {
   color: var(--muted);
   cursor: default;
-  opacity: 0.55;
 }
 
 .runtime-session-edit {
