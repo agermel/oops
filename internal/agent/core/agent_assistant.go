@@ -7,7 +7,6 @@ import (
 )
 
 // 拿到当前会话 agentContext 和本轮配置 config
-// 调用 config.Stream 请求模型
 func streamAssistantResponse(ctx context.Context, agentContext AgentContext, config AgentLoopConfig, emit EventSink, turn int) (protocol.AssistantMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return emitAssistantError(ctx, emit, turn, config, err.Error(), protocol.StopReasonAborted)
@@ -28,6 +27,7 @@ func streamAssistantResponse(ctx context.Context, agentContext AgentContext, con
 		messages = cloneMessages(converted)
 	}
 
+	// 发起一次模型流式请求，并拿到 Provider 返回的 stream
 	stream, err := config.Stream(ctx, StreamRequest{
 		Context: protocol.Context{
 			SystemPrompt: agentContext.SystemPrompt,

@@ -527,6 +527,13 @@
   text-align: left;
 }
 
+.tree-container > svg,
+.tree-hidden-item > svg {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
 .tree-container:hover {
   background: var(--surface-hover);
 }
