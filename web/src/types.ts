@@ -158,12 +158,40 @@ export type ToolTestResult = {
   error?: string;
 };
 
+// MCPPromptArgument 是提示词模板的一个入参。
+export type MCPPromptArgument = {
+  name: string;
+  title?: string;
+  description?: string;
+  required: boolean;
+};
+
+// MCPPrompt 对应后端 PromptInfo，表示一个 server 预置提示词模板。
+export type MCPPrompt = {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: MCPPromptArgument[];
+};
+
+// MCPResource 对应后端 ResourceInfo，表示一个 server 暴露的只读资源。
+export type MCPResource = {
+  uri: string;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+  size?: number;
+};
+
 // MCPConnectionStatus 是带运行时状态的 MCP 连接。
 export type MCPConnectionStatus = MCPConnectionConfig & {
   status: "running" | "starting" | "stopped" | "error";
   error?: string;
   toolCount: number;
   tools?: ToolInfo[];
+  prompts?: MCPPrompt[];
+  resources?: MCPResource[];
 };
 
 // ProjectMCPConnection extends MCPConnectionStatus with a scope field that tells whether

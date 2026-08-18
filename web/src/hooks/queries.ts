@@ -35,5 +35,7 @@ export const queryKeys = {
   mcp: {
     all: ["mcp-connections"] as const,
     byProject: (projectId: string) => ["mcp", "project", projectId] as const,
+    resourceRead: (connectionId: string, uri: string) =>
+      ["mcp", "resource", connectionId, uri] as const,
   },
 };

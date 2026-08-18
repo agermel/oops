@@ -7,6 +7,7 @@ export function ContainerLogs({
   logs,
   loading,
   error,
+  transport,
   autoScroll,
   onAutoScrollChange,
   onClear,
@@ -15,11 +16,14 @@ export function ContainerLogs({
   logs: LogEntry[];
   loading: boolean;
   error: string;
+  transport?: string;
   autoScroll: boolean;
   onAutoScrollChange: (checked: boolean) => void;
   onClear: () => void;
   panelRef: React.RefObject<HTMLDivElement | null>;
 }) {
+  const transportLabel = transport?.toLowerCase() === "sse" ? "SSE" : transport ? "stdio" : "";
+
   // 1px 哨兵元素 —— IntersectionObserver 观察它是否在视口中
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
   // 是否有新日志在底部之外（用户上翻后）
@@ -109,6 +113,9 @@ export function ContainerLogs({
         <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
           <FileText size={18} />
           <h2>日志</h2>
+          {transportLabel && (
+            <span className={`log-transport-badge ${transportLabel.toLowerCase()}`}>{transportLabel}</span>
+          )}
         </span>
         <div className="log-actions">
           <label>

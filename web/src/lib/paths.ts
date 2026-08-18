@@ -78,6 +78,8 @@ export const mcpConnectionPaths = {
   logsStream: (id: string) => `/api/mcp/connections/${enc(id)}/logs/stream?tail=200`,
   toolTest: (connectionId: string, toolName: string) =>
     `/api/mcp/connections/${enc(connectionId)}/tools/${enc(toolName)}/test`,
+  readResource: (connectionId: string, uri: string) =>
+    `/api/mcp/connections/${enc(connectionId)}/resources/read?uri=${encodeURIComponent(uri)}`,
 } as const;
 
 // ---- Tools ----

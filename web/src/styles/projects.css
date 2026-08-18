@@ -1215,6 +1215,39 @@
   font-size: var(--text-sm);
 }
 
+/* MCP 资源列表 / 正文查看 */
+.mcp-resource-uri {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--gray-600);
+  word-break: break-all;
+}
+
+.mcp-resource-body {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.mcp-resource-body .muted {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.mcp-resource-text {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* ---- 日志 ---- */
 .container-logs {
   flex: 1;
@@ -1319,6 +1352,21 @@
   background: #bd271e;
 }
 
+.log-stream-tag.sse {
+  color: #1e3a8a;
+  background: #bfdbfe;
+}
+
+.log-stream-tag.system {
+  color: #374151;
+  background: #e5e7eb;
+}
+
+.log-stream-tag.other {
+  color: #374151;
+  background: #e5e7eb;
+}
+
 .log-level.unknown {
   color: #d8dee9;
   background: #4a515d;
@@ -1366,6 +1414,27 @@
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.log-transport-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--font-bold);
+  letter-spacing: 0;
+}
+
+.log-transport-badge.sse {
+  color: #1e3a8a;
+  background: #dbeafe;
+}
+
+.log-transport-badge.stdio {
+  color: #7c2d12;
+  background: #ffedd5;
 }
 
 .log-actions button {

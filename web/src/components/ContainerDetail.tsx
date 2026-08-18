@@ -1,5 +1,5 @@
 import React from "react";
-import { Info, Wrench, FileText, Settings, Edit3, Trash2, ArrowRight } from "lucide-react";
+import { Info, Wrench, FileText, Settings, Edit3, Trash2, ArrowRight, MessageSquare, FolderOpen } from "lucide-react";
 import type { LogEntry, ProjectMCPConnection, MCPConnectionConfig } from "../types";
 import { serviceTypeIcons, mcpStatusLabel } from "../types";
 import { useContainerDetail } from "../hooks/useContainerDetail";
@@ -16,6 +16,8 @@ import { ContainerDSN } from "./ContainerDSN";
 import { StatusDot } from "./StatusPill";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { MCPToolList } from "./MCPToolList";
+import { MCPPromptList } from "./MCPPromptList";
+import { MCPResourceList } from "./MCPResourceList";
 import { Button } from "./ui/Button";
 
 const CONTAINER_TABS = [
@@ -28,6 +30,8 @@ const CONTAINER_TABS = [
 const MCP_TABS = [
   { id: "overview", label: "概览", icon: Info },
   { id: "tools", label: "工具列表", icon: Wrench },
+  { id: "prompts", label: "提示词", icon: MessageSquare },
+  { id: "resources", label: "资源", icon: FolderOpen },
   { id: "logs", label: "日志", icon: FileText },
 ] as const;
 
@@ -357,6 +361,36 @@ export function MCPDetailView({
           </div>
         )}
 
+        {activeTab === "prompts" && (
+          <div role="tabpanel">
+            {conn.status === "running" && conn.prompts && conn.prompts.length > 0 ? (
+              <div className="overview-card" style={{ marginTop: 0 }}>
+                <div className="overview-card-head">
+                  <h3>提示词</h3>
+                </div>
+                <MCPPromptList prompts={conn.prompts} />
+              </div>
+            ) : (
+              <div className="empty-state">无运行中的提示词</div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "resources" && (
+          <div role="tabpanel">
+            {conn.status === "running" && conn.resources && conn.resources.length > 0 ? (
+              <div className="overview-card" style={{ marginTop: 0 }}>
+                <div className="overview-card-head">
+                  <h3>资源</h3>
+                </div>
+                <MCPResourceList connectionId={conn.id} resources={conn.resources} />
+              </div>
+            ) : (
+              <div className="empty-state">无运行中的资源</div>
+            )}
+          </div>
+        )}
+
         {activeTab === "logs" && (
           <div role="tabpanel">
             <ContainerLogs
@@ -364,6 +398,7 @@ export function MCPDetailView({
               logs={logs}
               loading={logsLoading}
               error={logsError}
+              transport={conn.transport || "stdio"}
               autoScroll={autoScroll}
               onAutoScrollChange={setAutoScroll}
               onClear={clearLogs}
