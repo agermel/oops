@@ -33,6 +33,11 @@ func formatMCPToolInventory(entries []mcp.ConnectionTool) string {
 			b.WriteString("- ")
 			b.WriteString(promptQuotedName(label))
 			b.WriteString(":\n")
+			if instructions := sanitizeInstructions(entry.Instructions); instructions != "" {
+				b.WriteString("  用法: ")
+				b.WriteString(instructions)
+				b.WriteString("\n")
+			}
 		}
 		name := entry.ModelName
 		if name == "" {
@@ -66,4 +71,24 @@ func promptQuotedName(s string) string {
 		s = string(runes[:maxRunes])
 	}
 	return strconv.Quote(s)
+}
+
+// sanitizeInstructions 清理 server 的 instructions 文本：去掉控制字符（含换行，
+// 避免 prompt 注入破坏清单结构）、折叠空白并截断到合理长度。
+func sanitizeInstructions(s string) string {
+	s = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s))
+	if s == "" {
+		return ""
+	}
+	const maxRunes = 400
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		s = strings.TrimSpace(string(runes[:maxRunes])) + " …"
+	}
+	return s
 }

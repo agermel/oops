@@ -66,7 +66,7 @@ func TestHandleMCPLogs(t *testing.T) {
 
 func TestWriteMCPToolTestErrorMapsDrainingToRetryableServiceUnavailable(t *testing.T) {
 	response := httptest.NewRecorder()
-	writeMCPToolTestError(response, fmt.Errorf("%w: conn-1", mcp.ErrConnectionDraining))
+	writeMCPRuntimeError(response, fmt.Errorf("%w: conn-1", mcp.ErrConnectionDraining))
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)

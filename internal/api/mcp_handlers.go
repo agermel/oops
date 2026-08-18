@@ -439,13 +439,38 @@ func (s *Server) handleMCPToolTestRoute(w http.ResponseWriter, r *http.Request) 
 			zap.String("tool", toolName),
 			zap.Error(err),
 		)
-		writeMCPToolTestError(w, err)
+		writeMCPRuntimeError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok", "output": output})
 }
 
-func writeMCPToolTestError(w http.ResponseWriter, err error) {
+// handleMCPResourceRead handles GET /api/mcp/connections/{id}/resources/read?uri=...
+func (s *Server) handleMCPResourceRead(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	uri := r.URL.Query().Get("uri")
+	if uri == "" {
+		writeJSONError(w, "uri is required", http.StatusBadRequest)
+		return
+	}
+	if s.mcpManager == nil {
+		writeJSONError(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	result, err := s.mcpManager.ReadResource(r.Context(), id, uri)
+	if err != nil {
+		logutil.Error("api: mcp resource read failed",
+			zap.String("connID", id),
+			zap.String("uri", uri),
+			zap.Error(err),
+		)
+		writeMCPRuntimeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func writeMCPRuntimeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, mcp.ErrConnectionDraining):
 		w.Header().Set("Retry-After", "1")

@@ -62,6 +62,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/mcp/connections/{id}/logs", authed(s.handleMCPLogs))
 	mux.HandleFunc("GET /api/mcp/connections/{id}/logs/stream", authed(s.handleMCPLogsStream))
 	mux.HandleFunc("POST /api/mcp/connections/{id}/tools/{toolName}/test", authed(s.handleMCPToolTestRoute))
+	mux.HandleFunc("GET /api/mcp/connections/{id}/resources/read", authed(s.handleMCPResourceRead))
 	mux.HandleFunc("POST /api/mcp/connections/test", authed(s.handleMCPTest))
 
 	// ---- Tools ----
