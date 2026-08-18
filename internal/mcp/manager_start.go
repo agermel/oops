@@ -13,6 +13,7 @@ import (
 	"oops/internal/logutil"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
 
@@ -160,9 +161,9 @@ func startProcess(ctx context.Context, cfg ConnectionConfig, hub *ConnectionLogH
 
 		var logWriter io.Writer
 		if hub != nil {
-			logWriter = hub.LineWriter("stderr")
+			logWriter = hub.LineWriter(connectionLogStream(transport))
 		}
-		session, tools, closer, err := ConnectWithLog(attemptCtx, mcpCfg, logWriter)
+		session, tools, instructions, closer, err := ConnectWithLog(attemptCtx, mcpCfg, logWriter)
 		var metadata []managedTool
 		if err == nil {
 			metadata, err = collectManagedTools(attemptCtx, tools)
@@ -176,6 +177,11 @@ func startProcess(ctx context.Context, cfg ConnectionConfig, hub *ConnectionLogH
 				err = fmt.Errorf("backend verify: %w", verifyErr)
 			}
 		}
+		var prompts []mcp.Prompt
+		var resources []mcp.Resource
+		if err == nil {
+			prompts, resources = discoverPromptsAndResources(attemptCtx, session, hub)
+		}
 		if err != nil && closer != nil {
 			closer()
 			closer = nil
@@ -187,11 +193,14 @@ func startProcess(ctx context.Context, cfg ConnectionConfig, hub *ConnectionLogH
 				hub.Append("system", "info", fmt.Sprintf("connect attempt %d/%d passed", attempt, maxAttempts))
 			}
 			process = &managedProcess{
-				cfg:      cfg,
-				session:  session,
-				closer:   closer,
-				tools:    tools,
-				metadata: metadata,
+				cfg:          cfg,
+				session:      session,
+				closer:       closer,
+				tools:        tools,
+				metadata:     metadata,
+				instructions: instructions,
+				prompts:      prompts,
+				resources:    resources,
 			}
 			return nil
 		}
@@ -221,6 +230,31 @@ func startProcess(ctx context.Context, cfg ConnectionConfig, hub *ConnectionLogH
 		return nil, fmt.Errorf("connect (%d attempts): %w", maxAttempts, err)
 	}
 	return process, nil
+}
+
+// discoverPromptsAndResources 尽力拉取 server 暴露的 prompts 与 resources 列表。
+// 许多 server 并未实现 prompts/resources capability，对应调用会返回错误；这类失败
+// 不影响连接建立，降级为空列表并记录日志即可。
+func discoverPromptsAndResources(ctx context.Context, session MCPSession, hub *ConnectionLogHub) ([]mcp.Prompt, []mcp.Resource) {
+	var prompts []mcp.Prompt
+	if res, err := session.ListPrompts(ctx, mcp.ListPromptsRequest{}); err != nil {
+		if hub != nil {
+			hub.Append("system", "warn", fmt.Sprintf("prompts/list unavailable: %v", err))
+		}
+	} else {
+		prompts = res.Prompts
+	}
+
+	var resources []mcp.Resource
+	if res, err := session.ListResources(ctx, mcp.ListResourcesRequest{}); err != nil {
+		if hub != nil {
+			hub.Append("system", "warn", fmt.Sprintf("resources/list unavailable: %v", err))
+		}
+	} else {
+		resources = res.Resources
+	}
+
+	return prompts, resources
 }
 
 func isPermanentStartError(err error) bool {

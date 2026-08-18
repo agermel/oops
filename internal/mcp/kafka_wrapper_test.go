@@ -62,7 +62,7 @@ done
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, tools, closer, err := ConnectWithLog(ctx, config.MCPConfig{
+	_, tools, _, closer, err := ConnectWithLog(ctx, config.MCPConfig{
 		Transport: "stdio",
 		Command:   "../../mcp-servers/kafka/kafka-mcp",
 		Env: append(kafkaWrapperEnv(),

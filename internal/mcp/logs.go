@@ -20,6 +20,13 @@ const (
 	connectionLogTruncatedMarker = " …[truncated]"
 )
 
+func connectionLogStream(transport string) string {
+	if strings.EqualFold(transport, "sse") {
+		return "sse"
+	}
+	return "stderr"
+}
+
 var (
 	// ErrConnectionLogSubscriberLimit reports an overloaded MCP log stream.
 	ErrConnectionLogSubscriberLimit = errors.New("connection log subscriber limit reached")

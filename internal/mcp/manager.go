@@ -84,6 +84,32 @@ type ToolInfo struct {
 	ConnectionType string `json:"connectionType,omitempty"`
 }
 
+// PromptInfo 是 server 预置提示词模板的基本信息，供前端展示。
+type PromptInfo struct {
+	Name        string               `json:"name"`
+	Title       string               `json:"title,omitempty"`
+	Description string               `json:"description,omitempty"`
+	Arguments   []PromptArgumentInfo `json:"arguments,omitempty"`
+}
+
+// PromptArgumentInfo 是提示词模板的一个入参。
+type PromptArgumentInfo struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required"`
+}
+
+// ResourceInfo 是 server 暴露的只读资源的基本信息，供前端展示。
+type ResourceInfo struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+	Size        *int64 `json:"size,omitempty"`
+}
+
 // ConnectionTool is a running MCP tool with the owning connection metadata.
 type ConnectionTool struct {
 	ConnectionID   string
@@ -94,6 +120,7 @@ type ConnectionTool struct {
 	OriginalName   string
 	ModelName      string
 	Description    string
+	Instructions   string
 	Tool           tool.BaseTool
 }
 
@@ -115,10 +142,12 @@ type ConnectionConfig struct {
 // ConnectionWithStatus is the public-facing view of a connection.
 type ConnectionWithStatus struct {
 	ConnectionConfig
-	Status    string     `json:"status"` // "running" | "starting" | "stopped" | "error"
-	Error     string     `json:"error,omitempty"`
-	ToolCount int        `json:"toolCount"`
-	Tools     []ToolInfo `json:"tools,omitempty"`
+	Status    string         `json:"status"` // "running" | "starting" | "stopped" | "error"
+	Error     string         `json:"error,omitempty"`
+	ToolCount int            `json:"toolCount"`
+	Tools     []ToolInfo     `json:"tools,omitempty"`
+	Prompts   []PromptInfo   `json:"prompts,omitempty"`
+	Resources []ResourceInfo `json:"resources,omitempty"`
 }
 
 type managerState struct {
@@ -231,6 +260,8 @@ func (m *Manager) connectionStatusLocked(cfg ConnectionConfig) ConnectionWithSta
 		item.Status = "running"
 		item.ToolCount = len(proc.metadata)
 		item.Tools = m.toolInfosForConnectionLocked(cfg.ID)
+		item.Prompts = promptInfos(proc)
+		item.Resources = resourceInfos(proc)
 	} else if cfg.Enabled {
 		if _, ok := m.starting[cfg.ID]; ok {
 			item.Status = "starting"
@@ -742,9 +773,9 @@ func (m *Manager) testConnection(ctx context.Context, cfg ConnectionConfig, hub 
 
 	var logWriter io.Writer
 	if hub != nil {
-		logWriter = hub.LineWriter("stderr")
+		logWriter = hub.LineWriter(connectionLogStream(transport))
 	}
-	session, tools, closer, err := ConnectWithLog(ctx, mcpCfg, logWriter)
+	session, tools, _, closer, err := ConnectWithLog(ctx, mcpCfg, logWriter)
 	if err != nil {
 		// stderr 已由 Connect/connectStdio 附在 error 中，此处不再重复拼接。
 		return fmt.Errorf("%w: test connect: %w", ErrTestConnectFailed, err)
@@ -1012,6 +1043,91 @@ func (m *Manager) connectionToolInfosLocked() map[string][]ToolInfo {
 	return result
 }
 
+// promptInfos 把 process 缓存的 prompt 元数据转成前端可见结构。
+func promptInfos(proc *managedProcess) []PromptInfo {
+	if len(proc.prompts) == 0 {
+		return nil
+	}
+	infos := make([]PromptInfo, 0, len(proc.prompts))
+	for _, p := range proc.prompts {
+		info := PromptInfo{
+			Name:        p.Name,
+			Title:       p.Title,
+			Description: p.Description,
+		}
+		for _, arg := range p.Arguments {
+			info.Arguments = append(info.Arguments, PromptArgumentInfo{
+				Name:        arg.Name,
+				Title:       arg.Title,
+				Description: arg.Description,
+				Required:    arg.Required,
+			})
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
+// resourceInfos 把 process 缓存的 resource 元数据转成前端可见结构。
+func resourceInfos(proc *managedProcess) []ResourceInfo {
+	if len(proc.resources) == 0 {
+		return nil
+	}
+	infos := make([]ResourceInfo, 0, len(proc.resources))
+	for _, r := range proc.resources {
+		infos = append(infos, ResourceInfo{
+			URI:         r.URI,
+			Name:        r.Name,
+			Title:       r.Title,
+			Description: r.Description,
+			MIMEType:    r.MIMEType,
+			Size:        r.Size,
+		})
+	}
+	return infos
+}
+
+// ReadResource 读取某个运行中连接的一个 resource 的正文。
+// 它只短暂持有 manager 锁以取得进程 lease，真正的读取在锁外进行，这样
+// 生命周期变更仍能安全地 drain。
+func (m *Manager) ReadResource(ctx context.Context, connID, uri string) (*mcp.ReadResourceResult, error) {
+	m.mu.Lock()
+	proc, ok := m.processes[connID]
+	if !ok {
+		for draining := range m.draining {
+			if draining.cfg.ID == connID {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: %q", ErrConnectionDraining, connID)
+			}
+		}
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", ErrConnectionNotRunning, connID)
+	}
+	release, err := proc.acquire()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", err, connID)
+	}
+	session := proc.session
+	cfgName := proc.cfg.Name
+	m.mu.Unlock()
+	defer release()
+
+	req := mcp.ReadResourceRequest{}
+	req.Params.URI = uri
+
+	result, err := session.ReadResource(ctx, req)
+	if err != nil {
+		logutil.Error("mcp: read resource error",
+			zap.String("conn", cfgName),
+			zap.String("uri", uri),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("%w: read %q: %w", ErrToolCallFailed, uri, err)
+	}
+	return result, nil
+}
+
 func (m *Manager) refreshVisibleToolsLocked() *toolChange {
 	next := m.buildVisibleToolsLocked()
 	if sameVisibleTools(m.visibleTools, next) {
@@ -1049,7 +1165,8 @@ func sameVisibleTools(a, b []ConnectionTool) bool {
 			a[i].ServerName != b[i].ServerName ||
 			a[i].OriginalName != b[i].OriginalName ||
 			a[i].ModelName != b[i].ModelName ||
-			a[i].Description != b[i].Description {
+			a[i].Description != b[i].Description ||
+			a[i].Instructions != b[i].Instructions {
 			return false
 		}
 	}

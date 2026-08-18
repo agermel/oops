@@ -428,6 +428,18 @@ func (*blockingMCPSession) Ping(context.Context) error {
 	return nil
 }
 
+func (*blockingMCPSession) ListPrompts(context.Context, mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error) {
+	return &mcp.ListPromptsResult{}, nil
+}
+
+func (*blockingMCPSession) ListResources(context.Context, mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error) {
+	return &mcp.ListResourcesResult{}, nil
+}
+
+func (*blockingMCPSession) ReadResource(context.Context, mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return &mcp.ReadResourceResult{}, nil
+}
+
 type statusCodeError struct {
 	status int
 }

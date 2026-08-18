@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // managedTool keeps metadata obtained before a process becomes visible to the
@@ -22,11 +23,14 @@ type managedTool struct {
 // A lease keeps the underlying transport alive while a tool call or health
 // probe uses it. Draining rejects new leases and lets existing callers finish.
 type managedProcess struct {
-	cfg      ConnectionConfig
-	session  MCPSession
-	closer   func()
-	tools    []tool.BaseTool
-	metadata []managedTool
+	cfg          ConnectionConfig
+	session      MCPSession
+	closer       func()
+	tools        []tool.BaseTool
+	metadata     []managedTool
+	instructions string
+	prompts      []mcp.Prompt
+	resources    []mcp.Resource
 
 	mu        sync.Mutex
 	draining  bool
@@ -175,6 +179,7 @@ func (p *managedProcess) connectionTools() []ConnectionTool {
 			NodeletID:      p.cfg.NodeletID,
 			OriginalName:   metadata.info.Name,
 			Description:    metadata.info.Desc,
+			Instructions:   p.instructions,
 			Tool:           leasedToolFor(p, metadata),
 		})
 	}
