@@ -19,7 +19,10 @@ func formatMCPToolInventory(entries []mcp.ConnectionTool) string {
 	b.WriteString("这些工具已经注册到当前 Agent。用户询问 MCP 能力或可用工具时，直接基于此清单回答；调用工具时必须使用括号中的模型工具名。\n")
 
 	current := ""
+	// 遍历每个 mcp connection
 	for _, entry := range entries {
+		// 标识当前工具属于哪个连接
+		// label 同时干两件事：当分组的键、当组标题的文本
 		label := entry.ConnectionName
 		if label == "" {
 			label = entry.ConnectionID
@@ -28,6 +31,8 @@ func formatMCPToolInventory(entries []mcp.ConnectionTool) string {
 			label = fmt.Sprintf("%s/%s", entry.ConnectionType, label)
 		}
 		if label != current {
+			// 输出 label
+			// 保存 instruction 吗
 			current = label
 			b.WriteString("\n")
 			b.WriteString("- ")

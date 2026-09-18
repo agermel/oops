@@ -54,16 +54,27 @@ export function sessionFromDetail(detail: SessionDetail): SessionResponse {
   };
 }
 
-export function sessionFromAPI(detail: SessionResponse | SessionDetail): SessionResponse {
+type SessionResponseInput = Omit<SessionResponse, "messages" | "events" | "tools" | "entries"> & {
+  messages?: SessionResponse["messages"] | null;
+  events?: SessionResponse["events"] | null;
+  tools?: SessionResponse["tools"] | null;
+  entries?: SessionResponse["entries"] | null;
+};
+
+function normalizeSessionResponse(detail: SessionResponseInput): SessionResponse {
+  return {
+    ...EMPTY_AGENT_SESSION,
+    ...detail,
+    messages: detail.messages ?? [],
+    events: detail.events ?? [],
+    tools: detail.tools ?? [],
+    entries: detail.entries ?? [],
+  };
+}
+
+export function sessionFromAPI(detail: SessionResponseInput | SessionDetail): SessionResponse {
   if ("sessionId" in detail) {
-    return {
-      ...EMPTY_AGENT_SESSION,
-      ...detail,
-      messages: detail.messages || [],
-      events: detail.events || [],
-      tools: detail.tools || [],
-      entries: detail.entries || [],
-    };
+    return normalizeSessionResponse(detail);
   }
   return sessionFromDetail(detail);
 }
@@ -87,17 +98,19 @@ export function applyAgentEventToSession(session: SessionResponse, event: AgentE
 
 export function applyTerminalSnapshotToSession(
   session: SessionResponse,
-  terminal: SessionResponse,
+  terminal: SessionResponseInput,
 ): SessionResponse {
+  const snapshot = normalizeSessionResponse(terminal);
   return {
     ...session,
-    ...terminal,
-    sessionId: terminal.sessionId || session.sessionId,
-    leafId: terminal.leafId || session.leafId,
-    messages: terminal.messages.length > 0 ? terminal.messages : session.messages,
-    events: terminal.events.length > 0 ? terminal.events : session.events,
-    tools: terminal.tools.length > 0 ? terminal.tools : session.tools,
-    entries: terminal.entries.length > 0 ? terminal.entries : session.entries,
+    ...snapshot,
+    sessionId: snapshot.sessionId || session.sessionId,
+    leafId: snapshot.leafId || session.leafId,
+    // Bounded terminal snapshots omit payloads already received through the stream.
+    messages: snapshot.messages.length > 0 ? snapshot.messages : session.messages,
+    events: snapshot.events.length > 0 ? snapshot.events : session.events,
+    tools: snapshot.tools.length > 0 ? snapshot.tools : session.tools,
+    entries: snapshot.entries.length > 0 ? snapshot.entries : session.entries,
   };
 }
 

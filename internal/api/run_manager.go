@@ -382,10 +382,6 @@ func (r *runState) publish(item runStreamItem) {
 		r.fail(fmt.Sprintf("encode run event: %v", err))
 		return
 	}
-	if frame.size() > r.limits.MaxEventBytes {
-		r.fail(fmt.Sprintf("run event exceeds %d byte limit", r.limits.MaxEventBytes))
-		return
-	}
 
 	r.mu.Lock()
 	if r.done {

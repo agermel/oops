@@ -172,6 +172,7 @@ type MCPSession interface {
 	ListPrompts(ctx context.Context, req mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error)
 	ListResources(ctx context.Context, req mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error)
 	ReadResource(ctx context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error)
+	GetPrompt(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error)
 }
 
 // Verify checks that an MCP session is alive by sending a protocol-level ping.

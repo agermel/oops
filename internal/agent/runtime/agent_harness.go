@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -94,6 +95,24 @@ type SessionSnapshot struct {
 	Events     []protocol.AgentEvent     `json:"events"`
 	Tools      []protocol.ToolDefinition `json:"tools"`
 	Entries    []session.Entry           `json:"entries"`
+}
+
+// MarshalJSON keeps snapshot collections as arrays at both HTTP and SSE boundaries.
+func (snapshot SessionSnapshot) MarshalJSON() ([]byte, error) {
+	type plainSnapshot SessionSnapshot
+	if snapshot.Messages == nil {
+		snapshot.Messages = protocol.MessageList{}
+	}
+	if snapshot.Events == nil {
+		snapshot.Events = []protocol.AgentEvent{}
+	}
+	if snapshot.Tools == nil {
+		snapshot.Tools = []protocol.ToolDefinition{}
+	}
+	if snapshot.Entries == nil {
+		snapshot.Entries = []session.Entry{}
+	}
+	return json.Marshal(plainSnapshot(snapshot))
 }
 
 func ClearSnapshotPayload(snapshot SessionSnapshot) SessionSnapshot {

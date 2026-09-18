@@ -53,6 +53,21 @@ func readRunSubscription(t *testing.T, subscription *runSubscription) []runFrame
 	}
 }
 
+func assertTerminalSnapshotJSONArrays(t *testing.T, frame runFrame) {
+	t.Helper()
+	_, data, ok := strings.Cut(string(frame.data), "\ndata: ")
+	if !ok {
+		t.Fatal("terminal event has no data")
+	}
+	var event struct {
+		Session json.RawMessage `json:"session"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &event); err != nil {
+		t.Fatal(err)
+	}
+	assertSnapshotJSONArrays(t, event.Session)
+}
+
 func TestRunManagerDefaultActiveCapacity(t *testing.T) {
 	manager := newRunManagerForTest(t)
 	limits := config.DefaultRunLimits()
@@ -169,7 +184,6 @@ func TestRunManagerRetainsLatestHistoryWithoutCancellingRun(t *testing.T) {
 	limits := config.DefaultRunLimits()
 	limits.MaxRetainedEvents = 1
 	limits.MaxRetainedBytes = 1024
-	limits.MaxEventBytes = 512
 	limits.MaxTerminalBytes = 512
 	limits.MaxErrorTextBytes = 64
 	manager := newRunManagerForTest(t, limits)
@@ -262,33 +276,46 @@ func TestRunManagerRetainsLatestHistoryWithoutCancellingRun(t *testing.T) {
 	}
 }
 
-func TestRunManagerRetainedByteAndSingleEventLimitsKeepBoundedTerminal(t *testing.T) {
+func TestRunManagerLargeEventsAndRetainedByteLimits(t *testing.T) {
 	item := testRunItem(1, strings.Repeat("x", 128))
 	frame, err := encodeRunFrame(item)
 	if err != nil {
 		t.Fatalf("encode test frame: %v", err)
 	}
 
-	t.Run("single event", func(t *testing.T) {
-		limits := config.DefaultRunLimits()
-		limits.MaxEventBytes = frame.size() - 1
-		manager := newRunManagerForTest(t, limits)
-		run, runCtx := activateRunWithContextForTest(t, manager, "run-event-limit", "sess-1")
-
-		run.publish(item)
-		if runCtx.Err() == nil {
-			t.Fatal("run context remains active after single-event limit failure")
-		}
+	t.Run("large event is delivered intact and replayed", func(t *testing.T) {
+		manager := newRunManagerForTest(t)
+		run, runCtx := activateRunWithContextForTest(t, manager, "run-large-event", "sess-1")
 		subscription, err := manager.subscribe(run.id)
 		if err != nil {
 			t.Fatalf("subscribe: %v", err)
 		}
-		frames := readRunSubscription(t, subscription)
-		if len(frames) != 1 || !strings.Contains(string(frames[0].data), "event: run_error\n") {
-			t.Fatalf("frames = %q, want one bounded run_error", frames)
+		defer subscription.unsubscribe()
+		text := strings.Repeat("x", 300<<10)
+		largeItem := testRunItem(1, text)
+		want, err := encodeRunFrame(largeItem)
+		if err != nil {
+			t.Fatalf("encode large event: %v", err)
 		}
-		if frames[0].size() > manager.limits.MaxTerminalBytes {
-			t.Fatalf("terminal frame size = %d, limit = %d", frames[0].size(), manager.limits.MaxTerminalBytes)
+		run.publish(largeItem)
+		if err := runCtx.Err(); err != nil {
+			t.Fatalf("run context after large event = %v, want active", err)
+		}
+		run.publishTerminal(runStreamItem{name: "run_done", payload: runDoneEvent{Type: "run_done"}})
+		frames := readRunSubscription(t, subscription)
+		if len(frames) != 2 || string(frames[0].data) != string(want.data) ||
+			!strings.Contains(string(frames[1].data), "event: run_done\n") {
+			t.Fatal("live stream did not deliver the complete large event followed by run_done")
+		}
+		reconnected, err := manager.subscribe(run.id)
+		if err != nil {
+			t.Fatalf("reconnect: %v", err)
+		}
+		defer reconnected.unsubscribe()
+		replayed := readRunSubscription(t, reconnected)
+		if len(replayed) != 2 || string(replayed[0].data) != string(want.data) ||
+			!strings.Contains(string(replayed[1].data), "event: run_done\n") {
+			t.Fatal("replay did not deliver the complete large event followed by run_done")
 		}
 	})
 
@@ -309,11 +336,11 @@ func TestRunManagerRetainedByteAndSingleEventLimitsKeepBoundedTerminal(t *testin
 			!strings.Contains(string(frames[0].data), "encode run event") {
 			t.Fatalf("frames = %q, want encoding run_error", frames)
 		}
+		assertTerminalSnapshotJSONArrays(t, frames[0])
 	})
 
 	t.Run("retained bytes", func(t *testing.T) {
 		limits := config.DefaultRunLimits()
-		limits.MaxEventBytes = frame.size()
 		limits.MaxRetainedBytes = frame.size()
 		manager := newRunManagerForTest(t, limits)
 		run, runCtx := activateRunWithContextForTest(t, manager, "run-byte-limit", "sess-1")
@@ -373,7 +400,6 @@ func TestRunManagerRetainedByteAndSingleEventLimitsKeepBoundedTerminal(t *testin
 		}
 		limits := config.DefaultRunLimits()
 		limits.MaxRetainedBytes = budget
-		limits.MaxEventBytes = budget
 		manager := newRunManagerForTest(t, limits)
 		run, runCtx := activateRunWithContextForTest(t, manager, "run-multi-byte-eviction", "sess-1")
 
@@ -406,7 +432,6 @@ func TestRunManagerRetainedByteAndSingleEventLimitsKeepBoundedTerminal(t *testin
 			t.Fatalf("encode small frame: %v", err)
 		}
 		limits := config.DefaultRunLimits()
-		limits.MaxEventBytes = frame.size()
 		limits.MaxRetainedBytes = smallFrame.size()
 		manager := newRunManagerForTest(t, limits)
 		run, runCtx := activateRunWithContextForTest(t, manager, "run-live-only", "sess-1")
@@ -940,6 +965,46 @@ func TestRunManagerBoundsTerminalSnapshotAndExpiresCompletedRun(t *testing.T) {
 			t.Fatal("completed run did not expire")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRunManagerTerminalSnapshotJSONArrays(t *testing.T) {
+	for _, eventType := range []string{"run_done", "run_error"} {
+		for _, scenario := range []string{"empty", "bounded", "invalid"} {
+			t.Run(eventType+"/"+scenario, func(t *testing.T) {
+				manager := newRunManagerForTest(t)
+				run := activateRunForTest(t, manager, "run-terminal-arrays", "s1")
+				snapshot := agentruntime.SessionSnapshot{SessionID: "s1"}
+				if scenario == "bounded" {
+					snapshot.Messages = protocol.MessageList{protocol.UserMessage{Content: protocol.ContentList{protocol.NewTextContent(strings.Repeat("x", manager.limits.MaxTerminalBytes))}}}
+				} else if scenario == "invalid" {
+					snapshot.Messages = protocol.MessageList{nil}
+				}
+				item := runStreamItem{name: eventType, payload: runDoneEvent{Type: eventType, Session: snapshot}}
+				if eventType == "run_error" {
+					item.payload = runErrorEvent{Type: eventType, Error: "original failure", Session: snapshot}
+				}
+				run.publishTerminal(item)
+				subscription, err := manager.subscribe(run.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				frames := readRunSubscription(t, subscription)
+				if len(frames) != 1 {
+					t.Fatalf("terminal count = %d, want 1", len(frames))
+				}
+				assertTerminalSnapshotJSONArrays(t, frames[0])
+				want := "event: " + eventType + "\n"
+				if scenario == "invalid" {
+					want = "run terminal event could not be encoded"
+				} else if eventType == "run_error" {
+					want = "original failure"
+				}
+				if !strings.Contains(string(frames[0].data), want) || frames[0].size() > manager.limits.MaxTerminalBytes {
+					t.Fatal("terminal event lost its outcome or exceeded the byte budget")
+				}
+			})
+		}
 	}
 }
 

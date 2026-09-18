@@ -20,9 +20,6 @@ func BenchmarkRunManagerDefault32ActiveReplay(b *testing.B) {
 	if err != nil {
 		b.Fatalf("encode benchmark frame: %v", err)
 	}
-	if frame.size() > limits.MaxEventBytes {
-		b.Fatalf("benchmark frame size = %d, max event bytes = %d", frame.size(), limits.MaxEventBytes)
-	}
 	if frame.size()*limits.MaxRetainedEvents > limits.MaxRetainedBytes {
 		b.Fatalf("benchmark replay size = %d, max retained bytes = %d", frame.size()*limits.MaxRetainedEvents, limits.MaxRetainedBytes)
 	}

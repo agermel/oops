@@ -1128,6 +1128,117 @@ func (m *Manager) ReadResource(ctx context.Context, connID, uri string) (*mcp.Re
 	return result, nil
 }
 
+// ListResources 列出某个运行中连接的 resource 列表。
+// 与 ReadResource 一样只短暂持锁取得 lease，真正的调用在锁外进行。
+func (m *Manager) ListResources(ctx context.Context, connID string) (*mcp.ListResourcesResult, error) {
+	m.mu.Lock()
+	proc, ok := m.processes[connID]
+	if !ok {
+		for draining := range m.draining {
+			if draining.cfg.ID == connID {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: %q", ErrConnectionDraining, connID)
+			}
+		}
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", ErrConnectionNotRunning, connID)
+	}
+	release, err := proc.acquire()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", err, connID)
+	}
+	session := proc.session
+	cfgName := proc.cfg.Name
+	m.mu.Unlock()
+	defer release()
+
+	result, err := session.ListResources(ctx, mcp.ListResourcesRequest{})
+	if err != nil {
+		logutil.Error("mcp: list resources error",
+			zap.String("conn", cfgName),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("%w: list resources: %w", ErrToolCallFailed, err)
+	}
+	return result, nil
+}
+
+// ListPrompts 列出某个运行中连接的 prompt 列表。
+func (m *Manager) ListPrompts(ctx context.Context, connID string) (*mcp.ListPromptsResult, error) {
+	m.mu.Lock()
+	proc, ok := m.processes[connID]
+	if !ok {
+		for draining := range m.draining {
+			if draining.cfg.ID == connID {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: %q", ErrConnectionDraining, connID)
+			}
+		}
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", ErrConnectionNotRunning, connID)
+	}
+	release, err := proc.acquire()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", err, connID)
+	}
+	session := proc.session
+	cfgName := proc.cfg.Name
+	m.mu.Unlock()
+	defer release()
+
+	result, err := session.ListPrompts(ctx, mcp.ListPromptsRequest{})
+	if err != nil {
+		logutil.Error("mcp: list prompts error",
+			zap.String("conn", cfgName),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("%w: list prompts: %w", ErrToolCallFailed, err)
+	}
+	return result, nil
+}
+
+// GetPrompt 获取某个运行中连接的一个 prompt 的正文（消息列表）。
+func (m *Manager) GetPrompt(ctx context.Context, connID, name string, args map[string]string) (*mcp.GetPromptResult, error) {
+	m.mu.Lock()
+	proc, ok := m.processes[connID]
+	if !ok {
+		for draining := range m.draining {
+			if draining.cfg.ID == connID {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: %q", ErrConnectionDraining, connID)
+			}
+		}
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", ErrConnectionNotRunning, connID)
+	}
+	release, err := proc.acquire()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q", err, connID)
+	}
+	session := proc.session
+	cfgName := proc.cfg.Name
+	m.mu.Unlock()
+	defer release()
+
+	req := mcp.GetPromptRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+
+	result, err := session.GetPrompt(ctx, req)
+	if err != nil {
+		logutil.Error("mcp: get prompt error",
+			zap.String("conn", cfgName),
+			zap.String("prompt", name),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("%w: get prompt %q: %w", ErrToolCallFailed, name, err)
+	}
+	return result, nil
+}
+
 func (m *Manager) refreshVisibleToolsLocked() *toolChange {
 	next := m.buildVisibleToolsLocked()
 	if sameVisibleTools(m.visibleTools, next) {

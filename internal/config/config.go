@@ -48,7 +48,6 @@ type RunLimits struct {
 	MaxActiveRuns            int           `mapstructure:"max_active_runs"`
 	MaxRetainedEvents        int           `mapstructure:"max_retained_events"`
 	MaxRetainedBytes         int           `mapstructure:"max_retained_bytes"`
-	MaxEventBytes            int           `mapstructure:"max_event_bytes"`
 	MaxTerminalBytes         int           `mapstructure:"max_terminal_bytes"`
 	MaxErrorTextBytes        int           `mapstructure:"max_error_text_bytes"`
 	MaxSubscribers           int           `mapstructure:"max_subscribers"`
@@ -66,7 +65,6 @@ func DefaultRunLimits() RunLimits {
 		MaxActiveRuns:            32,
 		MaxRetainedEvents:        512,
 		MaxRetainedBytes:         4 << 20,
-		MaxEventBytes:            256 << 10,
 		MaxTerminalBytes:         8 << 10,
 		MaxErrorTextBytes:        2 << 10,
 		MaxSubscribers:           16,
@@ -90,9 +88,6 @@ func (l RunLimits) WithDefaults() RunLimits {
 	}
 	if l.MaxRetainedBytes <= 0 {
 		l.MaxRetainedBytes = d.MaxRetainedBytes
-	}
-	if l.MaxEventBytes <= 0 {
-		l.MaxEventBytes = d.MaxEventBytes
 	}
 	if l.MaxTerminalBytes < minRunTerminalBytes {
 		if l.MaxTerminalBytes > 0 {

@@ -42,8 +42,9 @@ func (s *Server) chatToolsAndInventory(ctx context.Context, projectID string) ([
 		logutil.Error("mcp: create native tools", zap.Error(err))
 		return nil, ""
 	}
+	nativeNames := nativeToolNames(ctx, nativeTools)
 	entries := s.mcpToolEntriesForProject(projectID)
-	namespacedEntries := namespaceMCPTools(entries, nativeToolNames(ctx, nativeTools))
+	namespacedEntries := namespaceMCPTools(entries, nativeNames)
 
 	allTools := make([]tool.InvokableTool, 0, len(nativeTools)+len(namespacedEntries))
 	allTools = append(allTools, nativeTools...)
@@ -55,6 +56,29 @@ func (s *Server) chatToolsAndInventory(ctx context.Context, projectID string) ([
 			})
 		}
 	}
+
+	// 合成访问器工具（把连接的 prompts/resources 暴露成 LLM 可调用工具）。
+	// 只追加到 Tools，不进 formatMCPToolInventory 的清单、不进前端工具列表。
+	if s.mcpManager != nil {
+		synthetic := buildSyntheticAccessorEntries(s.mcpManager.List(), s.mcpManager)
+		synthetic = filterMCPToolEntriesForProject(synthetic, projectID, s.projectStore)
+		reserved := make(map[string]struct{}, len(nativeNames)+len(namespacedEntries))
+		for name := range nativeNames {
+			reserved[name] = struct{}{}
+		}
+		for _, e := range namespacedEntries {
+			reserved[e.ModelName] = struct{}{}
+		}
+		for _, e := range namespaceMCPTools(synthetic, reserved) {
+			if it, ok := e.Tool.(tool.InvokableTool); ok {
+				allTools = append(allTools, namespacedMCPTool{
+					modelName: e.ModelName,
+					inner:     it,
+				})
+			}
+		}
+	}
+
 	return allTools, formatMCPToolInventory(namespacedEntries)
 }
 

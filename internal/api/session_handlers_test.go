@@ -15,6 +15,20 @@ import (
 	"oops/internal/agent/runtime/session"
 )
 
+func assertSnapshotJSONArrays(t *testing.T, data []byte) {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("decode snapshot JSON: %v", err)
+	}
+	for _, field := range []string{"messages", "events", "tools", "entries"} {
+		var items []json.RawMessage
+		if err := json.Unmarshal(fields[field], &items); err != nil || items == nil {
+			t.Errorf("%s = %s, want JSON array (err=%v)", field, fields[field], err)
+		}
+	}
+}
+
 func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	storage, err := session.NewFileStorage(t.TempDir())
 	if err != nil {
@@ -45,6 +59,7 @@ func TestRuntimeSessionHandlersListDetailAndDelete(t *testing.T) {
 	if detailResp.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, want %d, body = %s", detailResp.Code, http.StatusOK, detailResp.Body.String())
 	}
+	assertSnapshotJSONArrays(t, detailResp.Body.Bytes())
 	var snapshot agentruntime.SessionSnapshot
 	if err := json.NewDecoder(detailResp.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode detail: %v", err)

@@ -440,6 +440,10 @@ func (*blockingMCPSession) ReadResource(context.Context, mcp.ReadResourceRequest
 	return &mcp.ReadResourceResult{}, nil
 }
 
+func (*blockingMCPSession) GetPrompt(context.Context, mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return &mcp.GetPromptResult{}, nil
+}
+
 type statusCodeError struct {
 	status int
 }

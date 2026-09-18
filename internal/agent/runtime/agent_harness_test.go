@@ -671,6 +671,50 @@ func TestNewSessionPersistsInitialConfig(t *testing.T) {
 	}
 }
 
+func TestSessionSnapshotJSONEmptyArrays(t *testing.T) {
+	harness := newHarnessSession(t, agentcore.AgentLoopConfig{}, nil)
+	for name, snapshot := range map[string]SessionSnapshot{
+		"zero":          {},
+		"id only":       {SessionID: "s1"},
+		"empty harness": harness.Snapshot(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := snapshot
+			data, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"messages", "events", "tools", "entries"} {
+				var items []json.RawMessage
+				if err := json.Unmarshal(fields[field], &items); err != nil || items == nil {
+					t.Errorf("%s = %s, want JSON array (err=%v)", field, fields[field], err)
+				}
+				if name != "empty harness" && string(fields[field]) != "[]" {
+					t.Errorf("%s = %s, want []", field, fields[field])
+				}
+			}
+			if !reflect.DeepEqual(snapshot, before) {
+				t.Fatal("marshaling changed the source snapshot")
+			}
+		})
+	}
+}
+
+func TestSessionSnapshotJSONPreservesEncodingErrors(t *testing.T) {
+	for _, snapshot := range []SessionSnapshot{
+		{Messages: protocol.MessageList{nil}},
+		{Tools: []protocol.ToolDefinition{{Name: "invalid", Parameters: json.RawMessage("{")}}},
+	} {
+		if _, err := json.Marshal(snapshot); err == nil {
+			t.Fatal("invalid nested data was silently encoded")
+		}
+	}
+}
+
 func TestSessionSnapshotAndListenExposeRunState(t *testing.T) {
 	as := newHarnessSession(t, agentcore.AgentLoopConfig{Stream: streamSequence(textStream("done"))}, []agentcore.Tool{
 		fakeTool{name: "known", text: "ok"},
@@ -702,6 +746,19 @@ func TestSessionSnapshotAndListenExposeRunState(t *testing.T) {
 	}
 	if len(snapshot.Entries) < 2 {
 		t.Fatalf("snapshot entries = %d, want at least 2", len(snapshot.Entries))
+	}
+	snapshot.EditorText = "keep editor text"
+	type plainSnapshot SessionSnapshot
+	wantJSON, err := json.Marshal(plainSnapshot(snapshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatal("snapshot JSON changed populated fields")
 	}
 	snapshot.Events[0].Type = protocol.AgentEventAgentEnd
 	if next := as.Snapshot(); next.Events[0].Type == protocol.AgentEventAgentEnd {
